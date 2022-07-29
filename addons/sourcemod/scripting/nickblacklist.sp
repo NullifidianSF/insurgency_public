@@ -53,7 +53,7 @@ public Plugin myinfo = {
 	name		= "nickblacklist",
 	author		= "Nullifidian",
 	description	= "Removes blacklisted words from player's nick & logs it",
-	version		= "1.2",
+	version		= "1.3",
 	url			= ""
 };
 
@@ -131,8 +131,8 @@ bool FindAndRemove(int client, char sName[32]) {
 
 		SetClientName(client, sNewName);
 
-		GetClientAuthId(client, AuthId_Steam3, sBuffer, sizeof(sBuffer));
-		LogToFile(g_sLogFilePath, "changed %s %s's nick to %s", sBuffer, sName, sNewName);
+		GetClientAuthId(client, AuthId_Steam2, sBuffer, sizeof(sBuffer));
+		LogToFile(g_sLogFilePath, "changed %s%s's nick to %s", sBuffer, sName, sNewName);
 
 		return true;
 	}
