@@ -8,45 +8,29 @@ bool	g_bLateLoad;
 
 char	g_sLogFilePath[PLATFORM_MAX_PATH],
 		ga_sBlackList[][] = {
-		".com",
-		".de",
-		".net",
-		".cn",
-		".uk",
-		".org",
-		".nl",
-		".eu",
-		".ru",
-		".aero",
-		".asia",
-		".biz",
-		".cat",
-		".coop",
-		".edu",
-		".info",
-		".int",
-		".jobs",
-		".mobi",
-		".museum",
-		".name",
-		".pro",
-		".tel",
-		".travel",
-		".co",
-		".tv",
-		".fm",
-		".ly",
-		".ws",
-		".me",
-		".cc",
-		".gg",
-		"www.",
 		"keydrop",
+		"csgorun",
 		"TradeSkinsFast",
 		"Farmskins",
 		"csgocases",
 		"Chefcases",
-		"hellcase"
+		"hellcase",
+		"csgoempire",
+		"Key-Drop",
+		"g4skins",
+		"banditcamp",
+		"TF2EASY",
+		"TRADEIT",
+		"Society.gg",
+		"CASEDROP",
+		"csgolive",
+		"BUYSKINS",
+		"gmod-best",
+		"tasty-drop",
+		"CSidling",
+		"PTRunners",
+		"gocase",
+		"CSGOFAST"
 };
 
 public Plugin myinfo = {
@@ -132,7 +116,7 @@ bool FindAndRemove(int client, char sName[32]) {
 		SetClientName(client, sNewName);
 
 		GetClientAuthId(client, AuthId_Steam2, sBuffer, sizeof(sBuffer));
-		LogToFile(g_sLogFilePath, "changed %s%s's nick to %s", sBuffer, sName, sNewName);
+		LogToFile(g_sLogFilePath, "changed [%s] %s's nick to %s", sBuffer, sName, sNewName);
 
 		return true;
 	}
