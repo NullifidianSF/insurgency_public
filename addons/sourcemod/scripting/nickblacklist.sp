@@ -6,7 +6,8 @@
 
 bool	g_bLateLoad;
 
-char	ga_sBlackList[][] = {
+char	g_sLogFilePath[PLATFORM_MAX_PATH],
+		ga_sBlackList[][] = {
 		".com",
 		".de",
 		".net",
@@ -38,15 +39,21 @@ char	ga_sBlackList[][] = {
 		".ws",
 		".me",
 		".cc",
+		".gg",
 		"www.",
-		"keydrop"
+		"keydrop",
+		"TradeSkinsFast",
+		"Farmskins",
+		"csgocases",
+		"Chefcases",
+		"hellcase"
 };
 
 public Plugin myinfo = {
 	name		= "nickblacklist",
 	author		= "Nullifidian",
-	description	= "Removes blacklisted words from player's nick",
-	version		= "1.0",
+	description	= "Removes blacklisted words from player's nick & logs it",
+	version		= "1.1",
 	url			= ""
 };
 
@@ -57,7 +64,12 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 
 public void OnPluginStart() {
 	HookEvent("player_changename", Event_ChangeName, EventHookMode_Pre);
-	
+
+	char sBuffer[PLATFORM_MAX_PATH];
+	GetPluginFilename(INVALID_HANDLE, sBuffer, sizeof(sBuffer));
+	ReplaceString(sBuffer, sizeof(sBuffer), ".smx", ".log", false);
+	BuildPath(Path_SM, g_sLogFilePath, sizeof(g_sLogFilePath), "logs/%d", sBuffer);
+
 	if (g_bLateLoad) {
 		char sName[32];
 		for (int i = 1; i <= MaxClients; i++) {
@@ -77,7 +89,6 @@ public void OnClientPutInServer(int client) {
 		if (GetClientName(client, sName, sizeof(sName))) {
 			FindAndRemove(client, sName);
 		}
-
 	}
 }
 
@@ -100,20 +111,30 @@ public Action Event_ChangeName(Event event, char[] name, bool dontBroadcast) {
 
 bool FindAndRemove(int client, char sName[32]) {
 	bool bRemoved = false;
+	char sNewName[32];
+
+	sNewName = sName;
 	
 	for (int i=0; i<sizeof(ga_sBlackList); i++) {
-		if (ReplaceString(sName, sizeof(sName), ga_sBlackList[i], "", false)) {
+		if (ReplaceString(sNewName, sizeof(sNewName), ga_sBlackList[i], "", false)) {
 			bRemoved = true;
 		}
 	}
 
 	if (bRemoved) {
-		if (strlen(sName) < 1) {
-			char sBuffer[32];
-			FormatEx(sBuffer, sizeof(sBuffer), "Player %d", client);
-			sName = sBuffer;
+		TrimString(sNewName);
+		char sBuffer[32];
+
+		if (strlen(sNewName) < 1) {
+			FormatEx(sBuffer, sizeof(sBuffer), "Player #%d", client);
+			sNewName = sBuffer;
 		}
-		SetClientName(client, sName);
+
+		SetClientName(client, sNewName);
+
+		GetClientAuthId(client, AuthId_Steam3, sBuffer, sizeof(sBuffer));
+		LogToFile(g_sLogFilePath, "changed %s %s's nick to %s", sBuffer, sName, sNewName);
+
 		return true;
 	}
 	return false;
