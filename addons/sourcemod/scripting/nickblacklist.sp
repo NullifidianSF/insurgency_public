@@ -53,7 +53,7 @@ public Plugin myinfo = {
 	name		= "nickblacklist",
 	author		= "Nullifidian",
 	description	= "Removes blacklisted words from player's nick & logs it",
-	version		= "1.1",
+	version		= "1.2",
 	url			= ""
 };
 
@@ -122,12 +122,11 @@ bool FindAndRemove(int client, char sName[32]) {
 	}
 
 	if (bRemoved) {
-		TrimString(sNewName);
 		char sBuffer[32];
+		TrimString(sNewName);
 
 		if (strlen(sNewName) < 1) {
-			FormatEx(sBuffer, sizeof(sBuffer), "Player #%d", client);
-			sNewName = sBuffer;
+			FormatEx(sNewName, sizeof(sNewName), "Player #%d", client);
 		}
 
 		SetClientName(client, sNewName);
