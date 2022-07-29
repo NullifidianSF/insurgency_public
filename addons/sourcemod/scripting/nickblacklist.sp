@@ -68,7 +68,7 @@ public void OnPluginStart() {
 	char sBuffer[PLATFORM_MAX_PATH];
 	GetPluginFilename(INVALID_HANDLE, sBuffer, sizeof(sBuffer));
 	ReplaceString(sBuffer, sizeof(sBuffer), ".smx", ".log", false);
-	BuildPath(Path_SM, g_sLogFilePath, sizeof(g_sLogFilePath), "logs/%d", sBuffer);
+	BuildPath(Path_SM, g_sLogFilePath, sizeof(g_sLogFilePath), "logs/%s", sBuffer);
 
 	if (g_bLateLoad) {
 		char sName[32];
