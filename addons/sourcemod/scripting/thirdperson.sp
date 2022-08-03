@@ -19,7 +19,7 @@ public Plugin myinfo = {
 	name		= "thirdperson",
 	author		= "Nullifidian",
 	description	= "third person view command",
-	version		= "1.6",
+	version		= "1.7",
 	url			= ""
 };
 
@@ -41,7 +41,7 @@ public void OnPluginStart() {
 	HookEvent("weapon_ironsight", Event_WeaponIronsight, EventHookMode_Pre);
 	HookEvent("weapon_lower_sight", Event_WeaponLowerSight, EventHookMode_Pre);
 	
-	RegConsoleCmd("3rdperson", cmd_thirdPerson, "Set your view to third person");
+	RegConsoleCmd("fp", cmd_firstPerson, "Set your view to first person");
 	RegConsoleCmd("tp", cmd_thirdPerson, "Set your view to third person");
 
 	if (g_bLateLoad) {
@@ -103,10 +103,34 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 }
 
 public Action cmd_thirdPerson(int client, int args) {
-	if (client < 1 || !IsClientInGame(client) || GetClientTeam(client) != 2) {
+	if (client < 1 || !IsClientInGame(client)) {
 		return Plugin_Handled;
 	}
+
+	if (GetClientTeam(client) < 2) {
+		ReplyToCommand(client, "You must join a team first!");
+		return Plugin_Handled;
+	}
+
 	TpMenuSetup(client);
+	return Plugin_Handled;
+}
+
+public Action cmd_firstPerson(int client, int args) {
+	if (client < 1 || !IsClientInGame(client)) {
+		return Plugin_Handled;
+	}
+
+	if (GetClientTeam(client) < 2) {
+		ReplyToCommand(client, "You must join a team first!");
+		return Plugin_Handled;
+	}
+
+	ClientCommand(client, "r_screenoverlay null");
+	SendConVarValue(client, g_cvThirdPerson, "0");
+	ReplyToCommand(client, "TP off");
+	ga_iSetting[client] = 0;
+	
 	return Plugin_Handled;
 }
 
