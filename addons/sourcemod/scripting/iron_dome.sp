@@ -139,11 +139,9 @@ public Action Event_GrenadeDetonate(Event event, const char[] name, bool dontBro
 		return Plugin_Continue;
 	}
 
-	int nade = event.GetInt("entityid"),
-		ent;
+	int nade = event.GetInt("entityid");
 	for (int i = 0; i < iArraySize; i++) {
-		ent = EntRefToEntIndex(GetArrayCell(ga_hExplosives, i));
-		if (nade == ent) {
+		if (nade == EntRefToEntIndex(GetArrayCell(ga_hExplosives, i))) {
 			RemoveFromArray(ga_hExplosives, i);
 			break;
 		}
