@@ -30,7 +30,7 @@ public Plugin myinfo = {
 	name		= "iron_dome",
 	author		= "Nullifidian",
 	description	= "The portable Iron Dome defence system that designed to destroy hostile RPGs and grenades",
-	version		= "1.2",
+	version		= "1.3",
 	url			= ""
 };
 
@@ -56,7 +56,8 @@ public void OnPluginStart() {
 	HookEvent("player_spawn", Event_PlayerRespawn);
 	HookEvent("object_destroyed", Event_Objective, EventHookMode_PostNoCopy);
 	HookEvent("controlpoint_captured", Event_Objective, EventHookMode_PostNoCopy);
-
+	HookEvent("grenade_detonate", Event_GrenadeDetonate);
+	
 	AddCommandListener(CmdListener, "inventory_resupply");
 	AddCommandListener(CmdListener, "inventory_confirm");
 
@@ -124,6 +125,29 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 		return Plugin_Continue;
 	}
 	ga_iBlocks[victim] = 1;
+	return Plugin_Continue;
+}
+
+public Action Event_GrenadeDetonate(Event event, const char[] name, bool dontBroadcast) {
+	int client = GetClientOfUserId(event.GetInt("userid"));
+	if (client < 1 || (IsClientInGame(client) && !IsFakeClient(client))) {
+		return Plugin_Continue;
+	}
+
+	int iArraySize = GetArraySize(ga_hExplosives);
+	if (iArraySize < 1) {
+		return Plugin_Continue;
+	}
+
+	int nade = event.GetInt("entityid"),
+		ent;
+	for (int i = 0; i < iArraySize; i++) {
+		ent = EntRefToEntIndex(GetArrayCell(ga_hExplosives, i));
+		if (nade == ent) {
+			RemoveFromArray(ga_hExplosives, i);
+			break;
+		}
+	}
 	return Plugin_Continue;
 }
 
