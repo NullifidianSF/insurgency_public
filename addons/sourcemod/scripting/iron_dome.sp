@@ -30,7 +30,7 @@ public Plugin myinfo = {
 	name		= "iron_dome",
 	author		= "Nullifidian",
 	description	= "The portable Iron Dome defence system that designed to destroy hostile RPGs and grenades",
-	version		= "1.3",
+	version		= "1.4",
 	url			= ""
 };
 
@@ -230,6 +230,9 @@ Action TimerR_IronDome(Handle timer) {
 				PrintToChat(i, "\x070088cc[ID]\x01 Shot down explosive device. \x01Ammo left: \x070088cc%d\x01/\x070088cc%d", sEnt,  ga_iBlocks[i], gc_iMaxAllowedBlocks);
 			}
 			RemoveEntity(iEnt);
+			if (ga_iBlocks[i] < 1) {
+				break;
+			}
 		}
 	}
 	return Plugin_Continue;
