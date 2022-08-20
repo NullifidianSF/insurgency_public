@@ -30,7 +30,7 @@ public Plugin myinfo = {
 	name		= "iron_dome",
 	author		= "Nullifidian",
 	description	= "The portable Iron Dome defence system that designed to destroy hostile RPGs and grenades",
-	version		= "1.4",
+	version		= "1.5",
 	url			= ""
 };
 
@@ -202,6 +202,11 @@ Action TimerR_IronDome(Handle timer) {
 			continue;
 		}
 
+		iArraySize = GetArraySize(ga_hExplosives);
+		if (iArraySize < 1) {
+			break;
+		}
+
 		for (int j = 0; j < iArraySize; j++) {
 			iEnt = EntRefToEntIndex(GetArrayCell(ga_hExplosives, j));
 			if (iEnt == INVALID_ENT_REFERENCE || !IsValidEntity(iEnt)) {
@@ -212,7 +217,7 @@ Action TimerR_IronDome(Handle timer) {
 			GetEntPropVector(iEnt, Prop_Send, "m_vecOrigin", vEnt);
 			GetClientAbsOrigin(i, vClient);
 
-			if (GetVectorDistance(vClient, vEnt) > 300.0) {
+			if (GetVectorDistance(vClient, vEnt) > 350.0) {
 				continue;
 			}
 			
@@ -225,9 +230,9 @@ Action TimerR_IronDome(Handle timer) {
 			ga_iBlocks[i]--;
 
 			if (GetEntityClassname(iEnt, sEnt, sizeof(sEnt))) {
-				PrintToChat(i, "\x070088cc[ID]\x01 Shot down \x070088cc%s\x01. \x01Ammo left: \x070088cc%d\x01/\x070088cc%d", sEnt,  ga_iBlocks[i], gc_iMaxAllowedBlocks);
+				PrintToChat(i, "\x070088cc[ID]\x01 Shot down \x070088cc%s\x01 \x01Ammo left: \x070088cc%d\x01/\x070088cc%d", sEnt,  ga_iBlocks[i], gc_iMaxAllowedBlocks);
 			} else {
-				PrintToChat(i, "\x070088cc[ID]\x01 Shot down explosive device. \x01Ammo left: \x070088cc%d\x01/\x070088cc%d", sEnt,  ga_iBlocks[i], gc_iMaxAllowedBlocks);
+				PrintToChat(i, "\x070088cc[ID]\x01 Shot down explosive device \x01Ammo left: \x070088cc%d\x01/\x070088cc%d", sEnt,  ga_iBlocks[i], gc_iMaxAllowedBlocks);
 			}
 			RemoveEntity(iEnt);
 			if (ga_iBlocks[i] < 1) {
