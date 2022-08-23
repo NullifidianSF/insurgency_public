@@ -68,14 +68,14 @@ void MakeTempMapcyle() {
 
 	Handle hRead = OpenFile(g_sDefMapcycleFile, "rt", false);
 	if (!hRead) {
-		PrintToServer("Fatal Error [2]: can't open \"%s\" is empty!", g_sDefMapcycleFile);
-		SetFailState("Fatal Error [2]: can't open \"%s\" is empty!", g_sDefMapcycleFile);
+		PrintToServer("Fatal Error [2]: can't open \"%s\" !", g_sDefMapcycleFile);
+		SetFailState("Fatal Error [2]: can't open \"%s\" !", g_sDefMapcycleFile);
 	}
 
 	Handle hWrite = OpenFile(g_sTempMapcycleFile, "wt", false);
 	if (!hWrite) {
-		PrintToServer("Fatal Error [3]: can't open \"%s\" is empty!", g_sTempMapcycleFile);
-		SetFailState("Fatal Error [3]: can't open \"%s\" is empty!", g_sTempMapcycleFile);
+		PrintToServer("Fatal Error [3]: can't open \"%s\" !", g_sTempMapcycleFile);
+		SetFailState("Fatal Error [3]: can't open \"%s\" !", g_sTempMapcycleFile);
 	}
 
 	bool	bSkip = false;
