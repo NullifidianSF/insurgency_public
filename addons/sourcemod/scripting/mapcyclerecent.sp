@@ -26,7 +26,7 @@ public Plugin myinfo = {
 	name		= "mapcyclerecent",
 	author		= "Nullifidian",
 	description	= "Creates & sets the server to a new custom mapcyclefile without 5 last played maps.",
-	version		= "1.1",
+	version		= "1.2",
 	url			= ""
 };
 
@@ -145,7 +145,7 @@ public Action cmd_recentmaps(int client, int args) {
 		}
 	}
 
-	ReplyToCommand(client, "%s", sBuffer);
+	ReplyToCommand(client, "%s", iArraySize > 0 ? sBuffer : sArrayBuffer);
 
 	return Plugin_Handled;
 }
