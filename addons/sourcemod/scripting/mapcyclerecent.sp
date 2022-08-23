@@ -18,13 +18,15 @@ int			ga_iCooldown[MAXPLAYERS + 1] = {0, ...};
 char		g_sDefMapcycleFile[PLATFORM_MAX_PATH],
 			g_sTempMapcycleFile[PLATFORM_MAX_PATH];
 
+bool		g_bHooked = false;
+
 ArrayList	ga_hExcludedMaps;
 
 public Plugin myinfo = {
 	name		= "mapcyclerecent",
 	author		= "Nullifidian",
 	description	= "Creates & sets the server to a new custom mapcyclefile without 5 last played maps.",
-	version		= "1.0",
+	version		= "1.1",
 	url			= ""
 };
 
@@ -34,8 +36,6 @@ public void OnPluginStart() {
 	}
 
 	ga_hExcludedMaps = CreateArray(32);
-
-	g_cvDefMapcycleFile.AddChangeHook(OnConVarChanged);
 
 	RegConsoleCmd("recentmaps", cmd_recentmaps, "Recently played maps that will be excluded from the map vote.");
 
@@ -166,6 +166,10 @@ Action Timer_Setup(Handle timer) {
 Action Timer_MakeTempMapcyle(Handle timer) {
 	MakeTempMapcyle();
 	ServerCommand("mapcyclefile %s", g_sTempMapcycleFile);
+	if (!g_bHooked) {
+		g_bHooked = true;
+		g_cvDefMapcycleFile.AddChangeHook(OnConVarChanged);
+	}
 }
 
 public void OnPluginEnd() {
