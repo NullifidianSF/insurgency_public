@@ -40,7 +40,7 @@ public void OnPluginStart() {
 	RegConsoleCmd("recentmaps", cmd_recentmaps, "Recently played maps that will be excluded from the map vote.");
 
 	//because plugin reloads faster than "ServerCommand" in "OnPluginEnd"
-	CreateTimer(0.1, Timer_Setup, _, TIMER_FLAG_NO_MAPCHANGE);
+	CreateTimer(0.1, Timer_Setup);
 }
 
 public void OnMapStart() {
