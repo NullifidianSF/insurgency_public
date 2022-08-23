@@ -140,7 +140,9 @@ public Action cmd_recentmaps(int client, int args) {
 		if (iArraySize != i) {
 			ReplaceString(sArrayBuffer, sizeof(sArrayBuffer), " ", " | ", false);
 		}
-		StrCat(sBuffer, sizeof(sBuffer), sArrayBuffer);
+		if (iArraySize > 0) {
+			StrCat(sBuffer, sizeof(sBuffer), sArrayBuffer);
+		}
 	}
 
 	ReplyToCommand(client, "%s", sBuffer);
