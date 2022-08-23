@@ -62,8 +62,8 @@ public void OnMapStart() {
 void MakeTempMapcyle() {
 	int iArraySize = (GetArraySize(ga_hExcludedMaps) - 1);
 	if (iArraySize < 0) {
-		PrintToServer("Fatal Error [1]: array \"%s\" is empty!", ga_hExcludedMaps);
-		SetFailState("Fatal Error [1]: array \"%s\" is empty!", ga_hExcludedMaps);
+		PrintToServer("Fatal Error [1]: array \"ga_hExcludedMaps\" is empty!");
+		SetFailState("Fatal Error [1]: array \"ga_hExcludedMaps\" is empty!");
 	}
 
 	Handle hRead = OpenFile(g_sDefMapcycleFile, "rt", false);
