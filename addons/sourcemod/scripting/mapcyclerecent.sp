@@ -1,3 +1,11 @@
+/*
+	Your mapcyclefile structure must be like this(mapSPACEgamemod): map gamemode
+	Examples:	ministry_coop checkpoint
+				anbar_coop checkpoint //blah blah random comment
+				
+	Plugin searchers for the map name match with the space after it so it won't remove maps with similar names like "ministry_coop_2013a".
+*/
+
 #pragma semicolon 1
 #pragma newdecls required
 
