@@ -4,7 +4,8 @@
 #include <sourcemod>
 #include <sdktools>
 
-bool	g_bLateLoad;
+bool	g_bLateLoad,
+		ga_bRenamed[MAXPLAYERS + 1] = {false, ...};
 
 char	g_sLogFilePath[PLATFORM_MAX_PATH],
 		ga_sBlackList[][] = {
@@ -30,14 +31,15 @@ char	g_sLogFilePath[PLATFORM_MAX_PATH],
 		"CSidling",
 		"PTRunners",
 		"gocase",
-		"CSGOFAST"
+		"CSGOFAST",
+		".com"
 };
 
 public Plugin myinfo = {
 	name		= "nickblacklist",
 	author		= "Nullifidian",
 	description	= "Removes blacklisted words from player's nick & logs it",
-	version		= "1.3",
+	version		= "1.4",
 	url			= ""
 };
 
@@ -69,6 +71,7 @@ public void OnPluginStart() {
 
 public void OnClientPutInServer(int client) {
 	if (!IsFakeClient(client)) {
+		ga_bRenamed[client] = false;
 		char sName[32];
 		if (GetClientName(client, sName, sizeof(sName))) {
 			FindAndRemove(client, sName);
@@ -80,6 +83,12 @@ public Action Event_ChangeName(Event event, char[] name, bool dontBroadcast) {
 	int	client = GetClientOfUserId(event.GetInt("userid"));
 
 	if (!IsClientInGame(client) || IsFakeClient(client)) {
+		return Plugin_Continue;
+	}
+
+	if (ga_bRenamed[client]) {
+		dontBroadcast = true;
+		ga_bRenamed[client] = false;
 		return Plugin_Continue;
 	}
 
@@ -113,6 +122,7 @@ bool FindAndRemove(int client, char sName[32]) {
 			FormatEx(sNewName, sizeof(sNewName), "Player #%d", client);
 		}
 
+		ga_bRenamed[client] = true;
 		SetClientName(client, sNewName);
 
 		GetClientAuthId(client, AuthId_Steam2, sBuffer, sizeof(sBuffer));
