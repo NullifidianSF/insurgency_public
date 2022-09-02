@@ -23,7 +23,7 @@ public Plugin myinfo = {
 	name		= "bot_antismoke",
 	author		= "Nullifidian",
 	description	= "A bot will throw a grenade at a human player if the human player is in a cloud of smoke",
-	version		= "1.4",
+	version		= "1.5",
 	url			= ""
 };
 
@@ -112,7 +112,6 @@ Action TimerR_SmokeCheck(Handle timer) {
 				iEnt = EntRefToEntIndex(ga_hExplosives.Get(j));
 
 				if (iEnt == INVALID_ENT_REFERENCE || !IsValidEntity(iEnt)) {
-					ga_bPlayerInSmoke[i][iEnt] = false;
 					RemoveFromArray(ga_hExplosives, j);
 					continue;
 				}
