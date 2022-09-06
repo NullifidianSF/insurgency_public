@@ -22,7 +22,7 @@ int			g_iBeaconBeam,
 			g_iPlayerEquipGear,
 			g_iRoundStatus = 0,
 			ga_iBlocks[MAXPLAYERS + 1] = {1, ...},
-			ga_iLastButtons[MAXPLAYERS+1];
+			ga_iLastButtons[MAXPLAYERS + 1];
 
 ArrayList	ga_hExplosives;
 
@@ -30,7 +30,7 @@ public Plugin myinfo = {
 	name		= "iron_dome",
 	author		= "Nullifidian",
 	description	= "The portable Iron Dome defence system that designed to destroy hostile RPGs and grenades",
-	version		= "1.6",
+	version		= "1.7",
 	url			= ""
 };
 
@@ -308,11 +308,22 @@ void OnButtonPress(int client, int button) {
 		if (iTarget <= MaxClients || iTarget > 2048 || !IsValidEntity(iTarget)) {
 			return;
 		}
+
 		char sName[64];
 		if (!GetEntityClassname(iTarget, sName, sizeof(sName))) {
 			return;
 		}
+
 		if (strcmp(sName, "weapon_at4", false) == 0 || strcmp(sName, "weapon_rpg7", false) == 0) {
+			float	vClient[3],
+					vTarget[3];
+
+			GetClientAbsOrigin(client, vClient);
+			GetEntPropVector(iTarget, Prop_Send, "m_vecOrigin", vTarget);
+			if (GetVectorDistance(vClient, vTarget) > 90.0) {
+				return;
+			}
+
 			if (ga_iBlocks[client] >= gc_iMaxAllowedBlocks) {
 				PrintToChat(client, "\x070088cc[ID]\x01 Ammo: \x070088cc%d\x01/\x070088cc%d", gc_iMaxAllowedBlocks, gc_iMaxAllowedBlocks);
 				return;
