@@ -42,12 +42,7 @@ public void OnPluginStart() {
 	g_cvRecentMaps = CreateConVar("sm_mapcyclerecent", "7", "Number of recent maps to exclude");
 	g_iRecentMaps = g_cvRecentMaps.IntValue;
 	g_cvRecentMaps.AddChangeHook(OnConVarChanged);
-
-	char sBuffer[PLATFORM_MAX_PATH];
-	GetPluginFilename(INVALID_HANDLE, sBuffer, sizeof(sBuffer));
-	ReplaceString(sBuffer, sizeof(sBuffer), ".smx", "", false);
-	AutoExecConfig(true, sBuffer);
-
+	
 	RegConsoleCmd("recentmaps", cmd_recentmaps, "Recently played maps that will be excluded from the map vote.");
 
 	//because plugin reloads faster than "ServerCommand" in "OnPluginEnd"
@@ -175,6 +170,7 @@ Action Timer_Setup(Handle timer) {
 	
 	GetPluginFilename(INVALID_HANDLE, sBuffer, sizeof(sBuffer));
 	ReplaceString(sBuffer, sizeof(sBuffer), ".smx", "", false);
+	AutoExecConfig(true, sBuffer);
 	BuildPath(Path_SM, g_sTempMapcycleFile, sizeof(g_sTempMapcycleFile), "data/%s.txt", sBuffer);
 
 	FormatEx(sBuffer, sizeof(sBuffer), "%s", g_sDefMapcycleFile);
