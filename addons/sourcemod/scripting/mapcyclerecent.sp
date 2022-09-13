@@ -28,7 +28,7 @@ public Plugin myinfo = {
 	name		= "mapcyclerecent",
 	author		= "Nullifidian",
 	description	= "Creates & sets the server to a new custom mapcyclefile without recently played maps.",
-	version		= "1.3",
+	version		= "1.4",
 	url			= ""
 };
 
@@ -39,7 +39,7 @@ public void OnPluginStart() {
 
 	ga_hExcludedMaps = CreateArray(32);
 
-	g_cvRecentMaps = CreateConVar("sm_mapcyclerecent", "7", "Number of recent maps to exclude");
+	g_cvRecentMaps = CreateConVar("sm_mapcyclerecent", "7", "Number of recent maps to exclude", _, true, 1.0);
 	g_iRecentMaps = g_cvRecentMaps.IntValue;
 	g_cvRecentMaps.AddChangeHook(OnConVarChanged);
 
@@ -55,19 +55,7 @@ public void OnPluginStart() {
 }
 
 public void OnMapStart() {
-	char	sBuffer[32],
-			sMap[32];
-			
-	GetCurrentMap(sMap, sizeof(sMap));
-	FormatEx(sBuffer, sizeof(sBuffer), "%s ", sMap);
-
-	if (ga_hExcludedMaps.Length == g_iRecentMaps) {
-		RemoveFromArray(ga_hExcludedMaps, 0);
-	}
-
-	PushArrayString(ga_hExcludedMaps, sBuffer);
-
-	CreateTimer(0.2, Timer_MakeTempMapcyle, _, TIMER_FLAG_NO_MAPCHANGE);
+	CreateTimer(0.2, Timer_MapStart, _, TIMER_FLAG_NO_MAPCHANGE);
 }
 
 void MakeTempMapcyle() {
@@ -135,6 +123,7 @@ void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue
 	}
 	else if (convar == g_cvRecentMaps) {
 		g_iRecentMaps = g_cvRecentMaps.IntValue;
+		RemoveMapFromArray();
 	}
 }
 
@@ -184,12 +173,32 @@ Action Timer_Setup(Handle timer) {
 	}
 }
 
-Action Timer_MakeTempMapcyle(Handle timer) {
+Action Timer_MapStart(Handle timer) {
+	char	sBuffer[32],
+			sMap[32];
+			
+	GetCurrentMap(sMap, sizeof(sMap));
+	FormatEx(sBuffer, sizeof(sBuffer), "%s ", sMap);
+
+	RemoveMapFromArray();
+	PushArrayString(ga_hExcludedMaps, sBuffer);
+
 	MakeTempMapcyle();
 	ServerCommand("mapcyclefile %s", g_sTempMapcycleFile);
 	if (!g_bHooked) {
 		g_bHooked = true;
 		g_cvDefMapcycleFile.AddChangeHook(OnConVarChanged);
+	}
+}
+
+void RemoveMapFromArray() {
+	if (ga_hExcludedMaps.Length == g_iRecentMaps) {
+		RemoveFromArray(ga_hExcludedMaps, 0);
+	}
+	else if (ga_hExcludedMaps.Length > g_iRecentMaps) {
+		for (int i = 0; i <= (ga_hExcludedMaps.Length - g_iRecentMaps); i++) {
+			RemoveFromArray(ga_hExcludedMaps, 0);
+		}
 	}
 }
 
