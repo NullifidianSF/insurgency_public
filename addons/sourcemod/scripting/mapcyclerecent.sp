@@ -11,9 +11,11 @@
 
 #include <sourcemod>
 
-ConVar		g_cvDefMapcycleFile = null;
+ConVar		g_cvDefMapcycleFile = null,
+			g_cvRecentMaps = null;
 
-int			ga_iCooldown[MAXPLAYERS + 1] = {0, ...};
+int			ga_iCooldown[MAXPLAYERS + 1] = {0, ...},
+			g_iRecentMaps;
 
 char		g_sDefMapcycleFile[PLATFORM_MAX_PATH],
 			g_sTempMapcycleFile[PLATFORM_MAX_PATH];
@@ -25,8 +27,8 @@ ArrayList	ga_hExcludedMaps;
 public Plugin myinfo = {
 	name		= "mapcyclerecent",
 	author		= "Nullifidian",
-	description	= "Creates & sets the server to a new custom mapcyclefile without 5 last played maps.",
-	version		= "1.2",
+	description	= "Creates & sets the server to a new custom mapcyclefile without recently played maps.",
+	version		= "1.3",
 	url			= ""
 };
 
@@ -36,6 +38,15 @@ public void OnPluginStart() {
 	}
 
 	ga_hExcludedMaps = CreateArray(32);
+
+	g_cvRecentMaps = CreateConVar("sm_mapcyclerecent", "7", "Number of recent maps to exclude");
+	g_iRecentMaps = g_cvRecentMaps.IntValue;
+	g_cvRecentMaps.AddChangeHook(OnConVarChanged);
+
+	char sBuffer[PLATFORM_MAX_PATH];
+	GetPluginFilename(INVALID_HANDLE, sBuffer, sizeof(sBuffer));
+	ReplaceString(sBuffer, sizeof(sBuffer), ".smx", "", false);
+	AutoExecConfig(true, sBuffer);
 
 	RegConsoleCmd("recentmaps", cmd_recentmaps, "Recently played maps that will be excluded from the map vote.");
 
@@ -50,7 +61,7 @@ public void OnMapStart() {
 	GetCurrentMap(sMap, sizeof(sMap));
 	FormatEx(sBuffer, sizeof(sBuffer), "%s ", sMap);
 
-	if (GetArraySize(ga_hExcludedMaps) == 5) {
+	if (ga_hExcludedMaps.Length == g_iRecentMaps) {
 		RemoveFromArray(ga_hExcludedMaps, 0);
 	}
 
@@ -60,7 +71,7 @@ public void OnMapStart() {
 }
 
 void MakeTempMapcyle() {
-	int iArraySize = (GetArraySize(ga_hExcludedMaps) - 1);
+	int iArraySize = ga_hExcludedMaps.Length - 1;
 	if (iArraySize < 0) {
 		PrintToServer("Fatal Error [1]: array \"ga_hExcludedMaps\" is empty!");
 		SetFailState("Fatal Error [1]: array \"ga_hExcludedMaps\" is empty!");
@@ -108,6 +119,11 @@ void MakeTempMapcyle() {
 		SetFailState("Fatal Error [4]: failed to make \"%s\" due to \"%s\" not having enough maps!", g_sTempMapcycleFile, g_sDefMapcycleFile);
 	}
 
+	if (iLines <= g_iRecentMaps) {
+		PrintToServer("Fatal Error [5]: \"sm_mapcyclerecent\" must be set to lower number than the number of maps in the \"%s\"", g_sDefMapcycleFile);
+		SetFailState("Fatal Error [5]: \"sm_mapcyclerecent\" must be set to lower number than the number of maps in the \"%s\"", g_sDefMapcycleFile);
+	}
+
 	delete hWrite;
 	delete hRead;
 }
@@ -116,6 +132,9 @@ void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue
 	if (convar == g_cvDefMapcycleFile && strcmp(newValue, g_sTempMapcycleFile, false) != 0) {
 		//strcopy(g_sDefMapcycleFile, sizeof(g_sDefMapcycleFile), g_sTempMapcycleFile);
 		ServerCommand("mapcyclefile %s", g_sTempMapcycleFile);
+	}
+	else if (convar == g_cvRecentMaps) {
+		g_iRecentMaps = g_cvRecentMaps.IntValue;
 	}
 }
 
@@ -130,9 +149,9 @@ public Action cmd_recentmaps(int client, int args) {
 		ga_iCooldown[client] = iTime + 3;
 	}
 
-	int		iArraySize = GetArraySize(ga_hExcludedMaps) - 1;
+	int		iArraySize = ga_hExcludedMaps.Length - 1;
 
-	char	sBuffer[200],
+	char	sBuffer[512],
 			sArrayBuffer[40];
 
 	for (int i = 0; i <= iArraySize; i++) {
@@ -160,8 +179,8 @@ Action Timer_Setup(Handle timer) {
 
 	FormatEx(sBuffer, sizeof(sBuffer), "%s", g_sDefMapcycleFile);
 	if (!FileExists(sBuffer, false)) {
-		PrintToServer("Fatal Error [5]: mapcyclefile \"%s\" doesn't exist!", sBuffer);
-		SetFailState("Fatal Error [5]: mapcyclefile \"%s\" doesn't exist!", sBuffer);
+		PrintToServer("Fatal Error [6]: mapcyclefile \"%s\" doesn't exist!", sBuffer);
+		SetFailState("Fatal Error [6]: mapcyclefile \"%s\" doesn't exist!", sBuffer);
 	}
 }
 
