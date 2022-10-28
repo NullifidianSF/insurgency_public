@@ -46,7 +46,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "1.0"
+	version = "1.1"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -92,6 +92,11 @@ public void OnPluginStart() {
 	AddCommandListener(CmdListener, "inventory_resupply");
 	AddCommandListener(CmdListener, "inventory_confirm");
 
+	char sBuffer[PLATFORM_MAX_PATH];
+	GetPluginFilename(INVALID_HANDLE, sBuffer, sizeof(sBuffer));
+	ReplaceString(sBuffer, sizeof(sBuffer), ".smx", "", false);
+	AutoExecConfig(true, sBuffer);
+
 	if (g_bLateLoad) {
 		g_iRoundStatus = 1;
 		StartRandomSpawnTimer();
@@ -102,11 +107,6 @@ public void OnPluginStart() {
 			ConfirmEquipment(i);
 		}
 	}
-
-	char sBuffer[PLATFORM_MAX_PATH];
-	GetPluginFilename(INVALID_HANDLE, sBuffer, sizeof(sBuffer));
-	ReplaceString(sBuffer, sizeof(sBuffer), ".smx", "", false);
-	AutoExecConfig(true, sBuffer);
 }
 
 public void OnMapStart() {
@@ -222,10 +222,10 @@ bool CreateMine(int client) {
 	SetEntPropEnt(iEnt, Prop_Data, "m_hLastAttacker", client);
 
 	char sBuffer[10];
-	FormatEx(sBuffer, sizeof(sBuffer), "\"%d\"", g_iRadius);
+	FormatEx(sBuffer, sizeof(sBuffer), "%d", g_iRadius);
 	DispatchKeyValue(iEnt, "ExplodeRadius", sBuffer);	//grenade_f1 750
 
-	FormatEx(sBuffer, sizeof(sBuffer), "\"%d\"", g_iDamage);
+	FormatEx(sBuffer, sizeof(sBuffer), "%d", g_iDamage);
 	DispatchKeyValue(iEnt, "ExplodeDamage", sBuffer);	//grenade_f1 160
 
 	DispatchKeyValue(iEnt, "minhealthdmg", "50");
