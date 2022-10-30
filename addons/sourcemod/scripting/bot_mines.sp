@@ -20,7 +20,7 @@ char		g_sModelMine[43] = "models/static_props/wcache_landmine_01.mdl",
 float		g_fMineBreakTime,
 			g_fTimerMin,
 			g_fTimerMax,
-			g_fSoundCooldown[MAXPLAYERS + 1] = {0.0, ...};
+			ga_fSoundCooldown[MAXPLAYERS + 1] = {0.0, ...};
 
 int			g_iRoundStatus = 0,
 			g_iMaxMines,
@@ -46,7 +46,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "1.2"
+	version = "1.3"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -120,7 +120,7 @@ public void OnMapStart() {
 public void OnClientDisconnect(int client) {
 	if (client && !IsFakeClient(client)) {
 		ga_iConfirmedMisc[client] = -1;
-		g_fSoundCooldown[client] = 0.0;
+		ga_fSoundCooldown[client] = 0.0;
 	}
 }
 
@@ -228,7 +228,7 @@ bool CreateMine(int client) {
 	FormatEx(sBuffer, sizeof(sBuffer), "%d", g_iDamage);
 	DispatchKeyValue(iEnt, "ExplodeDamage", sBuffer);	//grenade_f1 160
 
-	DispatchKeyValue(iEnt, "minhealthdmg", "50");
+	DispatchKeyValue(iEnt, "minhealthdmg", "25");
 	DispatchKeyValue(iEnt, "PerformanceMode", "1");
 
 	SDKHook(iEnt, SDKHook_OnTakeDamage, Hook_OnTakeDamage);
@@ -248,7 +248,8 @@ public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float
 		}
 		return Plugin_Handled;
 	}
-	if (damagetype != DMG_BULLET || damagetype != DMG_BUCKSHOT) {
+
+	if (damagetype != DMG_BULLET && damagetype != DMG_BUCKSHOT && damagetype != (DMG_BULLET + DMG_BUCKSHOT)) {
 		return Plugin_Handled;
 	}
 	return Plugin_Continue;
@@ -388,19 +389,19 @@ Action TimerR_NearestMine(Handle timer) {
 				}
 			}
 
-			if (iNearestMine && fNearestMineDistance < 500.0 && g_fSoundCooldown[i] <= GetGameTime()) {
+			if (iNearestMine && fNearestMineDistance < 500.0 && ga_fSoundCooldown[i] <= GetGameTime()) {
 				EmitSoundToClient(i, g_sSoundBeep, SOUND_FROM_PLAYER, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, 0.3);
 				if (fNearestMineDistance > 350.0) {
-					g_fSoundCooldown[i] = GetGameTime() + 2.0;
+					ga_fSoundCooldown[i] = GetGameTime() + 2.0;
 				}
 				else if (fNearestMineDistance > 250.0){
-					g_fSoundCooldown[i] = GetGameTime() + 0.8;
+					ga_fSoundCooldown[i] = GetGameTime() + 0.8;
 				}
 				else if (fNearestMineDistance > 100.0){
-					g_fSoundCooldown[i] = GetGameTime() + 0.4;
+					ga_fSoundCooldown[i] = GetGameTime() + 0.4;
 				}
 				else if (fNearestMineDistance >= 0.0){
-					g_fSoundCooldown[i] = GetGameTime() + 0.2;
+					ga_fSoundCooldown[i] = GetGameTime() + 0.2;
 				}
 			}
 		}
