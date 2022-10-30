@@ -46,7 +46,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "1.1"
+	version = "1.2"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -70,7 +70,7 @@ public void OnPluginStart() {
 	g_fTimerMin = g_cvTimerMin.FloatValue;
 	g_cvTimerMin.AddChangeHook(OnConVarChanged);
 
-	g_cvTimerMax = CreateConVar("sm_botmines_timermax", "240", "Maximum possible delay before a random bot places a mine", FCVAR_NONE, true, 60.0);
+	g_cvTimerMax = CreateConVar("sm_botmines_timermax", "240.0", "Maximum possible delay before a random bot places a mine", FCVAR_NONE, true, 60.0);
 	g_fTimerMax = g_cvTimerMax.FloatValue;
 	g_cvTimerMax.AddChangeHook(OnConVarChanged);
 
@@ -248,7 +248,7 @@ public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float
 		}
 		return Plugin_Handled;
 	}
-	if (damagetype != DMG_BULLET) {
+	if (damagetype != DMG_BULLET || damagetype != DMG_BUCKSHOT) {
 		return Plugin_Handled;
 	}
 	return Plugin_Continue;
