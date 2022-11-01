@@ -6,7 +6,8 @@
 #include <sourcemod>
 #include <sdktools>
 #include <sdkhooks>
-#include <insurgencydy>
+
+#define INS_PL_BUYZONE		(1 << 7)
 
 #define DAMAGE_NO			0
 #define DAMAGE_EVENTS_ONLY	1
@@ -46,7 +47,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "1.3"
+	version = "1.4"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
