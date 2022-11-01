@@ -367,7 +367,7 @@ stock void InsLog(LOG_LEVEL level,const char[] format, any ...) {
 	char buffer[512], sLevel[32];
 	String_ToUpper(g_sLogLevel[level],sLevel,sizeof(sLevel));
 	VFormat(buffer, sizeof(buffer), format, 3);
-	PrintToServer("[%s] [%s] %s",PLUGIN_LOG_PREFIX,sLevel,buffer);
+	PrintToServer("[%s] %s",sLevel,buffer);
 }
 
 /**
@@ -376,8 +376,9 @@ stock void InsLog(LOG_LEVEL level,const char[] format, any ...) {
 * @param 
 */
 stock void AddFolderToDownloadTable(const char[] Directory, bool recursive=false) {
-	char FileName[64], char Path[512];
-	Handle Dir = OpenDirectory(Directory), FileType Type;
+	char FileName[64], Path[512];
+	Handle Dir = OpenDirectory(Directory);
+	FileType Type;
 	while (ReadDirEntry(Dir, FileName, sizeof(FileName), Type))
 	{
 		if (Type == FileType_Directory && recursive) {
@@ -432,8 +433,8 @@ stock int Team_CountAlivePlayers(int team, bool ignorebots) {
 	for (int i = 1; i <= MaxClients; i++) {
 		if (IsValidClient(i) && GetClientTeam(i) == team && IsPlayerAlive(i)) {
 			switch (ignorebots) {
-				case 0: count++;
-				case 1: {
+				case false: count++;
+				case true: {
 					if (!IsFakeClient(i)) {
 						count++;
 					}
@@ -452,7 +453,7 @@ stock int Team_CountAlivePlayers(int team, bool ignorebots) {
 stock bool ClientCanSeeClient(int client, int target, float distance = 0.0, float height = 50.0) {
 	float vTargetPosition[3];
 	GetEntPropVector(target, Prop_Send, "m_vecOrigin", vTargetPosition);
-	return ClientCanSeeVector(client,targetpos,distance,height);
+	return ClientCanSeeVector(client,vTargetPosition,distance,height);
 }
 
 /**
@@ -565,8 +566,8 @@ stock int GetSendProp(const char[] sNetClass, const char[] sPropName, int iFail=
 
 //Get and Set Ammo for storing weapons and ammo on death (reference weapon to make sure it exists)
 stock int GetWeaponAmmo(int client, int weapon, int type) {
-	int PropType proptype = Prop_Data;
-	int ammoOffset = FindSendPropInfo("CINSPlayer", "m_iAmmo");
+	PropType proptype = Prop_Data;
+	//int ammoOffset = FindSendPropInfo("CINSPlayer", "m_iAmmo");
 	int m_iPrimaryAmmoType, ammo;
 	
 	//return GetEntData(client, ammoOffset+(slot*4));
@@ -591,7 +592,7 @@ stock int GetWeaponAmmo(int client, int weapon, int type) {
 }
 
 stock void SetWeaponAmmo(int client, int weapon, int ammo, int type) {
-	int PropType proptype = Prop_Send;
+	PropType proptype = Prop_Send;
 	//new ammoOffset = FindSendPropInfo("CBasePlayer", "m_iAmmo");
 	int m_ammoType;
 
@@ -628,24 +629,23 @@ stock int GetPrimaryAmmo(int client, int weap, int type) {
 	return 0;
 }
 
-stock int SetPrimaryAmmo(int client, int weap, int ammo, int type) {
-	int PropType proptype = Prop_Data;
+stock SetPrimaryAmmo(int client, int weap, int ammo, int type) {
+	//PropType proptype = Prop_Data;
 	//new myweapons = FindSendPropInfo("CCSPlayer", "m_hMyWeapons");
 	//new weap = GetEntDataEnt2(client, myweapons+ (slot*4));
 	if (IsValidEntity(weap)) {
 		if (type==0) {
-			return SetEntData(weap, FindSendPropInfo("CBaseCombatWeapon", "m_iClip1"), ammo, _, true);
+			SetEntData(weap, FindSendPropInfo("CBaseCombatWeapon", "m_iClip1"), ammo, _, true);
 		}
 		else if (type==1) {
-			return SetEntData(weap, FindSendPropInfo("CBaseCombatWeapon", "m_iClip2"), ammo, _, true);
+			SetEntData(weap, FindSendPropInfo("CBaseCombatWeapon", "m_iClip2"), ammo, _, true);
 		}
 	}
-	return 0;
 }
 
 
 stock int GetGrenadeAmmo(int client, int grenadeType) {
-	int PropType proptype = Prop_Data;
+	PropType proptype = Prop_Data;
 	int ammo;
 	////PrintToServer("grenadeType %d", grenadeType);
 	ammo = GetEntProp(client, proptype, "m_iAmmo", _, grenadeType);
@@ -653,7 +653,7 @@ stock int GetGrenadeAmmo(int client, int grenadeType) {
 }
 
 stock void SetGrenadeAmmo(int client, int grenadeType, int grenadeAmount) {
-	int PropType proptype = Prop_Data;
+	PropType proptype = Prop_Data;
 	//PrintToServer("grenadeType %d, amount to set: %d", grenadeType, grenadeAmount);
 	SetEntProp(client, proptype, "m_iAmmo", grenadeAmount, _, grenadeType);
 }
@@ -688,66 +688,41 @@ stock bool ChangePlayerWeaponSlot(int iClient, int iSlot) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 stock void PlayerGrenadeScreamRand(int client) {
-	switch (GetRandomInt(1, 14)) {
+	switch (GetRandomInt(0, 5)) {
+		case 0: EmitSoundToAll("player/voice/botsurvival/leader/incominggrenade4.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
 		case 1: EmitSoundToAll("player/voice/botsurvival/leader/incominggrenade9.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 2: EmitSoundToAll("player/voice/botsurvival/subordinate/incominggrenade9.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 3: EmitSoundToAll("player/voice/botsurvival/leader/incominggrenade4.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 4: EmitSoundToAll("player/voice/botsurvival/subordinate/incominggrenade4.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 5: EmitSoundToAll("player/voice/botsurvival/subordinate/incominggrenade35.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 6: EmitSoundToAll("player/voice/botsurvival/subordinate/incominggrenade34.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 7: EmitSoundToAll("player/voice/botsurvival/subordinate/incominggrenade33.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 8: EmitSoundToAll("player/voice/botsurvival/subordinate/incominggrenade23.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 9: EmitSoundToAll("player/voice/botsurvival/leader/incominggrenade2.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 10: EmitSoundToAll("player/voice/botsurvival/leader/incominggrenade13.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 11: EmitSoundToAll("player/voice/botsurvival/leader/incominggrenade12.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 12: EmitSoundToAll("player/voice/botsurvival/leader/incominggrenade11.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 13: EmitSoundToAll("player/voice/botsurvival/leader/incominggrenade10.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 14: EmitSoundToAll("player/voice/botsurvival/leader/incominggrenade18.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 2: EmitSoundToAll("player/voice/botsurvival/leader/incominggrenade18.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 3: EmitSoundToAll("player/voice/botsurvival/subordinate/incominggrenade9.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 4: EmitSoundToAll("player/voice/botsurvival/subordinate/incominggrenade33.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 5: EmitSoundToAll("player/voice/botsurvival/subordinate/incominggrenade34.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
 	}
 }
 
 stock void PlayerFireScreamRand(int client) {
-	switch (GetRandomInt(1, 5)) {
+	switch (GetRandomInt(0, 3)) {
+		case 0: EmitSoundToAll("player/voice/responses/security/subordinate/damage/molotov_incendiary_detonated6.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
 		case 1: EmitSoundToAll("player/voice/responses/security/subordinate/damage/molotov_incendiary_detonated7.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 2: EmitSoundToAll("player/voice/responses/security/leader/damage/molotov_incendiary_detonated6.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 3: EmitSoundToAll("player/voice/responses/security/subordinate/damage/molotov_incendiary_detonated6.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 4: EmitSoundToAll("player/voice/responses/security/leader/damage/molotov_incendiary_detonated5.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 5: EmitSoundToAll("player/voice/responses/security/leader/damage/molotov_incendiary_detonated4.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 2: EmitSoundToAll("player/voice/responses/security/leader/damage/molotov_incendiary_detonated4.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 3: EmitSoundToAll("player/voice/responses/security/leader/damage/molotov_incendiary_detonated5.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
 	}
 }
 
 stock void BotGrenadeScreamRand(int client) {
-	switch (GetRandomInt(1, 22)) {
-		case 1: EmitSoundToAll("player/voice/bot/subordinate/incominggrenade1.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 2: EmitSoundToAll("player/voice/bot/subordinate/incominggrenade2.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 3: EmitSoundToAll("player/voice/bot/subordinate/incominggrenade3.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 4: EmitSoundToAll("player/voice/bot/subordinate/incominggrenade4.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 5: EmitSoundToAll("player/voice/bot/subordinate/incominggrenade5.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 6: EmitSoundToAll("player/voice/bot/subordinate/incominggrenade19.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 7: EmitSoundToAll("player/voice/bot/leader/incominggrenade6.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 8: EmitSoundToAll("player/voice/bot/leader/incominggrenade7.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 9: EmitSoundToAll("player/voice/bot/leader/incominggrenade9.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 10: EmitSoundToAll("player/voice/bot/leader/incominggrenade10.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 11: EmitSoundToAll("player/voice/bot/leader/incominggrenade11.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 12: EmitSoundToAll("player/voice/bot/leader/incominggrenade12.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 13: EmitSoundToAll("player/voice/bot/leader/incominggrenade13.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 14: EmitSoundToAll("player/voice/bot/leader/incominggrenade17.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 15: EmitSoundToAll("player/voice/bot/leader/incominggrenade18.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 16: EmitSoundToAll("player/voice/bot/leader/incominggrenade19.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 17: EmitSoundToAll("player/voice/bot/leader/incominggrenade20.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 18: EmitSoundToAll("player/voice/bot/leader/incominggrenade21.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 19: EmitSoundToAll("player/voice/bot/leader/incominggrenade22.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 20: EmitSoundToAll("player/voice/bot/leader/incominggrenade23.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 21: EmitSoundToAll("player/voice/bot/leader/incominggrenade25.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 22: EmitSoundToAll("player/voice/bot/leader/incominggrenade26.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+	switch (GetRandomInt(0, 5)) {
+		case 0: EmitSoundToAll("player/voice/bot/subordinate/incominggrenade1.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 1: EmitSoundToAll("player/voice/bot/subordinate/incominggrenade2.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 2: EmitSoundToAll("player/voice/bot/subordinate/incominggrenade3.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 3: EmitSoundToAll("player/voice/bot/leader/incominggrenade11.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 4: EmitSoundToAll("player/voice/bot/leader/incominggrenade12.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 5: EmitSoundToAll("player/voice/bot/leader/incominggrenade13.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
 	}
 }
 
 stock void BotFireScreamRand(int client) {
-	switch (GetRandomInt(1, 3)) {
-		case 1: EmitSoundToAll("player/voice/responses/insurgent/leader/damage/molotov_incendiary_detonated5.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 2: EmitSoundToAll("player/voice/responses/insurgent/leader/damage/molotov_incendiary_detonated7.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 3: EmitSoundToAll("player/voice/responses/insurgent/subordinate/damage/molotov_incendiary_detonated3.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+	switch (GetRandomInt(0, 2)) {
+		case 0: EmitSoundToAll("player/voice/responses/insurgent/leader/damage/molotov_incendiary_detonated5.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 1: EmitSoundToAll("player/voice/responses/insurgent/leader/damage/molotov_incendiary_detonated7.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 2: EmitSoundToAll("player/voice/responses/insurgent/subordinate/damage/molotov_incendiary_detonated3.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
 	}
 }
 
