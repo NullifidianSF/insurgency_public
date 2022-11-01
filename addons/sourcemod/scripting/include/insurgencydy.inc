@@ -629,7 +629,7 @@ stock int GetPrimaryAmmo(int client, int weap, int type) {
 	return 0;
 }
 
-stock SetPrimaryAmmo(int client, int weap, int ammo, int type) {
+stock void SetPrimaryAmmo(int client, int weap, int ammo, int type) {
 	//PropType proptype = Prop_Data;
 	//new myweapons = FindSendPropInfo("CCSPlayer", "m_hMyWeapons");
 	//new weap = GetEntDataEnt2(client, myweapons+ (slot*4));
@@ -794,4 +794,3 @@ stock void DisplayInstructorHint(int iTargetEntity, float fTime, float fHeight, 
 	DispatchSpawn(iEntity);
 	AcceptEntityInput(iEntity, "ShowHint");
 }
-
