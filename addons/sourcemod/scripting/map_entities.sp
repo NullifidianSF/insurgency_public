@@ -26,7 +26,7 @@ public Plugin myinfo = {
 	name = "map_entities",
 	author = "Nullifidian",
 	description = "remove or modify entities for some maps",
-	version = "2.0"
+	version = "2.1"
 };
 
 public void OnPluginStart() {
@@ -106,12 +106,7 @@ public Action Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroa
 			RemoveEntities("func_dustmotes");
 		}
 		case sinjar_coop: {
-			while ((iEnt = FindEntityByClassname(iEnt, "func_breakable")) != -1) {
-				GetEntPropString(iEnt, Prop_Data, "m_iName", sName, sizeof(sName));
-				if (strcmp(sName, "Breakable_CP5", false) == 0) {
-					RemoveEntity(iEnt);
-				}
-			}
+			RemoveEntities("func_breakable", "Breakable_CP5");
 		}
 		case jail_break_coop_ws: {
 			while ((iEnt = FindEntityByClassname(iEnt, "func_door")) != -1) {
@@ -126,92 +121,61 @@ public Action Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroa
 					RemoveEntity(iEnt);
 				}
 			}
-			iEnt = MaxClients + 1;
-			while ((iEnt = FindEntityByClassname(iEnt, "func_breakable")) != -1) {
-				GetEntPropString(iEnt, Prop_Data, "m_iName", sName, sizeof(sName));
-				if (strcmp(sName, "breakout_wall", false) == 0) {
-					RemoveEntity(iEnt);
-				}
-			}
+			RemoveEntities("func_breakable", "breakout_wall");
 		}
 		case crash_course: {
-			while ((iEnt = FindEntityByClassname(iEnt, "func_nav_blocker")) != -1) {
-				GetEntPropString(iEnt, Prop_Data, "m_iName", sName, sizeof(sName));
-				if (strcmp(sName, "bridge_navblocker", false) == 0) {
-					RemoveEntity(iEnt);
-				}
-			}
-			iEnt = MaxClients + 1;
-			while ((iEnt = FindEntityByClassname(iEnt, "prop_dynamic")) != -1) {
-				GetEntPropString(iEnt, Prop_Data, "m_iName", sName, sizeof(sName));
-				if (strcmp(sName, "howitzer_door", false) == 0) {
-					RemoveEntity(iEnt);
-				}
-			}
+			RemoveEntities("func_nav_blocker", "bridge_navblocker");
+			RemoveEntities("prop_dynamic", "howitzer_door");
 		}
 		case ins_dog_red: {
-			while ((iEnt = FindEntityByClassname(iEnt, "func_door")) != -1) {
-				GetEntPropString(iEnt, Prop_Data, "m_iName", sName, sizeof(sName));
-				if (strcmp(sName, "Bunker_Doors", false) == 0) {
-					RemoveEntity(iEnt);
-				}
-			}
+			RemoveEntities("func_door", "Bunker_Doors");
 		}
 		case arcate_aof: {
-			while ((iEnt = FindEntityByClassname(iEnt, "func_door_rotating")) != -1) {
-				GetEntPropString(iEnt, Prop_Data, "m_iName", sName, sizeof(sName));
-				if (strcmp(sName, "doorC", false) == 0) {
-					RemoveEntity(iEnt);
-				}
-			}
+			RemoveEntities("func_door_rotating", "doorC");
 		}
 		case dedust1p2_aof: {
-			while ((iEnt = FindEntityByClassname(iEnt, "func_breakable")) != -1) {
-				GetEntPropString(iEnt, Prop_Data, "m_iName", sName, sizeof(sName));
-				if (strcmp(sName, "breakdoor", false) == 0) {
-					RemoveEntity(iEnt);
-				}
-			}
-			iEnt = MaxClients + 1;
-			while ((iEnt = FindEntityByClassname(iEnt, "logic_relay")) != -1) {
-				GetEntPropString(iEnt, Prop_Data, "m_iName", sName, sizeof(sName));
-				if (strcmp(sName, "logic_breakdoor", false) == 0) {
-					RemoveEntity(iEnt);
-				}
-			}
-			iEnt = MaxClients + 1;
-			while ((iEnt = FindEntityByClassname(iEnt, "prop_dynamic")) != -1) {
-				GetEntPropString(iEnt, Prop_Data, "m_iName", sName, sizeof(sName));
-				if (strcmp(sName, "ied_model", false) == 0) {
-					RemoveEntity(iEnt);
-				}
-			}
+			RemoveEntities("func_breakable", "breakdoor");
+			RemoveEntities("logic_relay", "logic_breakdoor");
+			RemoveEntities("prop_dynamic", "ied_model");
 		}
-		// case ins_prison_2020_new: {
-		// 	while ((iEnt = FindEntityByClassname(iEnt, "func_door")) != -1) {
-		// 		if (GetEntPropFloat(iEnt, Prop_Data, "m_flWait") != -1.0) {
-		// 			SetEntPropFloat(iEnt, Prop_Data, "m_flWait", -1.0);
-		// 		}
-		// 	}
-		// 	iEnt = MaxClients + 1;
-		// 	while ((iEnt = FindEntityByClassname(iEnt, "func_door_rotating")) != -1) {
-		// 		if (GetEntPropFloat(iEnt, Prop_Data, "m_flWait") != -1.0) {
-		// 			SetEntPropFloat(iEnt, Prop_Data, "m_flWait", -1.0);
-		// 		}
-		// 	}
-		// }
 	}
 }
 
-void RemoveEntities(char[] sEnt) {
+void RemoveEntities(char[] sClass, char[] sName = "") {
 	int	iCount = 0,
 		iEnt = MaxClients + 1;
 
-	while ((iEnt = FindEntityByClassname(iEnt, sEnt)) != -1) {
-		RemoveEntity(iEnt);
-		iCount++;
+	if (strlen(sName) > 0) {
+		char sTempName[64];
+		while ((iEnt = FindEntityByClassname(iEnt, sClass)) != -1) {
+			GetEntPropString(iEnt, Prop_Data, "m_iName", sTempName, sizeof(sTempName));
+			if (strcmp(sTempName, sName, false) == 0) {
+				RemoveEntity(iEnt);
+				iCount++;
+			}
+		}
+	} else {
+		while ((iEnt = FindEntityByClassname(iEnt, sClass)) != -1) {
+			RemoveEntity(iEnt);
+			iCount++;
+		}
 	}
-	PrintToServer("!!! REMOVED %i %s !!!", iCount, sEnt);
+
+	if (iCount > 0) {
+		if (strlen(sName) > 0) {
+			PrintToServer("[map_entities] Removed: \"%s\" named \"%s\" x %d", sClass, sName, iCount);
+		} else {
+			PrintToServer("[map_entities] Removed: \"%s\" x %d", sClass, iCount);
+		}
+	} else {
+		if (strlen(sName) > 0) {
+			PrintToServer("[map_entities] Didn't find: \"%s\" named \"%s\"", sClass, sName);
+			LogError("Didn't find: \"%s\" named \"%s\"", sClass, sName);
+		} else {
+			PrintToServer("[map_entities] Didn't find: \"%s\"", sClass);
+			LogError("Didn't find: \"%s\"", sClass);
+		}
+	}
 }
 
 public Action cmd_totalent(int client, int args) {
