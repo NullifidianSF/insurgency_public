@@ -26,33 +26,38 @@ public Plugin myinfo = {
 	name = "map_entities",
 	author = "Nullifidian",
 	description = "remove or modify entities for some maps",
-	version = "2.1"
+	version = "2.2"
 };
 
 public void OnPluginStart() {
-	RegAdminCmd("sm_totalent", cmd_totalent, ADMFLAG_BAN, "Print total entities");
+	RegAdminCmd("sm_totalent", cmd_totalent, ADMFLAG_RCON, "Print total entities");
 }
 
 public void OnMapStart() {
-	g_iMapId = -1;
-
 	char sMapName[32];
 	GetCurrentMap(sMapName, sizeof(sMapName));
 
+	g_iMapId = -1;
+
 	if (strcmp(sMapName, "embassy_coop", false) == 0) {
 		g_iMapId = embassy_coop;
+		RemoveEntities("env_sprite");
 	}
 	else if (strcmp(sMapName, "congress_coop", false) == 0) {
 		g_iMapId = congress_coop;
+		RemoveEntities("env_sprite");
 	}
 	else if (strcmp(sMapName, "frequency_open_coop", false) == 0) {
 		g_iMapId = frequency_open_coop;
+		RemoveEntities("env_sprite");
 	}
 	else if (strcmp(sMapName, "prospect_coop_b6", false) == 0) {
 		g_iMapId = prospect_coop_b6;
+		RemoveEntities("env_sprite");
 	}
 	else if (strcmp(sMapName, "congress_open_coop", false) == 0) {
 		g_iMapId = congress_open_coop;
+		RemoveEntities("env_sprite");
 	}
 	else if (strcmp(sMapName, "sinjar_coop", false) == 0) {
 		g_iMapId = sinjar_coop;
@@ -71,32 +76,22 @@ public void OnMapStart() {
 	}
 	else if (strcmp(sMapName, "dedust1p2_aof", false) == 0) {
 		g_iMapId = dedust1p2_aof;
+		RemoveEntities("logic_relay", "logic_breakdoor");
 	}
 /*	else if (strcmp(sMapName, "ins_prison_2020_new", false) == 0) {
 		g_iMapId = ins_prison_2020_new;
 	} */
-	else {
-		if (g_bEventHooked) {
-			HookFreezeRoundEnd(false);
-		}
+	else if (g_bEventHooked) {
+		HookFreezeRoundEnd(false);
 		return;
 	}
 
 	if (!g_bEventHooked) {
 		HookFreezeRoundEnd();
 	}
-
-	switch (g_iMapId) {
-		case embassy_coop, congress_coop, frequency_open_coop, prospect_coop_b6, congress_open_coop: {
-			RemoveEntities("env_sprite");
-		}
-	}
 }
 
 public Action Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast) {
-	int		iEnt = MaxClients + 1;
-	char	sName[64];
-
 	switch (g_iMapId) {
 		case embassy_coop, congress_coop, congress_open_coop: {
 			RemoveEntities("prop_sprinkler");
@@ -109,18 +104,11 @@ public Action Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroa
 			RemoveEntities("func_breakable", "Breakable_CP5");
 		}
 		case jail_break_coop_ws: {
-			while ((iEnt = FindEntityByClassname(iEnt, "func_door")) != -1) {
-				GetEntPropString(iEnt, Prop_Data, "m_iName", sName, sizeof(sName));
-				if (/*strcmp(sName, "prison_door4a", false) == 0
-				|| strcmp(sName, "prison_door4b", false) == 0
-				|| */strcmp(sName, "prison_door2", false) == 0
-				|| strcmp(sName, "prison_door3", false) == 0
-				|| strcmp(sName, "road_gate", false) == 0
-				|| strcmp(sName, "final_door2", false) == 0
-				|| strcmp(sName, "final_door1", false) == 0) {
-					RemoveEntity(iEnt);
-				}
-			}
+			RemoveEntities("func_door", "prison_door2");
+			RemoveEntities("func_door", "prison_door3");
+			RemoveEntities("func_door", "road_gate");
+			RemoveEntities("func_door", "final_door1");
+			RemoveEntities("func_door", "final_door2");
 			RemoveEntities("func_breakable", "breakout_wall");
 		}
 		case crash_course: {
@@ -135,7 +123,6 @@ public Action Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroa
 		}
 		case dedust1p2_aof: {
 			RemoveEntities("func_breakable", "breakdoor");
-			RemoveEntities("logic_relay", "logic_breakdoor");
 			RemoveEntities("prop_dynamic", "ied_model");
 		}
 	}
