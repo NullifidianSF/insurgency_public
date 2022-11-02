@@ -18,8 +18,12 @@ enum {
 	crash_course,
 	ins_dog_red,
 	arcate_aof,
-	dedust1p2_aof
-//	ins_prison_2020_new
+	dedust1p2_aof,
+	game_day_coop_ws,
+	hard_rain,
+	facilityb2_coop_v1_1,
+	cs_workout_v1,
+	ins_mountain_escape_v1_3
 };
 
 public Plugin myinfo = {
@@ -78,9 +82,23 @@ public void OnMapStart() {
 		g_iMapId = dedust1p2_aof;
 		RemoveEntities("logic_relay", "logic_breakdoor");
 	}
-/*	else if (strcmp(sMapName, "ins_prison_2020_new", false) == 0) {
-		g_iMapId = ins_prison_2020_new;
-	} */
+	else if (strcmp(sMapName, "game_day_coop_ws", false) == 0) {
+		g_iMapId = game_day_coop_ws;
+	}
+	else if (strcmp(sMapName, "hard_rain", false) == 0) {
+		g_iMapId = hard_rain;
+		RemoveEntities("env_fog_controller");
+	}
+	else if (strcmp(sMapName, "facilityb2_coop_v1_1", false) == 0) {
+		g_iMapId = facilityb2_coop_v1_1;
+	}
+	else if (strcmp(sMapName, "cs_workout_v1", false) == 0) {
+		g_iMapId = cs_workout_v1;
+	}
+	else if (strcmp(sMapName, "ins_mountain_escape_v1_3", false) == 0) {
+		g_iMapId = ins_mountain_escape_v1_3;
+		RemoveEntities("env_fog_controller");
+	}
 	else if (g_bEventHooked) {
 		HookFreezeRoundEnd(false);
 		return;
@@ -99,6 +117,15 @@ public Action Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroa
 		case frequency_open_coop: {
 			RemoveEntities("prop_sprinkler");
 			RemoveEntities("func_dustmotes");
+		}
+		case prospect_coop_b6: {
+			int iEnt = MaxClients + 1;
+			while ((iEnt = FindEntityByClassname(iEnt, "env_fog_controller")) != -1) {
+				AcceptEntityInput(iEnt, "TurnOff");	//turn off fog
+				//turn on FarZ to improve FPS
+				SetVariantString("8500");
+				AcceptEntityInput(iEnt, "SetFarZ");
+			}
 		}
 		case sinjar_coop: {
 			RemoveEntities("func_breakable", "Breakable_CP5");
@@ -124,6 +151,29 @@ public Action Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroa
 		case dedust1p2_aof: {
 			RemoveEntities("func_breakable", "breakdoor");
 			RemoveEntities("prop_dynamic", "ied_model");
+		}
+		case game_day_coop_ws: {
+			RemoveEntities("func_door");
+		}
+		case facilityb2_coop_v1_1: {
+			int iEnt = MaxClients + 1;
+			while ((iEnt = FindEntityByClassname(iEnt, "func_breakable")) != -1) {
+				//set hp on windows so we can break them
+				SetVariantString("100");
+				AcceptEntityInput(iEnt, "SetHealth");
+			}
+		}
+		case cs_workout_v1: {
+			RemoveEntities("func_door_rotating");	//remove doors
+			//remove door handles
+			char sModelName[64];
+			int iEnt = MaxClients + 1;
+			while ((iEnt = FindEntityByClassname(iEnt, "prop_dynamic")) != -1) {
+				GetEntPropString(iEnt, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
+				if (StrContains(sModelName, "door_handle_01", false) > -1) {
+					RemoveEntity(iEnt);
+				}
+			}
 		}
 	}
 }
