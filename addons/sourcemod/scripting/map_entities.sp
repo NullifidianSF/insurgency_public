@@ -23,14 +23,15 @@ enum {
 	hard_rain,
 	facilityb2_coop_v1_1,
 	cs_workout_v1,
-	ins_mountain_escape_v1_3
+	ins_mountain_escape_v1_3,
+	karkand_redux_p2
 };
 
 public Plugin myinfo = {
 	name = "map_entities",
 	author = "Nullifidian",
 	description = "remove or modify entities for some maps",
-	version = "2.2"
+	version = "2.3"
 };
 
 public void OnPluginStart() {
@@ -97,6 +98,10 @@ public void OnMapStart() {
 	}
 	else if (strcmp(sMapName, "ins_mountain_escape_v1_3", false) == 0) {
 		g_iMapId = ins_mountain_escape_v1_3;
+		RemoveEntities("env_fog_controller");
+	}
+	else if (strcmp(sMapName, "karkand_redux_p2", false) == 0) {
+		g_iMapId = karkand_redux_p2;
 		RemoveEntities("env_fog_controller");
 	}
 	else if (g_bEventHooked) {
