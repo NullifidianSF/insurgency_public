@@ -6,8 +6,9 @@
 #include <sourcemod>
 #include <sdktools>
 #include <sdkhooks>
+#include <insurgencydy>
 
-#define INS_PL_BUYZONE		(1 << 7)
+#define MAXENTITIES 2048
 
 #define DAMAGE_NO			0
 #define DAMAGE_EVENTS_ONLY	1
@@ -16,19 +17,30 @@
 
 char		g_sModelMine[43] = "models/static_props/wcache_landmine_01.mdl",
 			g_sSoundDetonate[29] = "weapons/m67/m67_detonate.wav",
-			g_sSoundBeep[17] = "ui/sfx/beep2.wav";	//duration 0:00.348
+			g_sSoundBeep[17] = "ui/sfx/beep2.wav",	//duration 0:00.348
+			g_sSoundDefuse[44] = "physics/metal/solidmetal_impact_soft_01.wav",
+			g_sSoundFound[44] = "player/voice/botsurvival/leader/heard14.ogg";
+
+			//For extra comedy, maybe add detection if the player moved since stepping on the mine before detonation & give time for teammates to defuse it
+			//g_sSoundStepOnMine[44] = "player/voice/botsurvival/leader/heard17.ogg";
 
 float		g_fMineBreakTime,
 			g_fTimerMin,
 			g_fTimerMax,
-			ga_fSoundCooldown[MAXPLAYERS + 1] = {0.0, ...};
+			ga_fDetectorSoundCooldown[MAXPLAYERS + 1] = {0.0, ...},
+			//cooldown for both so that players won't spam about the same mine or if the mines are close together
+			ga_fMineSoundCooldown[MAXENTITIES + 1] = {0.0, ...},
+			ga_fPlayerVoiceCooldown[MAXPLAYERS + 1] = {0.0, ...};
 
 int			g_iRoundStatus = 0,
 			g_iMaxMines,
 			g_iPlayerEquipGear,
 			ga_iConfirmedMisc[MAXPLAYERS + 1] = {-1, ...},
 			g_iDamage,
-			g_iRadius;
+			g_iRadius,
+			ga_iDefuseCount[MAXPLAYERS + 1] = {0, ...},
+			ga_iDestroyCount[MAXPLAYERS + 1] = {0, ...},
+			ga_iDeathCount[MAXPLAYERS + 1] = {0, ...};
 
 bool		g_bLateLoad,
 			g_bTimerOn;
@@ -47,7 +59,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "1.4"
+	version = "1.5"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -102,7 +114,7 @@ public void OnPluginStart() {
 		g_iRoundStatus = 1;
 		StartRandomSpawnTimer();
 		for (int i = 1; i <= MaxClients; i++) {
-			if (!IsClientInGame(i) || IsFakeClient(i)) {
+			if (!IsClientInGame(i) || IsFakeClient(i) || !IsPlayerAlive(i)) {
 				continue;
 			}
 			ConfirmEquipment(i);
@@ -114,6 +126,10 @@ public void OnMapStart() {
 	PrecacheModel(g_sModelMine, true);
 	PrecacheSound(g_sSoundDetonate, true);
 	PrecacheSound(g_sSoundBeep, true);
+	PrecacheSound(g_sSoundDefuse, true);
+	PrecacheSound(g_sSoundFound, true);
+	//PrecacheSound(g_sSoundStepOnMine, true);
+
 	g_bTimerOn = false;
 	CreateTimer(0.1, TimerR_NearestMine, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
@@ -121,7 +137,9 @@ public void OnMapStart() {
 public void OnClientDisconnect(int client) {
 	if (client && !IsFakeClient(client)) {
 		ga_iConfirmedMisc[client] = -1;
-		ga_fSoundCooldown[client] = 0.0;
+		ga_fDetectorSoundCooldown[client] = 0.0;
+		ga_fPlayerVoiceCooldown[client] = 0.0;
+		ResetMineStats(client);
 	}
 }
 
@@ -129,6 +147,13 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 	g_iRoundStatus = 1;
 	ga_hMines.Clear();
 	StartRandomSpawnTimer();
+
+	for (int i = 1; i <= MaxClients; i++) {
+		if (!IsClientInGame(i) || IsFakeClient(i)) {
+			continue;
+		}
+		ResetMineStats(i);
+	}
 	return Plugin_Continue;
 }
 
@@ -159,6 +184,12 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 	event.GetString("weapon", sWeapon, sizeof(sWeapon));
 	if (strcmp(sWeapon, "prop_dynamic", false) == 0) {
 		event.SetString("weapon", "land mine");
+		
+		int client = GetClientOfUserId(event.GetInt("userid"));
+		if (client) {
+			ga_iDeathCount[client]++;
+			PrintMineStats(client);
+		}
 	}
 	return Plugin_Continue;
 }
@@ -200,6 +231,8 @@ bool CreateMine(int client) {
 	}
 
 	ga_hMines.Push(EntIndexToEntRef(iEnt));
+	
+	ga_fMineSoundCooldown[iEnt] = 0.0;
 
 	float fClientPos[3];
 	GetClientAbsOrigin(client, fClientPos);
@@ -230,7 +263,6 @@ bool CreateMine(int client) {
 	DispatchKeyValue(iEnt, "ExplodeDamage", sBuffer);	//grenade_f1 160
 
 	DispatchKeyValue(iEnt, "minhealthdmg", "25");
-	DispatchKeyValue(iEnt, "PerformanceMode", "1");
 
 	SDKHook(iEnt, SDKHook_OnTakeDamage, Hook_OnTakeDamage);
 	SDKHook(iEnt, SDKHook_Touch, Hook_OnTouch);
@@ -245,7 +277,11 @@ public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float
 	}
 	if (damagetype == DMG_SLASH) {
 		if (IsValidEntity(victim)) {
+			EmitSoundToAll(g_sSoundDefuse, victim, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, SNDVOL_NORMAL, 100);
 			RemoveEntity(victim);
+			ga_iDefuseCount[attacker]++;
+			PrintMineStats(attacker);
+			SendDefusedMessage(attacker);
 		}
 		return Plugin_Handled;
 	}
@@ -258,6 +294,7 @@ public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float
 
 public Action Hook_OnTouch(int entity, int touch) {
 	if (touch > 0 && touch <= MaxClients && IsClientInGame(touch) && !IsFakeClient(touch)) {
+		//EmitSoundToAll(g_sSoundStepOnMine, touch, SNDCHAN_VOICE, _, _, 1.0);
 		AcceptEntityInput(entity, "Break");
 	}
 	return Plugin_Continue;
@@ -266,6 +303,14 @@ public Action Hook_OnTouch(int entity, int touch) {
 void Mine_OnBreak(const char[] output, int caller, int activator, float delay) {
 	g_fMineBreakTime = GetGameTime();
 
+	if (IsValidEntity(caller)) {
+		int iAttacker = GetEntPropEnt(caller, Prop_Data, "m_hLastAttacker");
+		if (iAttacker > 0 && IsClientInGame(iAttacker)) {
+			ga_iDestroyCount[iAttacker]++;
+			PrintMineStats(iAttacker);
+		}
+	}
+	
 	if (ga_hMines.Length > 0) {
 		for (int i = 0; i < ga_hMines.Length; i++) {
 			if (caller == EntRefToEntIndex(ga_hMines.Get(i))) {
@@ -289,8 +334,8 @@ void Mine_OnBreak(const char[] output, int caller, int activator, float delay) {
 		ActivateEntity(iParticle);
 		AcceptEntityInput(iParticle, "start");
 		CreateTimer(3.0, Timer_KillParticle, EntIndexToEntRef(iParticle));
-		EmitSoundToAll(g_sSoundDetonate, caller, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, SNDVOL_NORMAL, 100);
 	}
+	EmitSoundToAll(g_sSoundDetonate, caller, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, SNDVOL_NORMAL, 100);
 }
 
 Action Timer_KillParticle(Handle timer, int entRef) {
@@ -349,7 +394,11 @@ Action Timer_SpawnMine(Handle timer) {
 	if (g_iRoundStatus == 1) {
 		int iBot = GetRandomAliveBot();
 		if (iBot > 0) {
-			CreateMine(iBot);
+			if (!IsFakeClient(iBot)) {
+				LogError("client %d is NOT a bot!", iBot);
+			} else {
+				CreateMine(iBot);
+			}
 		}
 		CreateTimer(GetRandomFloat(g_fTimerMin, g_fTimerMax), Timer_SpawnMine, _, TIMER_FLAG_NO_MAPCHANGE);
 	} else {
@@ -390,19 +439,23 @@ Action TimerR_NearestMine(Handle timer) {
 				}
 			}
 
-			if (iNearestMine && fNearestMineDistance < 500.0 && ga_fSoundCooldown[i] <= GetGameTime()) {
+			if (iNearestMine && fNearestMineDistance < 500.0 && ga_fDetectorSoundCooldown[i] <= GetGameTime()) {
 				EmitSoundToClient(i, g_sSoundBeep, SOUND_FROM_PLAYER, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, 0.3);
 				if (fNearestMineDistance > 350.0) {
-					ga_fSoundCooldown[i] = GetGameTime() + 2.0;
+					ga_fDetectorSoundCooldown[i] = GetGameTime() + 2.0;
 				}
 				else if (fNearestMineDistance > 250.0){
-					ga_fSoundCooldown[i] = GetGameTime() + 0.8;
+					ga_fDetectorSoundCooldown[i] = GetGameTime() + 0.8;
 				}
 				else if (fNearestMineDistance > 100.0){
-					ga_fSoundCooldown[i] = GetGameTime() + 0.4;
+					ga_fDetectorSoundCooldown[i] = GetGameTime() + 0.4;
+					if (ga_fMineSoundCooldown[iNearestMine] <= GetGameTime() && ga_fPlayerVoiceCooldown[i] <= GetGameTime()) {
+						EmitSoundToAll(g_sSoundFound, i, SNDCHAN_VOICE, _, _, 1.0);
+						ga_fMineSoundCooldown[iNearestMine] = ga_fPlayerVoiceCooldown[i] = GetGameTime() + 10.0;
+					}
 				}
 				else if (fNearestMineDistance >= 0.0){
-					ga_fSoundCooldown[i] = GetGameTime() + 0.2;
+					ga_fDetectorSoundCooldown[i] = GetGameTime() + 0.2;
 				}
 			}
 		}
@@ -423,6 +476,18 @@ void ConfirmEquipment(int client) {
 	ga_iConfirmedMisc[client] = GetEntData(client, g_iPlayerEquipGear + (4 * 5));
 }
 
+void SendDefusedMessage(int client) {
+	Event event = CreateEvent("player_death", true);
+	if (event == null) {
+		return;
+	}
+
+	event.SetInt("userid", 0);
+	event.SetInt("attacker", GetClientUserId(client));
+	event.SetString("weapon", "Defused Land Mine");
+	event.Fire();
+}
+
 void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
 	if (convar == g_cvMaxMines) {
 		g_iMaxMines = g_cvMaxMines.IntValue;
@@ -439,6 +504,17 @@ void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue
 	else if (convar == g_cvRadius) {
 		g_iRadius = g_cvRadius.IntValue;
 	}
+}
+
+void PrintMineStats(int client) {
+	PrintToChat(client, "\x070088cc[Your Stats]\x01 Defused: \x070088cc%d\x01 Destroyed: \x070088cc%d\x01 Died from: \x070088cc%d",
+							ga_iDefuseCount[client], ga_iDestroyCount[client], ga_iDeathCount[client]);
+}
+
+void ResetMineStats(int client) {
+	ga_iDefuseCount[client] = 0;
+	ga_iDestroyCount[client] = 0;
+	ga_iDeathCount[client] = 0;
 }
 
 public void OnPluginEnd() {
