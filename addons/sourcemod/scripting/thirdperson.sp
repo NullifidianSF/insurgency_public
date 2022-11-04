@@ -19,7 +19,7 @@ public Plugin myinfo = {
 	name		= "thirdperson",
 	author		= "Nullifidian",
 	description	= "third person view command",
-	version		= "1.7",
+	version		= "1.9",
 	url			= ""
 };
 
@@ -94,7 +94,7 @@ public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadca
 
 public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast) {
 	int client = GetClientOfUserId(event.GetInt("userid"));
-	if (!IsClientInGame(client) || IsFakeClient(client) || ga_iSetting[client] == 0) {
+	if (!client || !IsClientInGame(client) || IsFakeClient(client) || ga_iSetting[client] == 0) {
 		return Plugin_Continue;
 	}
 	ClientCommand(client, "r_screenoverlay null");
