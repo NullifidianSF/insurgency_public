@@ -4,10 +4,12 @@
 #include <sourcemod>
 #include <sdktools>
 
-int			ga_iThrowCount[2048] = {0, ...},
+#define MAXENTITIES 2048
+
+int			ga_iThrowCount[MAXENTITIES + 1] = {0, ...},
 			g_iMAX;
 
-bool		ga_bPlayerInSmoke[MAXPLAYERS + 1][2048];
+bool		ga_bPlayerInSmoke[MAXPLAYERS + 1][MAXENTITIES + 1];
 
 float		ga_fEyeAngles[MAXPLAYERS + 1][3],
 			g_fRNG,
@@ -23,7 +25,7 @@ public Plugin myinfo = {
 	name		= "bot_antismoke",
 	author		= "Nullifidian",
 	description	= "A bot will throw a grenade at a human player if the human player is in a cloud of smoke",
-	version		= "1.5",
+	version		= "1.6",
 	url			= ""
 };
 
