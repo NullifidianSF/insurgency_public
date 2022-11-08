@@ -72,7 +72,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "1.8"
+	version = "1.9https://github.com/NullifidianSF/insurgency_public/blob/main/addons/sourcemod/scripting/bot_antismoke.sp"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -355,7 +355,6 @@ public Action Hook_StartTouch(int entity, int touch) {
 
 			PrintHintText(touch, "Don't move! You are standing on the mine!");
 			EmitSoundToAll(g_sSoundStepOnMine, touch, SNDCHAN_VOICE, _, _, 1.0);
-			EmitSoundToAll(g_sSoundStepOnMineArm, entity, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, SNDVOL_NORMAL, 100);
 		}
 
 		EmitSoundToAll(g_sSoundStepOnMineArm, entity, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, SNDVOL_NORMAL, 100);
