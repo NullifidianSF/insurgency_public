@@ -72,7 +72,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "1.7"
+	version = "1.8"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -330,9 +330,14 @@ public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float
 		return Plugin_Handled;
 	}
 
+	if (ga_iTouchedBy[victim]) {
+		return Plugin_Handled;
+	}
+
 	if (damagetype != DMG_BULLET && damagetype != DMG_BUCKSHOT && damagetype != (DMG_BULLET + DMG_BUCKSHOT)) {
 		return Plugin_Handled;
 	}
+
 	return Plugin_Continue;
 }
 
