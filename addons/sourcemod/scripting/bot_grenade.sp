@@ -14,7 +14,7 @@ public Plugin myinfo = {
 	name = "bot_grenade",
 	author = "Nullifidian",
 	description = "Make bots less accurate with grenades by changing grenade velocity",
-	version = "1.6",
+	version = "1.7",
 	url = ""
 };
 
@@ -39,18 +39,18 @@ public Action Event_GrenadeThrown(Event event, char[] name, bool dontBroadcast) 
 	int	client = GetClientOfUserId(GetEventInt(event, "userid")),
 		ent = GetEventInt(event, "entityid");
 
-	if (ent == -1 || !IsClientInGame(client) || !IsFakeClient(client)) {
+	if (ent == -1 || client < 1 || !IsClientInGame(client) || !IsFakeClient(client)) {
 		return Plugin_Continue;
 	}
 
-	CreateTimer(0.1, Timer_Grenade, EntIndexToEntRef(ent), TIMER_FLAG_NO_MAPCHANGE);
+	RequestFrame(Frame_SetGrenadeVel, EntIndexToEntRef(ent));
 	return Plugin_Continue;
 }
 
-Action Timer_Grenade(Handle timer, int entRef) {
+void Frame_SetGrenadeVel(int entRef) {
 	int ent = EntRefToEntIndex(entRef);
-	if (ent == INVALID_ENT_REFERENCE || !IsValidEntity(ent)) {
-		return Plugin_Stop;
+	if (ent == INVALID_ENT_REFERENCE || !IsValidEdict(ent)) {
+		return;
 	}
 
 	float fVelocity[3];
@@ -63,8 +63,6 @@ Action Timer_Grenade(Handle timer, int entRef) {
 	fVelocity[2] *= fRandom;
 
 	TeleportEntity(ent, NULL_VECTOR, NULL_VECTOR, fVelocity);
-	
-	return Plugin_Stop;
 }
 
 void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
