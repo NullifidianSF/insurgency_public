@@ -57,8 +57,6 @@ bool			g_bLateLoad,
 
 const int		gc_iMineDetector_ID = 33;
 
-Handle			ga_hHelpTimer[MAXPLAYERS + 1];
-
 ArrayList		ga_hMines;
 
 ConVar			g_cvMaxMines = null,
@@ -72,7 +70,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "2.0"
+	version = "2.1"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -168,7 +166,6 @@ public void OnClientDisconnect(int client) {
 		ga_fPlayerVoiceCooldown[client] = 0.0;
 		ga_bPlayerHooked[client] = false;
 		ResetMineStats(client);
-		delete ga_hHelpTimer[client];
 	}
 }
 
@@ -378,7 +375,7 @@ Action Timer_EnablePlayerMovement(Handle timer, DataPack dPack) {
 		SetEntDataFloat(client, g_iPlayerSpeed, ga_fPlayerOrgSpeed[client]);
 
 		DataPack dPack2;
-		ga_hHelpTimer[client] = CreateDataTimer(1.5, Timer_HelpMe, dPack2);
+		CreateDataTimer(1.5, Timer_HelpMe, dPack2);
 		dPack2.WriteCell(client);
 		dPack2.WriteCell(EntIndexToEntRef(iEnt));
 	}
@@ -390,7 +387,7 @@ Action Timer_HelpMe(Handle timer, DataPack dPack) {
 	int client = dPack.ReadCell(),
 		iEnt = EntRefToEntIndex(dPack.ReadCell());
 
-	if (iEnt == INVALID_ENT_REFERENCE || !IsValidEdict(iEnt)) {
+	if (iEnt == INVALID_ENT_REFERENCE || !IsValidEdict(iEnt) || !IsClientInGame(client) || !IsPlayerAlive(client)) {
 		return Plugin_Stop;
 	}
 
