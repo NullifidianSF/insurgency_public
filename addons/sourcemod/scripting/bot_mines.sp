@@ -72,7 +72,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "1.9"
+	version = "2.0"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -297,7 +297,6 @@ bool CreateMine(int client) {
 
 	SDKHook(iEnt, SDKHook_OnTakeDamage, Hook_OnTakeDamage);
 	SDKHook(iEnt, SDKHook_StartTouch, Hook_StartTouch);
-	SDKHook(iEnt, SDKHook_EndTouch, Hook_EndTouch);
 	HookSingleEntityOutput(iEnt, "OnBreak", Mine_OnBreak, true);
 
 	return true;
@@ -354,11 +353,14 @@ public Action Hook_StartTouch(int entity, int touch) {
 			dPack.WriteCell(EntIndexToEntRef(entity));
 
 			PrintHintText(touch, "Don't move! You are standing on the mine!");
+			EmitSoundToAll(g_sSoundStepOnMineArm, entity, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, SNDVOL_NORMAL, 100);
 			EmitSoundToAll(g_sSoundStepOnMine, touch, SNDCHAN_VOICE, _, _, 1.0);
-		}
 
-		EmitSoundToAll(g_sSoundStepOnMineArm, entity, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, SNDVOL_NORMAL, 100);
-		SDKUnhook(entity, SDKHook_StartTouch, Hook_StartTouch);
+			SDKHook(entity, SDKHook_EndTouch, Hook_EndTouch);
+			SDKUnhook(entity, SDKHook_StartTouch, Hook_StartTouch);
+		} else {
+			AcceptEntityInput(entity, "Break");
+		}
 	}
 	return Plugin_Continue;
 }
@@ -418,7 +420,6 @@ public Action Hook_EndTouch(int entity, int touch) {
 			DamageHook(touch, false);
 			SetEntProp(touch, Prop_Send, "m_bGlowEnabled", false);
 		}
-
 		AcceptEntityInput(entity, "Break");
 	}
 	return Plugin_Continue;
