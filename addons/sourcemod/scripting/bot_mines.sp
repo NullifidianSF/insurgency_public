@@ -314,13 +314,14 @@ public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float
 		if (IsValidEdict(victim)) {
 			EmitSoundToAll(g_sSoundDefuse, victim, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, SNDVOL_NORMAL, 100);
 			
-			DamageHook(ga_iTouchedBy[victim], false);
-			SetEntProp(ga_iTouchedBy[victim], Prop_Send, "m_bGlowEnabled", false);
-			PrintToChatAll("\x070088cc%N\x01 saved \x070088cc%N\x01's life by defusing the mine.", attacker, ga_iTouchedBy[victim]);
+			if (ga_iTouchedBy[victim]) {
+				DamageHook(ga_iTouchedBy[victim], false);
+				SetEntProp(ga_iTouchedBy[victim], Prop_Send, "m_bGlowEnabled", false);
+				PrintToChatAll("\x070088cc%N\x01 saved \x070088cc%N\x01's life by defusing the mine.", attacker, ga_iTouchedBy[victim]);
+			}
 
 			RemoveEntity(victim);
 			ga_iDefuseCount[attacker]++;
-
 			SendForwardResult(MineDefusedForward, attacker);	//gameme
 
 			PrintMineStats(attacker);
@@ -414,8 +415,10 @@ public Action Hook_OnTakeDamageBlock(int victim, int &attacker, int &inflictor, 
 
 public Action Hook_EndTouch(int entity, int touch) {
 	if (touch > 0 && touch <= MaxClients && IsClientInGame(touch) && !IsFakeClient(touch)) {
-		DamageHook(touch, false);
-		SetEntProp(touch, Prop_Send, "m_bGlowEnabled", false);
+		if (ga_bPlayerHooked[touch]) {
+			DamageHook(touch, false);
+			SetEntProp(touch, Prop_Send, "m_bGlowEnabled", false);
+		}
 
 		AcceptEntityInput(entity, "Break");
 	}
