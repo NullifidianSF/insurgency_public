@@ -72,7 +72,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "1.9https://github.com/NullifidianSF/insurgency_public/blob/main/addons/sourcemod/scripting/bot_antismoke.sp"
+	version = "1.9"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
