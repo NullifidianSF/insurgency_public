@@ -314,10 +314,9 @@ public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float
 		if (IsValidEdict(victim)) {
 			EmitSoundToAll(g_sSoundDefuse, victim, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, SNDVOL_NORMAL, 100);
 			
-			if (DamageHook(ga_iTouchedBy[victim], false)) {
-				SetEntProp(ga_iTouchedBy[victim], Prop_Send, "m_bGlowEnabled", false);
-				PrintToChatAll("\x070088cc%N\x01 saved \x070088cc%N\x01's life by defusing the mine.", attacker, ga_iTouchedBy[victim]);
-			}
+			DamageHook(ga_iTouchedBy[victim], false);
+			SetEntProp(ga_iTouchedBy[victim], Prop_Send, "m_bGlowEnabled", false);
+			PrintToChatAll("\x070088cc%N\x01 saved \x070088cc%N\x01's life by defusing the mine.", attacker, ga_iTouchedBy[victim]);
 
 			RemoveEntity(victim);
 			ga_iDefuseCount[attacker]++;
@@ -354,6 +353,7 @@ public Action Hook_StartTouch(int entity, int touch) {
 			dPack.WriteCell(EntIndexToEntRef(entity));
 		}
 
+		PrintHintText(touch, "Don't move! You are standing on the mine!");
 		EmitSoundToAll(g_sSoundStepOnMine, touch, SNDCHAN_VOICE, _, _, 1.0);
 		EmitSoundToAll(g_sSoundStepOnMineArm, entity, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, SNDVOL_NORMAL, 100);
 
@@ -392,9 +392,8 @@ Action Timer_HelpMe(Handle timer, DataPack dPack) {
 	}
 
 	if (IsPlayerAlive(client)) {
-		if (DamageHook(client, true)) {
-			SetEntProp(client, Prop_Send, "m_bGlowEnabled", true);
-		}
+		DamageHook(client, true);
+		SetEntProp(client, Prop_Send, "m_bGlowEnabled", true);
 		EmitSoundToAll(g_sSoundHelp, client, SNDCHAN_VOICE, _, _, 1.0);
 		PrintToChatAll("\x070088cc%N\x01 stepped on the mine & needs your help defusing (knife hit) it!", client);
 	}
@@ -414,9 +413,9 @@ public Action Hook_OnTakeDamageBlock(int victim, int &attacker, int &inflictor, 
 
 public Action Hook_EndTouch(int entity, int touch) {
 	if (touch > 0 && touch <= MaxClients && IsClientInGame(touch) && !IsFakeClient(touch)) {
-		if (DamageHook(touch, false)) {
-			SetEntProp(touch, Prop_Send, "m_bGlowEnabled", false);
-		}
+		DamageHook(touch, false);
+		SetEntProp(touch, Prop_Send, "m_bGlowEnabled", false);
+
 		AcceptEntityInput(entity, "Break");
 	}
 	return Plugin_Continue;
@@ -633,18 +632,15 @@ bool DamageHook(int client, bool bInput) {
 			if (!ga_bPlayerHooked[client]) {
 				SDKHook(client, SDKHook_OnTakeDamage, Hook_OnTakeDamageBlock);
 				ga_bPlayerHooked[client] = true;
-				return true;
 			}
 		}
 		case false: {
 			if (ga_bPlayerHooked[client]) {
 				SDKUnhook(client, SDKHook_OnTakeDamage, Hook_OnTakeDamageBlock);
 				ga_bPlayerHooked[client] = false;
-				return true;
 			}
 		}
 	}
-	return false;
 }
 
 void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
@@ -682,8 +678,13 @@ public void OnPluginEnd() {
 	}
 
 	for (int j = 1; j <= MaxClients; j++) {
-		if (IsClientInGame(j) && IsPlayerAlive(j) && GetEntDataFloat(j, g_iPlayerSpeed) == 0.0) {
-			SetEntDataFloat(j, g_iPlayerSpeed, ga_fPlayerOrgSpeed[j]);
+		if (IsClientInGame(j) && IsPlayerAlive(j)) {
+			if (GetEntDataFloat(j, g_iPlayerSpeed) == 0.0) {
+				SetEntDataFloat(j, g_iPlayerSpeed, ga_fPlayerOrgSpeed[j]);
+			}
+			if (GetEntProp(j, Prop_Send, "m_bGlowEnabled") != 0) {
+				SetEntProp(j, Prop_Send, "m_bGlowEnabled", false);
+			}
 		}
 	}
 }
