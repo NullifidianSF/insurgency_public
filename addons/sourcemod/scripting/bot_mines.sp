@@ -351,12 +351,13 @@ public Action Hook_StartTouch(int entity, int touch) {
 			CreateDataTimer(0.6, Timer_EnablePlayerMovement, dPack, TIMER_FLAG_NO_MAPCHANGE);
 			dPack.WriteCell(touch);
 			dPack.WriteCell(EntIndexToEntRef(entity));
+
+			PrintHintText(touch, "Don't move! You are standing on the mine!");
+			EmitSoundToAll(g_sSoundStepOnMine, touch, SNDCHAN_VOICE, _, _, 1.0);
+			EmitSoundToAll(g_sSoundStepOnMineArm, entity, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, SNDVOL_NORMAL, 100);
 		}
 
-		PrintHintText(touch, "Don't move! You are standing on the mine!");
-		EmitSoundToAll(g_sSoundStepOnMine, touch, SNDCHAN_VOICE, _, _, 1.0);
 		EmitSoundToAll(g_sSoundStepOnMineArm, entity, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, SNDVOL_NORMAL, 100);
-
 		SDKUnhook(entity, SDKHook_StartTouch, Hook_StartTouch);
 	}
 	return Plugin_Continue;
