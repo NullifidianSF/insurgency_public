@@ -32,12 +32,10 @@ float			g_fMineBreakTime,
 				g_fTimerMax,
 				g_fHelpChance,
 				ga_fDetectorSoundCooldown[MAXPLAYERS + 1] = {0.0, ...},
-
+				ga_fPlayerOrgSpeed[MAXPLAYERS + 1] = {1.0, ...},
 				//cooldown for both so that players won't spam about the same mine or if the mines are close together
 				ga_fMineSoundCooldown[MAXENTITIES + 1] = {0.0, ...},
-				ga_fPlayerVoiceCooldown[MAXPLAYERS + 1] = {0.0, ...},
-
-				ga_fPlayerOrgSpeed[MAXPLAYERS + 1] = {1.0, ...};
+				ga_fPlayerVoiceCooldown[MAXPLAYERS + 1] = {0.0, ...};
 
 int				g_iRoundStatus = 0,
 				g_iMaxMines,
@@ -70,7 +68,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "2.1"
+	version = "2.3"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -250,7 +248,7 @@ bool CreateMine(int client) {
 	int iOldMine;
 	while (ga_hMines.Length >= g_iMaxMines && g_iMaxMines != 0) {
 		iOldMine = EntRefToEntIndex(ga_hMines.Get(0));
-		if (iOldMine != INVALID_ENT_REFERENCE && IsValidEdict(iOldMine)) {
+		if (iOldMine != INVALID_ENT_REFERENCE && IsValidEdict(iOldMine) && !ga_iTouchedBy[iOldMine]) {
 			RemoveEntity(iOldMine);
 		}
 		ga_hMines.Erase(0);
@@ -367,12 +365,12 @@ Action Timer_EnablePlayerMovement(Handle timer, DataPack dPack) {
 	int client = dPack.ReadCell(),
 		iEnt = EntRefToEntIndex(dPack.ReadCell());
 
-	if (iEnt == INVALID_ENT_REFERENCE || !IsValidEdict(iEnt)) {
-		return Plugin_Stop;
-	}
-
 	if (IsClientInGame(client) && IsPlayerAlive(client) && GetEntDataFloat(client, g_iPlayerSpeed) == 0.0) {
 		SetEntDataFloat(client, g_iPlayerSpeed, ga_fPlayerOrgSpeed[client]);
+
+		if (iEnt == INVALID_ENT_REFERENCE || !IsValidEdict(iEnt)) {
+			return Plugin_Stop;
+		}
 
 		DataPack dPack2;
 		CreateDataTimer(1.5, Timer_HelpMe, dPack2);
@@ -413,6 +411,9 @@ public Action Hook_OnTakeDamageBlock(int victim, int &attacker, int &inflictor, 
 
 public Action Hook_EndTouch(int entity, int touch) {
 	if (touch > 0 && touch <= MaxClients && IsClientInGame(touch) && !IsFakeClient(touch)) {
+		if (ga_iTouchedBy[entity] != touch) {
+			return Plugin_Continue;
+		}
 		if (ga_bPlayerHooked[touch]) {
 			DamageHook(touch, false);
 			SetEntProp(touch, Prop_Send, "m_bGlowEnabled", false);
@@ -618,7 +619,6 @@ void ResetMineStats(int client) {
 	ga_iDeathCount[client] = 0;
 }
 
-//gameme
 public Action SendForwardResult(GlobalForward sName, int iClient) {	//gameme stats forward
 	Action result;
 	Call_StartForward(sName);
