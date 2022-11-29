@@ -82,7 +82,7 @@ public void OnMapStart() {
 }
 
 public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
-	ClearArray(ga_hExplosives);
+	ga_hExplosives.Clear();
 	g_iRoundStatus = 1;
 	for (int i = 1; i <= MaxClients; i++) {
 		if (!IsClientInGame(i) || IsFakeClient(i)) {
@@ -133,16 +133,15 @@ public Action Event_GrenadeDetonate(Event event, const char[] name, bool dontBro
 	if (client < 1 || (IsClientInGame(client) && !IsFakeClient(client))) {
 		return Plugin_Continue;
 	}
-
-	int iArraySize = GetArraySize(ga_hExplosives);
-	if (iArraySize < 1) {
+	
+	if (ga_hExplosives.Length < 1) {
 		return Plugin_Continue;
 	}
 
 	int nade = event.GetInt("entityid");
-	for (int i = 0; i < iArraySize; i++) {
-		if (nade == EntRefToEntIndex(GetArrayCell(ga_hExplosives, i))) {
-			RemoveFromArray(ga_hExplosives, i);
+	for (int i = 0; i < ga_hExplosives.Length; i++) {
+		if (nade == EntRefToEntIndex(ga_hExplosives.Get(i))) {
+			ga_hExplosives.Erase(i);
 			break;
 		}
 	}
@@ -172,22 +171,17 @@ public Action Event_NadeAndMissile(Event event, char[] name, bool dontBroadcast)
 		return Plugin_Continue;
 	}
 	
-	PushArrayCell(ga_hExplosives, EntIndexToEntRef(ent));
+	ga_hExplosives.Push(EntIndexToEntRef(ent));
 
 	return Plugin_Continue;
 }
 
 Action TimerR_IronDome(Handle timer) {
-	if (!g_iRoundStatus) {
+	if (!g_iRoundStatus || ga_hExplosives.Length < 1) {
 		return Plugin_Continue;
 	}
 
-	int	iEnt,
-		iArraySize = GetArraySize(ga_hExplosives);
-
-	if (iArraySize < 1) {
-		return Plugin_Continue;
-	}
+	int		iEnt;
 
 	float	vEnt[3],
 			vClient[3];
@@ -202,15 +196,14 @@ Action TimerR_IronDome(Handle timer) {
 			continue;
 		}
 
-		iArraySize = GetArraySize(ga_hExplosives);
-		if (iArraySize < 1) {
+		if (ga_hExplosives.Length < 1) {
 			break;
 		}
 
-		for (int j = (iArraySize - 1); j >= 0; j--) {
-			iEnt = EntRefToEntIndex(GetArrayCell(ga_hExplosives, j));
+		for (int j = (ga_hExplosives.Length - 1); j >= 0; j--) {
+			iEnt = EntRefToEntIndex(ga_hExplosives.Get(j));
 			if (iEnt == INVALID_ENT_REFERENCE || !IsValidEntity(iEnt)) {
-				RemoveFromArray(ga_hExplosives, j);
+				ga_hExplosives.Erase(j);
 				continue;
 			}
 
@@ -226,7 +219,7 @@ Action TimerR_IronDome(Handle timer) {
 			CreateParticle(vEnt);
 			EmitSoundToAll(SND_DETECT, i, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, SNDVOL_NORMAL, 100);
 			EmitSoundToAll(SND_EXPLODE, iEnt, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, SNDVOL_NORMAL, 100);
-			RemoveFromArray(ga_hExplosives, j);
+			ga_hExplosives.Erase(j);
 			ga_iBlocks[i]--;
 
 			if (GetEntityClassname(iEnt, sEnt, sizeof(sEnt))) {
