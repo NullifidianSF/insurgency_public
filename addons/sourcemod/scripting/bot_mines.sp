@@ -35,19 +35,21 @@ float			g_fMineBreakTime,
 				ga_fPlayerOrgSpeed[MAXPLAYERS + 1] = {1.0, ...},
 				//cooldown for both so that players won't spam about the same mine or if the mines are close together
 				ga_fMineSoundCooldown[MAXENTITIES + 1] = {0.0, ...},
-				ga_fPlayerVoiceCooldown[MAXPLAYERS + 1] = {0.0, ...};
+				ga_fPlayerVoiceCooldown[MAXPLAYERS + 1] = {0.0, ...},
+				g_fAliveTime;
 
 int				g_iRoundStatus = 0,
 				g_iMaxMines,
 				g_iPlayerEquipGear,
 				g_iPlayerSpeed,
+				g_iSpawnTime,
 				ga_iConfirmedMisc[MAXPLAYERS + 1] = {-1, ...},
 				g_iDamage,
 				g_iRadius,
 				ga_iDefuseCount[MAXPLAYERS + 1] = {0, ...},
 				ga_iDestroyCount[MAXPLAYERS + 1] = {0, ...},
 				ga_iDeathCount[MAXPLAYERS + 1] = {0, ...},
-				ga_iTouchedBy[MAXENTITIES +1] = {0, ...};
+				ga_iTouchedBy[MAXENTITIES + 1] = {0, ...};
 
 bool			g_bLateLoad,
 				g_bTimerOn,
@@ -58,6 +60,7 @@ const int		gc_iMineDetector_ID = 33;
 ArrayList		ga_hMines;
 
 ConVar			g_cvMaxMines = null,
+				g_cvAliveTime = null,
 				g_cvTimerMin = null,
 				g_cvTimerMax = null,
 				g_cvDamage = null,
@@ -68,7 +71,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "2.3"
+	version = "2.4"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -87,11 +90,20 @@ public void OnPluginStart() {
 		SetFailState("Offset \"m_flLaggedMovementValue\" not found!");
 	}
 
+	g_iSpawnTime = FindSendPropInfo("CINSPlayer", "m_flSpawnTime");
+	if (g_iSpawnTime == -1) {
+		SetFailState("Offset \"m_flSpawnTime\" not found!");
+	}
+
 	ga_hMines = CreateArray();
 
 	g_cvMaxMines = CreateConVar("sm_botmines_max", "3", "Maximum concurrent mines allowed", FCVAR_NONE, true, 1.0, true, 15.0);
 	g_iMaxMines = g_cvMaxMines.IntValue;
 	g_cvMaxMines.AddChangeHook(OnConVarChanged);
+
+	g_cvAliveTime = CreateConVar("sm_botmines_alivetime", "6.0", "The bot must stay alive for X seconds before considering spawning mine next to him.", FCVAR_NONE, true, 0.0);
+	g_fAliveTime = g_cvAliveTime.FloatValue;
+	g_cvAliveTime.AddChangeHook(OnConVarChanged);
 
 	g_cvTimerMin = CreateConVar("sm_botmines_timermin", "60.0", "Minimum possible delay before a random bot places a mine", FCVAR_NONE, true, 30.0);
 	g_fTimerMin = g_cvTimerMin.FloatValue;
@@ -410,16 +422,14 @@ public Action Hook_OnTakeDamageBlock(int victim, int &attacker, int &inflictor, 
 }
 
 public Action Hook_EndTouch(int entity, int touch) {
-	if (touch > 0 && touch <= MaxClients && IsClientInGame(touch) && !IsFakeClient(touch)) {
-		if (ga_iTouchedBy[entity] != touch) {
-			return Plugin_Continue;
-		}
-		if (ga_bPlayerHooked[touch]) {
-			DamageHook(touch, false);
-			SetEntProp(touch, Prop_Send, "m_bGlowEnabled", false);
-		}
-		AcceptEntityInput(entity, "Break");
+	if (ga_iTouchedBy[entity] != touch || touch < 1 || touch > MaxClients || !IsClientInGame(touch) || IsFakeClient(touch)) {
+		return Plugin_Continue;
 	}
+	if (ga_bPlayerHooked[touch]) {
+		DamageHook(touch, false);
+		SetEntProp(touch, Prop_Send, "m_bGlowEnabled", false);
+	}
+	AcceptEntityInput(entity, "Break");
 	return Plugin_Continue;
 }
 
@@ -485,6 +495,9 @@ int GetRandomAliveBot() {
 
 	for (int i = 1; i <= MaxClients; i++) {
 		if (IsClientInGame(i) && IsFakeClient(i) && IsPlayerAlive(i) && GetEntPropEnt(i, Prop_Send, "m_hGroundEntity") == 0) {
+			if (g_fAliveTime > 0.0 && ((GetGameTime() - GetEntDataFloat(i, g_iSpawnTime)) < g_fAliveTime)) {
+				continue;
+			}
 			//make sure not to use a bot that is too close to a player
 			GetClientAbsOrigin(i, fBotPos);
 			for (int j = 1; j <= MaxClients; j++) {
@@ -647,6 +660,9 @@ bool DamageHook(int client, bool bInput) {
 void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
 	if (convar == g_cvMaxMines) {
 		g_iMaxMines = g_cvMaxMines.IntValue;
+	}
+	else if (convar == g_cvAliveTime) {
+		g_fAliveTime = g_cvAliveTime.FloatValue;
 	}
 	else if (convar == g_cvTimerMin) {
 		g_fTimerMin = g_cvTimerMin.FloatValue;
