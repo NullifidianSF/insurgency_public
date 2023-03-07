@@ -12,7 +12,7 @@ public Plugin myinfo = {
 	name = "flashplayer",
 	author = "Nullifidian",
 	description = "nade flash a player",
-	version = "1.2",
+	version = "1.3",
 	url = ""
 };
 
@@ -52,11 +52,9 @@ Action Timer_BlindTarget(Handle timer, DataPack dPack) {
 	int client = dPack.ReadCell();
 	float fDuration = dPack.ReadFloat();
 
-	if (!IsClientInGame(client) || IsFakeClient(client) || !IsPlayerAlive(client)) {
-		return;
+	if (IsClientInGame(client) && !IsFakeClient(client) && IsPlayerAlive(client)) {
+		BlindTarget(client, fDuration);
 	}
-
-	BlindTarget(client, fDuration);
 }
 
 public Action cmd_flash(int client, int args) {
