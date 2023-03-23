@@ -8,7 +8,7 @@ public Plugin myinfo = {
 	name = "cache_remove_dupe",
 	author = "Nullifidian",
 	description = "It removes duplicate caches from a map.",
-	version = "1.0"
+	version = "1.1"
 };
 
 public void OnPluginStart() {
@@ -17,14 +17,13 @@ public void OnPluginStart() {
 
 public Action Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast) {
 	int		iEnt = MaxClients + 1,
-			iEnt2;
+			iEnt2 = MaxClients + 1;
 		
 	float	vEnt[3],
 			vEnt2[3];
 
 	while ((iEnt = FindEntityByClassname(iEnt, "obj_weapon_cache")) != -1) {
 		GetEntPropVector(iEnt, Prop_Data, "m_vecAbsOrigin", vEnt);
-		iEnt2 = iEnt + 1;
 		while ((iEnt2 = FindEntityByClassname(iEnt2, "obj_weapon_cache")) != -1) {
 			if (iEnt == iEnt2) {
 				continue;
