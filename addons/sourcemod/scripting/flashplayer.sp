@@ -12,7 +12,7 @@ public Plugin myinfo = {
 	name = "flashplayer",
 	author = "Nullifidian",
 	description = "nade flash a player",
-	version = "1.3",
+	version = "1.4",
 	url = ""
 };
 
@@ -90,7 +90,7 @@ public Action cmd_flash(int client, int args) {
 		BlindTarget(target_list[i], fDuration);
 	}
 	
-	ShowActivity2(client, "[SM] ", "Flashed (%.0f seconds): %s", fDuration, target_name);
+	ReplyToCommand(client, "[SM] ", "Flashed (%.0f seconds): %s", fDuration, target_name);
 
 	return Plugin_Handled;
 }
