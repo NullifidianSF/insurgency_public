@@ -42,6 +42,8 @@ int				g_iRoundStatus = 0,
 				g_iMaxMines,
 				g_iPlayerEquipGear,
 				g_iPlayerSpeed,
+				g_iObserverMode,
+				ga_iMineToView[MAXPLAYERS + 1] = {-1, ...},
 				g_iSpawnTime,
 				ga_iConfirmedMisc[MAXPLAYERS + 1] = {-1, ...},
 				g_iDamage,
@@ -71,7 +73,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "2.4"
+	version = "2.5"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -88,6 +90,11 @@ public void OnPluginStart() {
 	g_iPlayerSpeed = FindSendPropInfo("CBasePlayer","m_flLaggedMovementValue");
 	if (g_iPlayerSpeed == -1) {
 		SetFailState("Offset \"m_flLaggedMovementValue\" not found!");
+	}
+
+	g_iObserverMode = FindSendPropInfo("CBasePlayer","m_iObserverMode");
+	if (g_iObserverMode == -1) {
+		SetFailState("Offset \"m_iObserverMode\" not found!");
 	}
 
 	g_iSpawnTime = FindSendPropInfo("CINSPlayer", "m_flSpawnTime");
@@ -125,7 +132,8 @@ public void OnPluginStart() {
 	g_fHelpChance = g_cvHelpChance.FloatValue;
 	g_cvHelpChance.AddChangeHook(OnConVarChanged);
 
-	RegAdminCmd("sm_botmine", cmd_botmine, ADMFLAG_RCON, "spawn mine at random bot");
+	RegAdminCmd("sm_botmine", cmd_botmine, ADMFLAG_RCON, "Spawn a mine at a random bot's location.");
+	RegAdminCmd("sm_botmineview", cmd_botmineview, ADMFLAG_RCON, "While dead, teleport your view to a mine's location (repeat this cmd to show the next mine).");
 
 	HookEvent("player_spawn", Event_PlayerRespawn);
 	HookEvent("player_death", Event_PlayerDeath, EventHookMode_Pre);
@@ -176,6 +184,7 @@ public void OnClientDisconnect(int client) {
 		ga_fPlayerVoiceCooldown[client] = 0.0;
 		ga_bPlayerHooked[client] = false;
 		ResetMineStats(client);
+		ga_iMineToView[client] = -1;
 	}
 }
 
@@ -236,7 +245,7 @@ public Action cmd_botmine(int client, int args) {
 		return Plugin_Handled;
 	}
 
-	int iBot = GetRandomAliveBot();
+	int iBot = GetRandomAliveBot(true);
 	if (iBot > 0) {
 		if (!CreateMine(iBot)) {
 			ReplyToCommand(client, "\"CreateMine\" failed");
@@ -248,6 +257,66 @@ public Action cmd_botmine(int client, int args) {
 
 	ReplyToCommand(client, "No valid bot found");
 	return Plugin_Handled;
+}
+
+public Action cmd_botmineview(int client, int args) {
+	if (!client) {
+		ReplyToCommand(client, "Server console can't use this command!");
+		return Plugin_Handled;
+	}
+
+	if (!IsClientInGame(client)) {
+		return Plugin_Handled;
+	}
+
+	if (!g_iRoundStatus) {
+		ReplyToCommand(client, "Wait for the game round to start first!");
+		return Plugin_Handled;
+	}
+
+	if (IsPlayerAlive(client)) {
+		ReplyToCommand(client, "You can't view a mine while you are alive!");
+		return Plugin_Handled;
+	}
+
+	if (ga_hMines.Length == 0) {
+		ReplyToCommand(client, "No active mine!");
+		return Plugin_Handled;
+	}
+
+	if (ga_iMineToView[client] >= ga_hMines.Length) {
+		ga_iMineToView[client] = -1;
+	}
+
+	if (ga_iMineToView[client] + 1 != ga_hMines.Length){
+		ga_iMineToView[client]++;
+	} else {
+		ga_iMineToView[client] = 0;
+	}
+
+	int iMine = EntRefToEntIndex(ga_hMines.Get(ga_iMineToView[client]));
+
+	if (iMine == INVALID_ENT_REFERENCE || !IsValidEdict(iMine)) {
+		ga_hMines.Erase(ga_iMineToView[client]);
+		RequestFrame(Frame_botmineview, client);
+		return Plugin_Handled;
+	}
+
+	if (GetEntData(client, g_iObserverMode) != 6) {
+		SetEntData(client, g_iObserverMode, 6);
+	}
+
+	float fOrigin[3];
+	GetEntPropVector(iMine, Prop_Send, "m_vecOrigin", fOrigin);
+	fOrigin[2] -= 50.0;
+	TeleportEntity(client, fOrigin, NULL_VECTOR, NULL_VECTOR);
+	ReplyToCommand(client, "Mine: %d/%d Index: %d", ga_iMineToView[client] + 1, ga_hMines.Length, iMine);
+
+	return Plugin_Handled;
+}
+
+void Frame_botmineview(int client) {
+	cmd_botmineview(client, 0);
 }
 
 bool CreateMine(int client) {
@@ -483,7 +552,7 @@ public void OnMapEnd() {
 	g_iRoundStatus = 0;
 }
 
-int GetRandomAliveBot() {
+int GetRandomAliveBot(bool bCmd = false) {
 	int[]	iClients = new int[MaxClients + 1];
 	
 	int		iCount;
@@ -495,7 +564,7 @@ int GetRandomAliveBot() {
 
 	for (int i = 1; i <= MaxClients; i++) {
 		if (IsClientInGame(i) && IsFakeClient(i) && IsPlayerAlive(i) && GetEntPropEnt(i, Prop_Send, "m_hGroundEntity") == 0) {
-			if (g_fAliveTime > 0.0 && ((GetGameTime() - GetEntDataFloat(i, g_iSpawnTime)) < g_fAliveTime)) {
+			if (!bCmd && g_fAliveTime > 0.0 && ((GetGameTime() - GetEntDataFloat(i, g_iSpawnTime)) < g_fAliveTime)) {
 				continue;
 			}
 			//make sure not to use a bot that is too close to a player
