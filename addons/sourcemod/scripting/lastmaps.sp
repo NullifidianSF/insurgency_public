@@ -21,7 +21,7 @@ public Plugin myinfo = {
 	name		= "lastmaps",
 	author		= "Nullifidian",
 	description	= "Creates & sets the server to a new custom mapcyclefile without recently played maps.",
-	version		= "1.5",
+	version		= "1.6",
 	url			= ""
 };
 
@@ -203,14 +203,14 @@ Action Timer_MapStart(Handle timer) {
 
 	if (!g_bLoadArrayFromFile) {
 		ga_hExcludedMaps.PushString(sMap);
+		RemoveMapFromArray();
 		ArrayToFile();
 		MakeTempMapcyle();
 	} else {
 		ArrayFromFile(sMap);
 		g_bLoadArrayFromFile = false;
+		RemoveMapFromArray();
 	}
-
-	RemoveMapFromArray();
 
 	if (ga_hExcludedMaps.Length > 0) {
 		ServerCommand("mapcyclefile %s", g_sTempMapcycleFile);
