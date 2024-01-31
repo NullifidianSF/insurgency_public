@@ -8,7 +8,7 @@ public Plugin myinfo = {
 	name = "cache_remove_dupe",
 	author = "Nullifidian",
 	description = "It removes duplicate caches from a map.",
-	version = "1.2"
+	version = "1.3"
 };
 
 public void OnPluginStart() {
@@ -17,6 +17,7 @@ public void OnPluginStart() {
 
 public Action Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast) {
 	FindRemoveCache();
+	return Plugin_Continue;
 }
 
 void FindRemoveCache() {
