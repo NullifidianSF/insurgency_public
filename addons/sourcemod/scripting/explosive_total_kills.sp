@@ -37,7 +37,7 @@ public Plugin myinfo = {
 	name = "explosive_total_kills",
 	author = "Nullifidian",
 	description = "Print in chat how many kills with one explosive.",
-	version = "1.0.3",
+	version = "1.0.4",
 	url = "https://steamcommunity.com/id/Nullifidian/"
 };
 
@@ -188,6 +188,7 @@ Action Timer_ArtiTotalKilled(Handle timer, int iAttacker) {
 	}
 	ga_iVictims[iAttacker][1] = 0;
 	ga_hArtiTimer[iAttacker] = null;
+	return Plugin_Stop;
 }
 
 bool IsValidClient(int client) {
