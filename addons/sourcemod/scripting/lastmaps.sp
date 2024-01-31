@@ -21,7 +21,7 @@ public Plugin myinfo = {
 	name		= "lastmaps",
 	author		= "Nullifidian",
 	description	= "Creates & sets the server to a new custom mapcyclefile without recently played maps.",
-	version		= "1.6",
+	version		= "1.7",
 	url			= ""
 };
 
@@ -195,6 +195,7 @@ Action Timer_Setup(Handle timer) {
 		PrintToServer("Fatal Error [6]: mapcyclefile \"%s\" doesn't exist!", sBuffer);
 		SetFailState("Fatal Error [6]: mapcyclefile \"%s\" doesn't exist!", sBuffer);
 	}
+	return Plugin_Stop;
 }
 
 Action Timer_MapStart(Handle timer) {
@@ -220,6 +221,7 @@ Action Timer_MapStart(Handle timer) {
 		g_bHooked = true;
 		g_cvDefMapcycleFile.AddChangeHook(OnConVarChanged);
 	}
+	return Plugin_Stop;
 }
 
 void RemoveMapFromArray() {
