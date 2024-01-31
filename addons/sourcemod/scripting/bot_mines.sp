@@ -73,7 +73,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "2.5"
+	version = "2.6"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -104,7 +104,7 @@ public void OnPluginStart() {
 
 	ga_hMines = CreateArray();
 
-	g_cvMaxMines = CreateConVar("sm_botmines_max", "3", "Maximum concurrent mines allowed", FCVAR_NONE, true, 1.0, true, 15.0);
+	g_cvMaxMines = CreateConVar("sm_botmines_max", "3", "Maximum concurrent mines allowed.", FCVAR_NONE, true, 1.0, true, 15.0);
 	g_iMaxMines = g_cvMaxMines.IntValue;
 	g_cvMaxMines.AddChangeHook(OnConVarChanged);
 
@@ -112,19 +112,19 @@ public void OnPluginStart() {
 	g_fAliveTime = g_cvAliveTime.FloatValue;
 	g_cvAliveTime.AddChangeHook(OnConVarChanged);
 
-	g_cvTimerMin = CreateConVar("sm_botmines_timermin", "60.0", "Minimum possible delay before a random bot places a mine", FCVAR_NONE, true, 30.0);
+	g_cvTimerMin = CreateConVar("sm_botmines_timermin", "60.0", "Minimum possible delay before a random bot places a mine.", FCVAR_NONE, true, 30.0);
 	g_fTimerMin = g_cvTimerMin.FloatValue;
 	g_cvTimerMin.AddChangeHook(OnConVarChanged);
 
-	g_cvTimerMax = CreateConVar("sm_botmines_timermax", "240.0", "Maximum possible delay before a random bot places a mine", FCVAR_NONE, true, 60.0);
+	g_cvTimerMax = CreateConVar("sm_botmines_timermax", "240.0", "Maximum possible delay before a random bot places a mine.", FCVAR_NONE, true, 60.0);
 	g_fTimerMax = g_cvTimerMax.FloatValue;
 	g_cvTimerMax.AddChangeHook(OnConVarChanged);
 
-	g_cvDamage = CreateConVar("sm_botmines_damage", "250", "Explosion damage", FCVAR_NONE, true, 100.0, true, 10000.0);
+	g_cvDamage = CreateConVar("sm_botmines_damage", "250", "Explosion damage.", FCVAR_NONE, true, 100.0, true, 10000.0);
 	g_iDamage = g_cvDamage.IntValue;
 	g_cvDamage.AddChangeHook(OnConVarChanged);
 
-	g_cvRadius = CreateConVar("sm_botmines_radius", "300", "Explosion radius", FCVAR_NONE, true, 50.0, true, 10000.0);
+	g_cvRadius = CreateConVar("sm_botmines_radius", "300", "Explosion radius.", FCVAR_NONE, true, 50.0, true, 10000.0);
 	g_iRadius = g_cvRadius.IntValue;
 	g_cvRadius.AddChangeHook(OnConVarChanged);
 
@@ -308,7 +308,7 @@ public Action cmd_botmineview(int client, int args) {
 
 	float fOrigin[3];
 	GetEntPropVector(iMine, Prop_Send, "m_vecOrigin", fOrigin);
-	fOrigin[2] -= 50.0;
+	fOrigin[2] -= 40.0;
 	TeleportEntity(client, fOrigin, NULL_VECTOR, NULL_VECTOR);
 	ReplyToCommand(client, "Mine: %d/%d Index: %d", ga_iMineToView[client] + 1, ga_hMines.Length, iMine);
 
@@ -709,7 +709,7 @@ public Action SendForwardResult(GlobalForward sName, int iClient) {	//gameme sta
 	return result;
 }
 
-bool DamageHook(int client, bool bInput) {
+void DamageHook(int client, bool bInput) {
 	switch (bInput) {
 		case true: {
 			if (!ga_bPlayerHooked[client]) {
