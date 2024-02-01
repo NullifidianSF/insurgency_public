@@ -32,7 +32,7 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 }
 
 public void OnPluginStart() {
-	if (g_bLateLoad) {
+	if (!g_bLateLoad) {
 		CreateTimer(2.0, Timer_ReloadSW);	//steamworks bugged and need reload on server restart
 	}
 
