@@ -18,13 +18,24 @@ int		g_iMaxRounds,
 		g_iMaxObj,
 		g_iActiveObj,
 		g_iTimerObjRound;
+
+bool	g_bLateLoad;
 		
 Handle	ga_hTimer[MAXPLAYERS+1];
 
 char	g_sMapTag[64],
 		g_sMapName[64];
 
+public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
+	g_bLateLoad = late;
+	return APLRes_Success;
+}
+
 public void OnPluginStart() {
+	if (g_bLateLoad) {
+		CreateTimer(2.0, Timer_ReloadSW);	//steamworks bugged and need reload on server restart
+	}
+
 	RegConsoleCmd("round", Cmd_Rounds_Left, "Prints how many rounds & objectives left");
 	RegConsoleCmd("objective", Cmd_Rounds_Left, "Prints how many rounds & objectives left");
 	HookEvent("round_start", Event_RoundStart, EventHookMode_PostNoCopy);
@@ -146,4 +157,9 @@ Action TimerR_AddTag(Handle timer) {
 		SteamWorks_SetMapName(g_sMapTag);
 	}
 	return Plugin_Continue;
+}
+
+Action Timer_ReloadSW(Handle timer) {
+	ServerCommand("sm exts reload 8");
+	return Plugin_Stop;
 }
