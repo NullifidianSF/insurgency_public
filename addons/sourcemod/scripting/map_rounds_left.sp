@@ -1,5 +1,3 @@
-// required https://forums.alliedmods.net/showthread.php?t=229556
-
 #pragma semicolon 1
 #pragma newdecls required
 
@@ -11,7 +9,7 @@ public Plugin myinfo = {
 	name		= "map_rounds_left",
 	author		= "Nullifidian",
 	description	= "Prints how many rounds & objectives left",
-	version		= "1.0.9",
+	version		= "1.1.2",
 	url			= "https://steamcommunity.com/id/Nullifidian/"
 };
 
@@ -34,7 +32,6 @@ public void OnPluginStart() {
 	HookEvent("object_destroyed", ObjEvents_NoCopy, EventHookMode_PostNoCopy);
 	HookEvent("controlpoint_captured", ObjEvents_NoCopy, EventHookMode_PostNoCopy);
 	HookConVarChange(FindConVar("mp_maxrounds"), ConVarChanged);
-	CreateTimer(2.0, Timer_ReloadSW);	//steamworks bugged and need reload on server restart
 }
 
 public void OnMapStart() {
@@ -43,7 +40,7 @@ public void OnMapStart() {
 	g_iActiveObj = 0;
 	g_iMaxObj = 0;
 	g_iRoundNow = 0;
-	Format(g_sMapTag, sizeof(g_sMapTag), "%s MapStart", g_sMapName);
+	FormatEx(g_sMapTag, sizeof(g_sMapTag), "%s MapStart", g_sMapName);
 	CreateTimer(0.1, TimerR_AddTag, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 
@@ -55,7 +52,7 @@ public void Event_RoundStart(Event event, char[] name, bool dontBroadcast) {
 
 public void Event_RoundEnd(Event event, char[] name, bool dontBroadcast) {
 	if (g_iRoundNow == g_iMaxRounds) {
-		Format(g_sMapTag, sizeof(g_sMapTag), "%s MapEnd", g_sMapName);
+		FormatEx(g_sMapTag, sizeof(g_sMapTag), "%s MapEnd", g_sMapName);
 	}
 	g_iTimerObjRound = -1;
 }
@@ -92,6 +89,7 @@ Action Timer_RoundStart(Handle timer) {
 		g_iMaxObj = Ins_ObjectiveResource_GetProp("m_iNumControlPoints");
 	}
 	UpdateMapTag();
+	return Plugin_Stop;
 }
 
 Action TimerR_MonitorCA(Handle timer) {
@@ -105,6 +103,7 @@ Action TimerR_MonitorCA(Handle timer) {
 		UpdateMapTag();
 		KillTimer(timer);
 	}
+	return Plugin_Continue;
 }
 
 Action Timer_NewPlayer(Handle timer, int client) {
@@ -112,9 +111,10 @@ Action Timer_NewPlayer(Handle timer, int client) {
 	"\x070088cc[BM]\x01 Round: \x070088cc%d\x01/\x070088cc%d\x01 | Objective: \x070088cc%s\x01/\x070088cc%s\n[BM]\x01 Use !round command in chat to see this info",
 	g_iRoundNow, g_iMaxRounds, ConvertNumberToLetter(g_iActiveObj), ConvertNumberToLetter(g_iMaxObj));
 	ga_hTimer[client] = null;
+	return Plugin_Stop;
 }
 
-char ConvertNumberToLetter(int number) {
+char[] ConvertNumberToLetter(int number) {
 	char letter[4] = "n/a";
 	switch (number) {
 		case 1: letter = "A";
@@ -138,7 +138,7 @@ char ConvertNumberToLetter(int number) {
 }
 
 void UpdateMapTag() {
-	Format(g_sMapTag, sizeof(g_sMapTag), "%s %d/%d %s/%s", g_sMapName, g_iRoundNow, g_iMaxRounds, ConvertNumberToLetter(g_iActiveObj), ConvertNumberToLetter(g_iMaxObj));
+	FormatEx(g_sMapTag, sizeof(g_sMapTag), "%s %d/%d %s/%s", g_sMapName, g_iRoundNow, g_iMaxRounds, ConvertNumberToLetter(g_iActiveObj), ConvertNumberToLetter(g_iMaxObj));
 }
 
 Action TimerR_AddTag(Handle timer) {
@@ -146,8 +146,4 @@ Action TimerR_AddTag(Handle timer) {
 		SteamWorks_SetMapName(g_sMapTag);
 	}
 	return Plugin_Continue;
-}
-
-Action Timer_ReloadSW(Handle timer) {
-	ServerCommand("sm exts reload 8");
 }
