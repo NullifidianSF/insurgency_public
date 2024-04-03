@@ -25,7 +25,8 @@ char			g_sModelMine[43] = "models/static_props/wcache_landmine_01.mdl",
 				g_sSoundFound[44] = "player/voice/botsurvival/leader/heard14.ogg",
 				g_sSoundStepOnMine[48] = "player/voice/botsurvival/subordinate/heard8.ogg",
 				g_sSoundStepOnMineArm[40] = "weapons/m67/handling/m67_spooneject.wav",
-				g_sSoundHelp[71] = "player/voice/responses/security/subordinate/suppressed/suppressed9.ogg";
+				g_sSoundHelp[71] = "player/voice/responses/security/subordinate/suppressed/suppressed9.ogg",
+				g_sSoundPlant[73] = "player/voice/responses/insurgent/subordinate/unsuppressed/c4planted4.ogg";
 
 float			g_fMineBreakTime,
 				g_fTimerMin,
@@ -55,7 +56,8 @@ int				g_iRoundStatus = 0,
 
 bool			g_bLateLoad,
 				g_bTimerOn,
-				ga_bPlayerHooked[MAXPLAYERS + 1] = {false, ...};
+				ga_bPlayerHooked[MAXPLAYERS + 1] = {false, ...},
+				ga_bAutoViewMine[MAXPLAYERS + 1] = {false, ...};
 
 const int		gc_iMineDetector_ID = 33;
 
@@ -73,7 +75,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "2.6"
+	version = "2.7"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -134,6 +136,7 @@ public void OnPluginStart() {
 
 	RegAdminCmd("sm_botmine", cmd_botmine, ADMFLAG_RCON, "Spawn a mine at a random bot's location.");
 	RegAdminCmd("sm_botmineview", cmd_botmineview, ADMFLAG_RCON, "While dead, teleport your view to a mine's location (repeat this cmd to show the next mine).");
+	RegAdminCmd("sm_botmineautoview", cmd_botmineautoview, ADMFLAG_RCON, "While dead, automatically teleport your view to the newly created mine (toggle on/off).");
 
 	HookEvent("player_spawn", Event_PlayerRespawn);
 	HookEvent("player_death", Event_PlayerDeath, EventHookMode_Pre);
@@ -172,6 +175,7 @@ public void OnMapStart() {
 	PrecacheSound(g_sSoundStepOnMine, true);
 	PrecacheSound(g_sSoundStepOnMineArm, true);
 	PrecacheSound(g_sSoundHelp, true);
+	PrecacheSound(g_sSoundPlant, true);
 
 	g_bTimerOn = false;
 	CreateTimer(0.1, TimerR_NearestMine, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
@@ -185,6 +189,7 @@ public void OnClientDisconnect(int client) {
 		ga_bPlayerHooked[client] = false;
 		ResetMineStats(client);
 		ga_iMineToView[client] = -1;
+		ga_bAutoViewMine[client] = false;
 	}
 }
 
@@ -259,6 +264,27 @@ public Action cmd_botmine(int client, int args) {
 	return Plugin_Handled;
 }
 
+public Action cmd_botmineautoview(int client, int args) {
+	if (!client) {
+		ReplyToCommand(client, "Server console can't use this command!");
+		return Plugin_Handled;
+	}
+
+	if (!IsClientInGame(client)) {
+		return Plugin_Handled;
+	}
+
+	if (!ga_bAutoViewMine[client]) {
+		ga_bAutoViewMine[client] = true;
+		ReplyToCommand(client, "sm_botmineautoview enabled");
+	} else {
+		ga_bAutoViewMine[client] = false;
+		ReplyToCommand(client, "sm_botmineautoview disabled");
+	}
+	
+	return Plugin_Handled;
+}
+
 public Action cmd_botmineview(int client, int args) {
 	if (!client) {
 		ReplyToCommand(client, "Server console can't use this command!");
@@ -306,14 +332,26 @@ public Action cmd_botmineview(int client, int args) {
 		SetEntData(client, g_iObserverMode, 6);
 	}
 
-	float fOrigin[3];
-	GetEntPropVector(iMine, Prop_Send, "m_vecOrigin", fOrigin);
-	fOrigin[2] -= 40.0;
-	TeleportEntity(client, fOrigin, NULL_VECTOR, NULL_VECTOR);
+	SetViewOnMine(client, iMine, true);
+
 	ReplyToCommand(client, "Mine: %d/%d Index: %d", ga_iMineToView[client] + 1, ga_hMines.Length, iMine);
 
 	return Plugin_Handled;
 }
+
+void SetViewOnMine(int client, int mine,  bool bGetPos = false, float fMinePos[3] = {0.0}) {
+	if (GetEntData(client, g_iObserverMode) != 6) {
+		SetEntData(client, g_iObserverMode, 6);
+	}
+
+	if (bGetPos) {
+		GetEntPropVector(mine, Prop_Send, "m_vecOrigin", fMinePos);
+	}
+
+	fMinePos[2] -= 40.0;
+	TeleportEntity(client, fMinePos, NULL_VECTOR, NULL_VECTOR);
+}
+
 
 void Frame_botmineview(int client) {
 	cmd_botmineview(client, 0);
@@ -374,6 +412,20 @@ bool CreateMine(int client) {
 	SDKHook(iEnt, SDKHook_OnTakeDamage, Hook_OnTakeDamage);
 	SDKHook(iEnt, SDKHook_StartTouch, Hook_StartTouch);
 	HookSingleEntityOutput(iEnt, "OnBreak", Mine_OnBreak, true);
+
+	for (int i = 1; i <= MaxClients; i++) {
+		if (!ga_bAutoViewMine[i]) {
+			continue;
+		}
+		if (!IsClientInGame(i)) {
+			ga_bAutoViewMine[i] = false;
+			continue;
+		}
+		if (IsPlayerAlive(i)) {
+			continue;
+		}
+		SetViewOnMine(i, iEnt, false, fClientPos);
+	}
 
 	return true;
 }
@@ -600,6 +652,7 @@ Action Timer_SpawnMine(Handle timer) {
 		int iBot = GetRandomAliveBot();
 		if (iBot > 0) {
 			CreateMine(iBot);
+			EmitSoundToAll(g_sSoundPlant, iBot, SNDCHAN_VOICE, _, _, 1.0);
 		}
 		CreateTimer(GetRandomFloat(g_fTimerMin, g_fTimerMax), Timer_SpawnMine, _, TIMER_FLAG_NO_MAPCHANGE);
 	} else {
