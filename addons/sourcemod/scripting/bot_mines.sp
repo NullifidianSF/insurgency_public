@@ -240,6 +240,7 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 			ga_iDeathCount[client]++;
 			PrintMineStats(client);
 		}
+		return Plugin_Changed;
 	}
 	return Plugin_Continue;
 }
