@@ -75,7 +75,7 @@ public Plugin myinfo = {
 	name = "bot_mines",
 	author = "Nullifidian",
 	description = "Random bots place mines every X minutes",
-	version = "2.7"
+	version = "2.8"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -466,7 +466,9 @@ public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float
 		return Plugin_Handled;
 	}
 
-	return Plugin_Continue;
+	damage = 1000.0;
+
+	return Plugin_Changed;
 }
 
 public Action Hook_StartTouch(int entity, int touch) {
