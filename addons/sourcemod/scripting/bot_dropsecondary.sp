@@ -9,7 +9,7 @@ public Plugin myinfo = {
 	name = "bot_dropsecondary",
 	author = "Nullifidian",
 	description = "Bots drop secondary weapon on death if it is not the weapon they are holding",
-	version = "1.0"
+	version = "1.1"
 };
 
 public void OnPluginStart() {
@@ -43,8 +43,7 @@ public Action Event_PlayerDeath_Pre(Event event, const char[] name, bool dontBro
 	}
 
 	// Ensure the secondary weapon is still owned by the victim
-	int owner = GetEntPropEnt(secondary, Prop_Data, "m_hOwnerEntity");
-	if (owner != victim) {
+	if (GetEntPropEnt(secondary, Prop_Data, "m_hOwnerEntity") != victim) {
 		return Plugin_Continue;
 	}
 
