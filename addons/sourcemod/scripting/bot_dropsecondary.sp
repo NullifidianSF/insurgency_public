@@ -1,6 +1,8 @@
 #pragma semicolon 1
 #pragma newdecls required
 
+#define INS_PL_BUYZONE (1 << 7)
+
 #include <sourcemod>
 #include <sdktools>
 #include <sdkhooks>
@@ -9,7 +11,7 @@ public Plugin myinfo = {
 	name = "bot_dropsecondary",
 	author = "Nullifidian",
 	description = "Bots drop secondary weapon on death if it is not the weapon they are holding",
-	version = "1.1"
+	version = "1.2"
 };
 
 public void OnPluginStart() {
@@ -22,6 +24,11 @@ public Action Event_PlayerDeath_Pre(Event event, const char[] name, bool dontBro
 	
 	// Stop the code if the victim is not in the game or not a bot
 	if (victim < 1 || !IsClientInGame(victim) || !IsFakeClient(victim)) {
+		return Plugin_Continue;
+	}
+
+	// Stop the code if the victim at buy zone.
+	if (GetEntProp(victim, Prop_Send, "m_iPlayerFlags") & INS_PL_BUYZONE) {
 		return Plugin_Continue;
 	}
 
