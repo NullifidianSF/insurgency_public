@@ -340,7 +340,7 @@ public Action cmd_botmineview(int client, int args) {
 	return Plugin_Handled;
 }
 
-void SetViewOnMine(int client, int mine,  bool bGetPos = false, float fMinePos[3] = {0.0}) {
+void SetViewOnMine(int client, int mine, bool bGetPos = false, float fMinePos[3] = {0.0}) {
 	if (GetEntData(client, g_iObserverMode) != 6) {
 		SetEntData(client, g_iObserverMode, 6);
 	}
@@ -349,8 +349,15 @@ void SetViewOnMine(int client, int mine,  bool bGetPos = false, float fMinePos[3
 		GetEntPropVector(mine, Prop_Send, "m_vecOrigin", fMinePos);
 	}
 
-	fMinePos[2] -= 40.0;
+	fMinePos[2] += 40.0; // Adjust the position slightly above the mine
 	TeleportEntity(client, fMinePos, NULL_VECTOR, NULL_VECTOR);
+
+	// Set the view angles to look down
+	float viewAngles[3];
+	GetClientEyeAngles(client, viewAngles);
+	viewAngles[0] = 90.0; // Set pitch to 90 to look straight down
+	
+	TeleportEntity(client, NULL_VECTOR, viewAngles, NULL_VECTOR);
 }
 
 
