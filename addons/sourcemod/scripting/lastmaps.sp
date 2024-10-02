@@ -21,7 +21,7 @@ public Plugin myinfo = {
 	name		= "lastmaps",
 	author		= "Nullifidian",
 	description	= "Creates & sets the server to a new custom mapcyclefile without recently played maps.",
-	version		= "1.7",
+	version		= "1.8",
 	url			= ""
 };
 
@@ -163,21 +163,41 @@ public Action cmd_lastmaps(int client, int args) {
 		ga_iCooldown[client] = iTime + 3;
 	}
 
-	char	sBuffer[512],
-			sArrayBuffer[40];
+	char tempBuffer[192], sArrayBuffer[32];
+	tempBuffer[0] = '\0'; // Initialize tempBuffer as an empty string
+	int currentLength = 0;
 
 	for (int i = 0; i < ga_hExcludedMaps.Length; i++) {
 		ga_hExcludedMaps.GetString(i, sArrayBuffer, sizeof(sArrayBuffer));
+
+		// Add separator if not the first element
 		if (i != 0) {
-			Format(sArrayBuffer, sizeof(sArrayBuffer), "|%s", sArrayBuffer);
+			StrCat(tempBuffer, sizeof(tempBuffer), " ");
+			currentLength++;
 		}
-		if (ga_hExcludedMaps.Length > 1) {
-			TrimString(sArrayBuffer);
-			StrCat(sBuffer, sizeof(sBuffer), sArrayBuffer);
+
+		// Check if adding the next map will exceed the limit
+		if (currentLength + strlen(sArrayBuffer) >= sizeof(tempBuffer)) {
+			// Send the current buffer and reset it if limit is reached
+			PrintToConsole(client, "%s", tempBuffer);
+			tempBuffer[0] = '\0'; // Clear buffer
+			currentLength = 0;
 		}
+
+		// Concatenate the map name
+		StrCat(tempBuffer, sizeof(tempBuffer), sArrayBuffer);
+		currentLength += strlen(sArrayBuffer);
 	}
 
-	ReplyToCommand(client, "%s", ga_hExcludedMaps.Length > 1 ? sBuffer : sArrayBuffer);
+	// Output any remaining maps in the buffer
+	if (currentLength > 0) {
+		PrintToConsole(client, "%s", tempBuffer);
+	}
+
+	// Check if the command was sent from chat or console
+	if (GetCmdReplySource() == SM_REPLY_TO_CHAT) {
+		ReplyToCommand(client, "Output has been printed to the console.");
+	}
 
 	return Plugin_Handled;
 }
