@@ -12,7 +12,7 @@ public Plugin myinfo = {
 	name = "flashplayer",
 	author = "Nullifidian",
 	description = "nade flash a player",
-	version = "1.4",
+	version = "1.5",
 	url = ""
 };
 
@@ -41,7 +41,6 @@ void BlindTarget(int client, float fDuration = 14.0) {
 
 	SetEntPropFloat(client, Prop_Send, "m_flFlashMaxAlpha", 255.0);
 	SetEntPropFloat(client, Prop_Send, "m_flFlashDuration", fDuration);
-	SetEntProp(client, Prop_Send, "m_iPlayerFlags", GetEntProp(client, Prop_Send, "m_iPlayerFlags") + 16);
 	
 	EmitSoundToAll(SND_DETONATE, client, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, 0.75, 100);
 	EmitSoundToAll(GetClientTeam(client) == 2 ? SND_BLINDSEC : SND_BLINDINS, client, SNDCHAN_VOICE, _, _, 1.0);
@@ -50,11 +49,11 @@ void BlindTarget(int client, float fDuration = 14.0) {
 Action Timer_BlindTarget(Handle timer, DataPack dPack) {
 	dPack.Reset();
 	int client = dPack.ReadCell();
-	float fDuration = dPack.ReadFloat();
 
 	if (IsClientInGame(client) && !IsFakeClient(client) && IsPlayerAlive(client)) {
-		BlindTarget(client, fDuration);
+		BlindTarget(client, dPack.ReadFloat());
 	}
+	return Plugin_Stop;
 }
 
 public Action cmd_flash(int client, int args) {
@@ -63,10 +62,9 @@ public Action cmd_flash(int client, int args) {
 		return Plugin_Handled;
 	}
 
-	char	arg[65],
-			arg2[65];
+	char	arg[65];
+
 	GetCmdArg(1, arg, sizeof(arg));
-	GetCmdArg(2, arg2, sizeof(arg2));
 
 	char target_name[MAX_TARGET_LENGTH];
 	int target_list[MAXPLAYERS], target_count;
@@ -85,12 +83,14 @@ public Action cmd_flash(int client, int args) {
 		return Plugin_Handled;
 	}
 
-	float fDuration = StringToFloat(arg2);
+	GetCmdArg(2, arg, sizeof(arg));
+
+	float fDuration = StringToFloat(arg);
 	for (int i = 0; i < target_count; i++) {
 		BlindTarget(target_list[i], fDuration);
 	}
 	
-	ReplyToCommand(client, "[SM] ", "Flashed (%.0f seconds): %s", fDuration, target_name);
+	ReplyToCommand(client, "[SM] Flashed (%.0f seconds): %s", fDuration, target_name);
 
 	return Plugin_Handled;
 }
