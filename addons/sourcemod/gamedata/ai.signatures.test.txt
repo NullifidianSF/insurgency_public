@@ -1,0 +1,796 @@
+//extracted by AI and maybe doesn't work
+"Games"
+{
+	"insurgency"
+	{
+		"Signatures"
+		{
+			"CBasePlayer::Weapon_Drop"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x81\xEC\x80\x00\x00\x00\x53\x8B\xD9"
+				"linux" "@_ZN11CBasePlayer11Weapon_DropEP18CBaseCombatWeaponPK6VectorS4_"
+			}
+			"CBasePlayer::GiveNamedItem"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x81\xEC\x90\x00\x00\x00\x53\x8B\xD9"
+				"linux" "@_ZN11CBasePlayer14GiveNamedItemEPKci"
+			}
+			"CBasePlayer::Weapon_Equip"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x81\xEC\x80\x00\x00\x00\x53\x8B\xD9"
+				"linux" "@_ZN11CBasePlayer12Weapon_EquipEP18CBaseCombatWeapon"
+			}
+			"CBasePlayer::TakeHealth"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x10\x53\x8B\x5D\x08"
+				"linux" "@_ZN11CBasePlayer10TakeHealthEfi"
+			}
+			"CBasePlayer::OnTakeDamage"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x10\x53\x56\x8B\x75\x08"
+				"linux" "@_ZN11CBasePlayer12OnTakeDamageER15CTakeDamageInfo"
+			}
+			"CBaseGrenade::Detonate"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x08\x53\x56\x8B\xF1"
+				"linux" "@_ZN12CBaseGrenade8DetonateEv"
+			}
+			"CBaseEntity::Teleport"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x30\x53\x8B\x5D\x08"
+				"linux" "@_ZN11CBaseEntity8TeleportEPK6VectorPK6QAnglePK6Vector"
+			}
+			"CBaseEntity::FireBullets"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x81\xEC\x0C\x01\x00\x00"
+				"linux" "@_ZN11CBaseEntity11FireBulletsERK12FireBulletsInfo"
+			}
+			"CBaseEntity::TakeDamage"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x10\x53\x56\x8B\x75\x08"
+				"linux" "@_ZN11CBaseEntity10TakeDamageER15CTakeDamageInfo"
+			}
+			"CBaseEntity::DispatchParticleEffect"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x30\x53\x8B\x5D\x08"
+				"linux" "@_ZN11CBaseEntity22DispatchParticleEffectEPKcRK6VectorRK6QAngleP11CBaseEntity"
+			}
+			"CBaseEntity::SetModel"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x56\x8B\xF1\x57\x8B\x7D\x08\x85\xFF"
+				"linux" "@_ZN11CBaseEntity8SetModelEPKc"
+			}
+			"CBaseEntity::SetAbsOrigin"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1\xF3\x0F\x10\x00"
+				"linux" "@_ZN11CBaseEntity12SetAbsOriginERK6Vector"
+			}
+			"CBaseEntity::SetAbsAngles"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1\xF3\x0F\x10\x00"
+				"linux" "@_ZN11CBaseEntity12SetAbsAnglesERK6QAngle"
+			}
+			"CBaseEntity::EmitSound"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x83\xEC\x18\x53\x56\x8B\x75\x08"
+				"linux" "@_ZN11CBaseEntity9EmitSoundEPKc"
+			}
+			"CBaseEntity::EyePosition"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x0C"
+				"linux" "@_ZNK11CBaseEntity11EyePositionEv"
+			}
+			"CBaseEntity::EyeAngles"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x83\xC0\x0C\x8B\x00"
+				"linux" "@_ZNK11CBaseEntity9EyeAnglesEv"
+			}
+			"CBaseEntity::Spawn"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE\xD4\x00\x00\x00\x00"
+				"linux" "@_ZN11CBaseEntity5SpawnEv"
+			}
+			"CBaseGrenade::ExplodeTouch"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x08\x53\x56\x8B\xF1\x8B\x4D\x08"
+				"linux" "@_ZN12CBaseGrenade12ExplodeTouchEPS_"
+			}
+			"CBasePlayer::FlashlightTurnOn"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x56\x8B\xF1\xC6\x86"
+				"linux" "@_ZN11CBasePlayer15FlashlightTurnOnEv"
+			}
+			"CBasePlayer::FlashlightTurnOff"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x56\x8B\xF1\xC6\x86"
+				"linux" "@_ZN11CBasePlayer16FlashlightTurnOffEv"
+			}
+			"CBasePlayer::SetAnimation"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x53\x56\x8B\xF1\x8B\x4D\x08"
+				"linux" "@_ZN11CBasePlayer12SetAnimationE11PlayerAnim"
+			}
+			"CBasePlayer::GetGroundEntity"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x56\x8B\xF1\x8B\x86"
+				"linux" "@_ZNK11CBasePlayer15GetGroundEntityEv"
+			}
+			"CBasePlayer::SelectLastItem"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x56\x8B\xF1\x8B\x46\x08"
+				"linux" "@_ZN11CBasePlayer14SelectLastItemEv"
+			}
+			"CBaseEntity::SetParent"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1"
+				"linux" "@_ZN11CBaseEntity9SetParentEPS_"
+			}
+			"CBaseGrenade::BounceTouch"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x08\x53\x8B\x5D\x08"
+				"linux" "@_ZN12CBaseGrenade11BounceTouchEPS_"
+			}
+			"CBaseEntity::GetAbsOrigin"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1\x8B\x10"
+				"linux" "@_ZNK11CBaseEntity11GetAbsOriginEv"
+			}
+			"CBaseEntity::GetAbsAngles"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1\x8B\x10"
+				"linux" "@_ZNK11CBaseEntity11GetAbsAnglesEv"
+			}
+			"CBaseEntity::SetAbsVelocity"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1"
+				"linux" "@_ZN11CBaseEntity14SetAbsVelocityERK6Vector"
+			}
+			"CBaseEntity::GetVelocity"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1\x8B\x16"
+				"linux" "@_ZNK11CBaseEntity11GetVelocityEv"
+			}
+			"CBaseEntity::SetVelocity"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1"
+				"linux" "@_ZN11CBaseEntity11SetVelocityERK6Vector"
+			}
+			"CBaseEntity::EmitSoundParams"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x83\xEC\x18\x53\x56\x8B\x75\x08"
+				"linux" "@_ZN11CBaseEntity16EmitSoundParamsEPKc"
+			}
+			"CBaseEntity::IsPlayer"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x56\x8B\xF1\x83\xBE\xDC\x00\x00\x00"
+				"linux" "@_ZNK11CBaseEntity8IsPlayerEv"
+			}
+			"CBaseEntity::IsNPC"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x56\x8B\xF1\x83\xBE\xE0\x00\x00\x00"
+				"linux" "@_ZNK11CBaseEntity5IsNPCEv"
+			}
+			"CBaseEntity::GetMoveType"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1"
+				"linux" "@_ZNK11CBaseEntity11GetMoveTypeEv"
+			}
+			"CBaseEntity::SetMoveType"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x34"
+				"linux" "@_ZN11CBaseEntity11SetMoveTypeE8MoveType"
+			}
+			"CBaseEntity::GetSolidFlags"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1\x8B\x86"
+				"linux" "@_ZNK11CBaseEntity13GetSolidFlagsEv"
+			}
+			"CBaseEntity::SetSolidFlags"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x14"
+				"linux" "@_ZN11CBaseEntity13SetSolidFlagsEi"
+			}
+			"CBaseEntity::WorldSpaceCenter"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x56\x8B\xF1\x8B\x86"
+				"linux" "@_ZNK11CBaseEntity16WorldSpaceCenterEv"
+			}
+			"CBaseEntity::GetModelIndex"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1"
+				"linux" "@_ZNK11CBaseEntity13GetModelIndexEv"
+			}
+			"CBaseEntity::SetModelIndex"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x04"
+				"linux" "@_ZN11CBaseEntity13SetModelIndexEi"
+			}
+			"CBaseEntity::GetOwnerEntity"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1"
+				"linux" "@_ZNK11CBaseEntity14GetOwnerEntityEv"
+			}
+			"CBaseEntity::SetOwnerEntity"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x10"
+				"linux" "@_ZN11CBaseEntity14SetOwnerEntityEPS_"
+			}
+			"CBaseEntity::GetTeamNumber"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1"
+				"linux" "@_ZNK11CBaseEntity13GetTeamNumberEv"
+			}
+			"CBaseEntity::SetTeamNumber"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x24"
+				"linux" "@_ZN11CBaseEntity13SetTeamNumberEi"
+			}
+			"CBaseEntity::AddSolidFlags"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x14"
+				"linux" "@_ZN11CBaseEntity13AddSolidFlagsEi"
+			}
+			"CBaseEntity::RemoveSolidFlags"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x14"
+				"linux" "@_ZN11CBaseEntity16RemoveSolidFlagsEi"
+			}
+			"CBaseEntity::VPhysicsInitNormal"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x20\x53\x8B\x5D\x08"
+				"linux" "@_ZN11CBaseEntity19VPhysicsInitNormalERK6VectorS2_iib"
+			}
+			"CBaseEntity::VPhysicsDestroyObject"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x8B\x46\x04\x85\xC0"
+				"linux" "@_ZN11CBaseEntity23VPhysicsDestroyObjectEv"
+			}
+			"CBaseEntity::CollisionProp"
+			{
+				"library" "server"
+				"windows" "\x8B\x81\xE4\x00\x00\x00"
+				"linux" "@_ZNK11CBaseEntity13CollisionPropEv"
+			}
+			"CBaseEntity::GetAbsVelocity"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1"
+				"linux" "@_ZNK11CBaseEntity14GetAbsVelocityEv"
+			}
+			"CBaseEntity::IsSolid"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1\x8B\x86"
+				"linux" "@_ZNK11CBaseEntity7IsSolidEv"
+			}
+			"CBasePlayer::Weapon_Switch"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x81\xEC\x80\x00\x00\x00\x53\x8B\xD9"
+				"linux" "@_ZN11CBasePlayer13Weapon_SwitchEP18CBaseCombatWeapon"
+			}
+			"CBaseEntity::GetHealth"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1"
+				"linux" "@_ZNK11CBaseEntity9GetHealthEv"
+			}
+			"CBaseEntity::SetHealth"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x04"
+				"linux" "@_ZN11CBaseEntity9SetHealthEi"
+			}
+			"CBaseEntity::AcceptInput"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x81\xEC\x7C\x01\x00\x00\x53\x8B\x5D\x0C"
+				"linux" "@_ZN11CBaseEntity11AcceptInputEPKcPS_S2_9variant_ti"
+			}
+			"CBaseEntity::SetLocalOrigin"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\xF3\x0F\x10\x00"
+				"linux" "@_ZN11CBaseEntity14SetLocalOriginERK6Vector"
+			}
+			"CBaseEntity::SetLocalAngles"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\xF3\x0F\x10\x00"
+				"linux" "@_ZN11CBaseEntity14SetLocalAnglesERK6QAngle"
+			}
+			"CBaseEntity::CalcAbsolutePosition"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x0C\x53\x56\x8B\xF1"
+				"linux" "@_ZN11CBaseEntity21CalcAbsolutePositionEv"
+			}
+			"CBaseEntity::SetAbsVelocity"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\xF3\x0F\x10\x00"
+				"linux" "@_ZN11CBaseEntity14SetAbsVelocityERK6Vector"
+			}
+			"CBaseEntity::GetAbsVelocity"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\xF3\x0F\x10\x00"
+				"linux" "@_ZNK11CBaseEntity14GetAbsVelocityEv"
+			}
+			"CBaseEntity::GetLocalOrigin"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\xF3\x0F\x10\x00"
+				"linux" "@_ZNK11CBaseEntity14GetLocalOriginEv"
+			}
+			"CBaseEntity::GetLocalAngles"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\xF3\x0F\x10\x00"
+				"linux" "@_ZNK11CBaseEntity14GetLocalAnglesEv"
+			}
+			"CBaseEntity::IsAlive"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1\x8B\x86"
+				"linux" "@_ZNK11CBaseEntity7IsAliveEv"
+			}
+			"CBaseEntity::GetSolid"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1"
+				"linux" "@_ZNK11CBaseEntity8GetSolidEv"
+			}
+			"CBaseEntity::SetSolid"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x14"
+				"linux" "@_ZN11CBaseEntity8SetSolidE5Solid"
+			}
+			"CBaseEntity::GetFlags"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1"
+				"linux" "@_ZNK11CBaseEntity8GetFlagsEv"
+			}
+			"CBaseEntity::AddFlag"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x10"
+				"linux" "@_ZN11CBaseEntity7AddFlagEi"
+			}
+			"CBaseEntity::RemoveFlag"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x10"
+				"linux" "@_ZN11CBaseEntity10RemoveFlagEi"
+			}
+			"CBaseEntity::DispatchKeyValue"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x56\x8B\xF1\x57\x8B\x7D\x08"
+				"linux" "@_ZN11CBaseEntity17DispatchKeyValueEPKcS1_"
+			}
+			"CBaseEntity::DispatchKeyValueFloat"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x0C\x53\x8B\x5D\x08"
+				"linux" "@_ZN11CBaseEntity22DispatchKeyValueFloatEPKcf"
+			}
+			"CBaseEntity::DispatchKeyValueVector"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x18\x53\x8B\x5D\x08"
+				"linux" "@_ZN11CBaseEntity23DispatchKeyValueVectorEPKcRK6Vector"
+			}
+			"CBasePlayer::AddAmmo"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x14\x53\x56\x8B\x75\x08"
+				"linux" "@_ZN11CBasePlayer7AddAmmoEiPKcib"
+			}
+			"CBaseEntity::SUB_Remove"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x83\xEC\x08"
+				"linux" "@_ZN11CBaseEntity10SUB_RemoveEv"
+			}
+			"CBaseEntity::SUB_DoNothing"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity13SUB_DoNothingEv"
+			}
+			"CBaseEntity::SUB_StartFadeOut"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity17SUB_StartFadeOutEv"
+			}
+			"CBaseEntity::SUB_StartFadeOutThink"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity21SUB_StartFadeOutThinkEv"
+			}
+			"CBaseGrenade::Explode"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x18\x53\x8B\xD9\x56\x57"
+				"linux" "@_ZN12CBaseGrenade7ExplodeEPK6VectorS2_"
+			}
+			"CBaseGrenade::Deflected"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x10\x53\x8B\xD9"
+				"linux" "@_ZN12CBaseGrenade9DeflectedEPS_"
+			}
+			"CBaseGrenade::SetTimer"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x08\x53\x8B\x5D\x08"
+				"linux" "@_ZN12CBaseGrenade8SetTimerEff"
+			}
+			"CBaseGrenade::BounceSound"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN12CBaseGrenade11BounceSoundEv"
+			}
+			"CBaseGrenade::PreDetonate"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN12CBaseGrenade12PreDetonateEv"
+			}
+			"CBaseEntity::PhysicsRemoveTouched"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x10\x53\x56\x8B\xF1"
+				"linux" "@_ZN11CBaseEntity21PhysicsRemoveTouchedEPS_"
+			}
+			"CBaseEntity::PhysicsNotifyOtherOfCollision"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x18\x53\x56\x8B\x75\x08"
+				"linux" "@_ZN11CBaseEntity29PhysicsNotifyOtherOfCollisionEPK10CGameTrace"
+			}
+			"CBaseEntity::UpdateOnRemove"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity14UpdateOnRemoveEv"
+			}
+			"CBaseEntity::Touch"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0"
+				"linux" "@_ZN11CBaseEntity5TouchEPS_"
+			}
+			"CBaseEntity::StartTouch"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0"
+				"linux" "@_ZN11CBaseEntity10StartTouchEPS_"
+			}
+			"CBaseEntity::EndTouch"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0"
+				"linux" "@_ZN11CBaseEntity8EndTouchEPS_"
+			}
+			"CBaseEntity::StartBlocked"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0"
+				"linux" "@_ZN11CBaseEntity12StartBlockedEv"
+			}
+			"CBaseEntity::Blocked"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0"
+				"linux" "@_ZN11CBaseEntity7BlockedEPS_"
+			}
+			"CBaseEntity::EndBlocked"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0"
+				"linux" "@_ZN11CBaseEntity10EndBlockedEv"
+			}
+			"CBaseEntity::Think"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity5ThinkEv"
+			}
+			"CBaseEntity::SUB_StartFadeOut"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity17SUB_StartFadeOutEv"
+			}
+			"CBaseEntity::SUB_FadeOut"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity11SUB_FadeOutEv"
+			}
+			"CBaseEntity::SUB_Remove"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity10SUB_RemoveEv"
+			}
+			"CBaseEntity::SUB_DoNothing"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity13SUB_DoNothingEv"
+			}
+			"CBaseEntity::SUB_StartFadeOut"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity17SUB_StartFadeOutEv"
+			}
+			"CBaseEntity::SUB_StartFadeOutThink"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity21SUB_StartFadeOutThinkEv"
+			}
+			"CBaseEntity::PhysicsTouchTriggers"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x81\xEC\x00\x01\x00\x00"
+				"linux" "@_ZN11CBaseEntity20PhysicsTouchTriggersEv"
+			}
+			"CBaseEntity::UpdatePhysicsShadowToCurrentPosition"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x83\xEC\x10"
+				"linux" "@_ZN11CBaseEntity34UpdatePhysicsShadowToCurrentPositionEfb"
+			}
+			"CBaseEntity::VPhysicsUpdate"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x83\xEC\x10"
+				"linux" "@_ZN11CBaseEntity15VPhysicsUpdateEPv"
+			}
+			"CBaseEntity::SetAbsOrigin"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x0C"
+				"linux" "@_ZN11CBaseEntity12SetAbsOriginERK6Vector"
+			}
+			"CBaseEntity::SetAbsAngles"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x18"
+				"linux" "@_ZN11CBaseEntity12SetAbsAnglesERK6QAngle"
+			}
+			"CBaseEntity::CheckHasGamePhysicsSimulation"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1"
+				"linux" "@_ZN11CBaseEntity30CheckHasGamePhysicsSimulationEv"
+			}
+			"CBaseEntity::PhysicsSimulate"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x81\xEC\x0C\x01\x00\x00"
+				"linux" "@_ZN11CBaseEntity15PhysicsSimulateEv"
+			}
+			"CBaseEntity::PhysicsSolidMaskForEntity"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x83\xEC\x08"
+				"linux" "@_ZNK11CBaseEntity25PhysicsSolidMaskForEntityEv"
+			}
+			"CBaseEntity::ComputeVPhysicsCollisionMask"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x83\xEC\x08"
+				"linux" "@_ZNK11CBaseEntity27ComputeVPhysicsCollisionMaskEi"
+			}
+			"CBaseEntity::ShouldCollide"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x83\xEC\x08"
+				"linux" "@_ZNK11CBaseEntity13ShouldCollideEii"
+			}
+			"CBaseEntity::UpdatePartitionListEntry"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x81\xEC\x0C\x01\x00\x00"
+				"linux" "@_ZN11CBaseEntity24UpdatePartitionListEntryEv"
+			}
+			"CBaseEntity::CheckWater"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x18\x53\x56\x8B\xF1"
+				"linux" "@_ZN11CBaseEntity10CheckWaterEv"
+			}
+			"CBaseEntity::Splash"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x83\xEC\x10"
+				"linux" "@_ZN11CBaseEntity6SplashERK6VectorS2_f"
+			}
+			"CBaseEntity::UpdateWaterState"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x14\x53\x8B\xD9"
+				"linux" "@_ZN11CBaseEntity16UpdateWaterStateEPK6VectorP11IPhysicsObject"
+			}
+			"CBaseEntity::IsInWorld"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x0C\x53\x8B\xD9"
+				"linux" "@_ZNK11CBaseEntity8IsInWorldEv"
+			}
+			"CBaseEntity::IsPlayerSimulated"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x83\xEC\x08"
+				"linux" "@_ZNK11CBaseEntity17IsPlayerSimulatedEv"
+			}
+			"CBaseEntity::PhysicsStepUp"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x83\xEC\x30"
+				"linux" "@_ZN11CBaseEntity13PhysicsStepUpERK6VectorRK6VectorRK6Vector"
+			}
+			"CBaseEntity::PhysicsPushEntity"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x81\xEC\x0C\x01\x00\x00"
+				"linux" "@_ZN11CBaseEntity17PhysicsPushEntityERK6VectorRK6VectorP10trace_tS2_"
+			}
+			"CBaseEntity::PhysicsCheckSweep"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x83\xEC\x10"
+				"linux" "@_ZN11CBaseEntity17PhysicsCheckSweepERK6VectorRK6VectorP10trace_t"
+			}
+			"CBaseEntity::PhysicsCheckContents"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x83\xEC\x10"
+				"linux" "@_ZN11CBaseEntity20PhysicsCheckContentsEP10trace_t"
+			}
+			"CBaseEntity::PhysicsRelinkChildren"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x0C\x53\x56\x8B\xF1"
+				"linux" "@_ZN11CBaseEntity21PhysicsRelinkChildrenEv"
+			}
+			"CBaseEntity::PhysicsTouchTriggers"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x14\x53\x8B\xD9"
+				"linux" "@_ZN11CBaseEntity20PhysicsTouchTriggersEv"
+			}
+			"CBaseEntity::PhysicsStartShadow"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x81\xEC\x0C\x01\x00\x00"
+				"linux" "@_ZN11CBaseEntity19PhysicsStartShadowERK6VectorRK6Vectorb"
+			}
+			"CBaseEntity::PhysicsShadowUpdate"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x81\xEC\x0C\x01\x00\x00"
+				"linux" "@_ZN11CBaseEntity20PhysicsShadowUpdateEfb"
+			}
+			"CBaseEntity::UpdatePhysicsShadowToCurrentPosition"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xE4\xF8\x83\xEC\x0C"
+				"linux" "@_ZN11CBaseEntity34UpdatePhysicsShadowToCurrentPositionEfb"
+			}
+			"CBaseEntity::GetNextThink"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x56\x8B\xF1"
+				"linux" "@_ZNK11CBaseEntity12GetNextThinkEPKc"
+			}
+			"CBaseEntity::SetNextThink"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0\x83\xC2\x1C"
+				"linux" "@_ZN11CBaseEntity12SetNextThinkEfPKc"
+			}
+			"CBaseEntity::ClearThink"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x45\x08\x8B\xD0"
+				"linux" "@_ZN11CBaseEntity10ClearThinkEPKc"
+			}
+			"CBaseEntity::SUB_Remove"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity10SUB_RemoveEv"
+			}
+			"CBaseEntity::SUB_DoNothing"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity13SUB_DoNothingEv"
+			}
+			"CBaseEntity::SUB_StartFadeOut"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity17SUB_StartFadeOutEv"
+			}
+			"CBaseEntity::SUB_StartFadeOutThink"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity21SUB_StartFadeOutThinkEv"
+			}
+			"CBaseEntity::SUB_FadeOut"
+			{
+				"library" "server"
+				"windows" "\x56\x8B\xF1\x83\xBE"
+				"linux" "@_ZN11CBaseEntity11SUB_FadeOutEv"
+			}
+			"CBaseEntity::PhysicsRemoveTouched"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x10\x53\x56\x8B\xF1"
+				"linux" "@_ZN11CBaseEntity21PhysicsRemoveTouchedEPS_"
+			}
+		}
+	}
+}
