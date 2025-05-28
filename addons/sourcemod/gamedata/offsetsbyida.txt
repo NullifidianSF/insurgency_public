@@ -1,4 +1,4 @@
-in  Win Function
+   Lin  Win Function
    0    0 CINSPlayer::~CINSPlayer()
    1    0 CINSPlayer::~CINSPlayer()
 //bellow this line subtract 1 from the win numbers
