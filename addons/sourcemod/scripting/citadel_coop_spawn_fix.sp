@@ -76,7 +76,7 @@ void DisableBadSecSpawns() {
 		FormatEx(sBuffer, sizeof(sBuffer), "%f %f %f", vOrigin[0], vOrigin[1], vOrigin[2]);
 
 		for (int i = 0; i < sizeof(sBadSpawns); i++) {
-			if (strcmp(sBadSpawns[i], sBuffer, false) == 0) {
+			if (strcmp(sBadSpawns[i], sBuffer) == 0) {
 				AcceptEntityInput(ent, "Disable");
 				break;
 			}
