@@ -669,7 +669,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 			PrintCenterText(client, "You don't have enough resources to build. Press 'Cycle Firemode' to open the shop menu.");
 			return;
 		} else if (SetModelIndex(client)) { // Ensure the model index is set to one that the player can afford.
-			modelIndex = ga_iModelIndex[client],
+			modelIndex = ga_iModelIndex[client];
 			buildCost = ga_iModelCosts[modelIndex];
 		} else {
 			PrintCenterText(client, "You don't have enough resources to build. Press 'Cycle Firemode' to open the shop menu.");
@@ -697,13 +697,14 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 				// In rare cases ga_hPropPlaced[ga_iPropOwner[client]] can be INVALID_HANDLE, so we need to check again.
 				if (ga_hPropPlaced[ga_iPropOwner[client]] != INVALID_HANDLE) {
 					PushArrayCell(ga_hPropPlaced[ga_iPropOwner[client]], EntIndexToEntRef(prop));
+					FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", ga_iPropOwner[client], modelIndex);
 				} else {
 					ClearOldestPropIfLimitReached(client); // If prop limit reached for the player, delete the oldest prop
 					PushArrayCell(ga_hPropPlaced[client], EntIndexToEntRef(prop));
+					FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", client, modelIndex);
 					oldhealth = 0;
 				}
-				
-				FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", ga_iPropOwner[client], modelIndex);
+
 				ga_iPropOwner[client] = 0;
 			}
 
