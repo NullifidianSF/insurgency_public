@@ -142,7 +142,7 @@ public Plugin myinfo = {
 	name        = "props",
 	author      = "Nullifidian",
 	description = "Spawn props",
-	version     = "2.3"
+	version     = "2.4"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -687,24 +687,22 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 
 			if (!ga_iPropOwner[client]) {
 				ga_iPlayerBuildPoints[client] -= buildCost;
-				// Prop limit reached for the player, delete the oldest prop
-				int ent;
-				while (ga_hPropPlaced[client].Length >= PROP_LIMIT && PROP_LIMIT > 1) {
-					ent = EntRefToEntIndex(ga_hPropPlaced[client].Get(0));
-					if (ent > MaxClients && IsValidEntity(ent)) {
-						ga_bIgnoreRemoval[client] = true;
-						RemoveEntity(ent);
-						ga_bIgnoreRemoval[client] = false;
-					}
-					ga_hPropPlaced[client].Erase(0);
-				}
-
+				ClearOldestPropIfLimitReached(client); // If prop limit reached for the player, delete the oldest prop
 				TeleportEntity(prop, vPos, ga_fPropRotations[client][modelIndex], NULL_VECTOR); // Use stored rotation
 				PushArrayCell(ga_hPropPlaced[client], EntIndexToEntRef(prop));
 				FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", client, modelIndex);
 			} else {
 				TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
-				PushArrayCell(ga_hPropPlaced[ga_iPropOwner[client]], EntIndexToEntRef(prop));
+
+				// In rare cases ga_hPropPlaced[ga_iPropOwner[client]] can be INVALID_HANDLE, so we need to check again.
+				if (ga_hPropPlaced[ga_iPropOwner[client]] != INVALID_HANDLE) {
+					PushArrayCell(ga_hPropPlaced[ga_iPropOwner[client]], EntIndexToEntRef(prop));
+				} else {
+					ClearOldestPropIfLimitReached(client); // If prop limit reached for the player, delete the oldest prop
+					PushArrayCell(ga_hPropPlaced[client], EntIndexToEntRef(prop));
+					oldhealth = 0;
+				}
+				
 				FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", ga_iPropOwner[client], modelIndex);
 				ga_iPropOwner[client] = 0;
 			}
@@ -740,10 +738,9 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 			SetEntityRenderColor(prop, 255, 255, 255, PROP_ALPHA);
 			ga_iPropHolding[client] = EntIndexToEntRef(prop);
 
-			int propOwner = ga_iPropOwner[client];
-			if (propOwner > 0 && IsClientInGame(propOwner)) {
+			if (ga_iPropOwner[client] > 0 && IsClientInGame(ga_iPropOwner[client])) {
 				TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
-				PrintCenterText(client, "Built by: %N", propOwner);
+				PrintCenterText(client, "Built by: %N", ga_iPropOwner[client]);
 				OpenRotationMenu(client);
 			} else {
 				TeleportEntity(prop, vPos, ga_fPropRotations[client][modelIndex], NULL_VECTOR); // Use stored rotation
@@ -764,6 +761,19 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 		SetEntProp(prop, Prop_Data, "m_iMaxHealth", PROP_HEALTH);
 	} else {
 		PrintCenterText(client, "Failed to create prop.");
+	}
+}
+
+void ClearOldestPropIfLimitReached(int client) {
+	int ent;
+	while (ga_hPropPlaced[client] != INVALID_HANDLE && ga_hPropPlaced[client].Length >= PROP_LIMIT && PROP_LIMIT > 1) {
+		ent = EntRefToEntIndex(ga_hPropPlaced[client].Get(0));
+		if (ent > MaxClients && IsValidEntity(ent)) {
+			ga_bIgnoreRemoval[client] = true;
+			RemoveEntity(ent);
+			ga_bIgnoreRemoval[client] = false;
+		}
+		ga_hPropPlaced[client].Erase(0);
 	}
 }
 
