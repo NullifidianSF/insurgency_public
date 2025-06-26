@@ -110,6 +110,20 @@ int ga_iModelCosts[sizeof(ga_sModel)] = {
 	8  // Build cost for "models/sernix/ammo_cache/ammo_cache_small.mdl"
 };
 
+// List of props that allowed and not allowed to block explosion if player behind this prop
+bool ga_bModelBlockExplosiveDamage[sizeof(ga_sModel)] = {
+	false, // "models/fortifications/barbed_wire_02b.mdl"
+	true, // "models/static_fortifications/sandbagwall01.mdl"
+	true, // "models/iraq/ir_twall_01.mdl"
+	true, // "models/iraq/ir_hesco_basket_01_row.mdl"
+	false, // "models/static_afghan/prop_panj_stairs.mdl"
+	false, // "models/static_afghan/prop_interior_mattress_a.mdl"
+	true, // "models/static_props/container_01_open2.mdl"
+	true, // "models/embassy/embassy_center_02.mdl"
+	false, // "models/sernix/ied_jammer/ied_jammer.mdl"
+	false  // "models/sernix/ammo_cache/ammo_cache_small.mdl"
+};
+
 char ga_sLastInflictorModel[MAXPLAYERS + 1][PLATFORM_MAX_PATH];
 
 int ga_iPropHolding[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...},
@@ -145,7 +159,7 @@ public Plugin myinfo = {
 	name        = "props",
 	author      = "Nullifidian",
 	description = "Spawn props",
-	version     = "2.5"
+	version     = "2.6"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -962,7 +976,47 @@ public Action PlayerOnTakeDamage(int victim, int &attacker, int &inflictor, floa
 			}
 		}
 	}
+
+	// Block explosive damage if a prop is between explosion source and victim
+	if ((damagetype & DMG_BLAST) && IsValidEntity(inflictor) && inflictor != victim) {
+		float vStart[3], vEnd[3];
+		GetClientEyePosition(victim, vStart); // Start from the victim
+		GetEntPropVector(inflictor, Prop_Data, "m_vecAbsOrigin", vEnd); // Go to the explosion
+
+		Handle trace = TR_TraceRayFilterEx(vStart, vEnd, MASK_SOLID, RayType_EndPoint, TraceEntityFilterPlayers, victim);
+		if (TR_DidHit(trace)) {
+			int hitEnt = TR_GetEntityIndex(trace);
+			if (hitEnt != victim && hitEnt > MaxClients && IsValidEntity(hitEnt)) {
+				char sModelName[PLATFORM_MAX_PATH];
+				
+				GetEntPropString(hitEnt, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
+				if (!ModelBlocksExplosion(sModelName)) {
+					CloseHandle(trace);
+					return Plugin_Continue;
+				}
+
+				GetModelName(sModelName, sModelName, sizeof(sModelName));
+				PrintCenterText(victim, "A %s shielded you from the explosion!", sModelName);
+				CloseHandle(trace);
+				return Plugin_Handled;
+			}
+		}
+		CloseHandle(trace);
+	}
 	return Plugin_Continue;
+}
+
+public bool TraceEntityFilterPlayers(int entity, int contentsMask, any data) {
+	return (entity != data && (entity <= 0 || entity > MaxClients)); // ignore victim and all players
+}
+
+bool ModelBlocksExplosion(const char[] sModelName) {
+	for (int i = 0; i < sizeof(ga_sModel); i++) {
+		if (strcmp(ga_sModel[i], sModelName) == 0) {
+			return ga_bModelBlockExplosiveDamage[i];
+		}
+	}
+	return false;
 }
 
 bool GlowLowHp(int entity, int health) {
