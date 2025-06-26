@@ -863,7 +863,7 @@ public Action SHook_OnTouchMattress(int entity, int touch) {
 		return Plugin_Continue;
 	}
 
-	if (entity == GetEntPropEnt(touch, Prop_Send, "m_hGroundEntity") && GetEntProp(touch, Prop_Send, "m_iCurrentStance") != 2) {
+	if (entity == GetEntPropEnt(touch, Prop_Send, "m_hGroundEntity") && GetEntProp(touch, Prop_Send, "m_iCurrentStance") == 0) {
 		SetEntPropVector(touch, Prop_Data, "m_vecBaseVelocity", {0.0, 0.0, 500.0});
 		PlayWireSound(entity);
 	}
