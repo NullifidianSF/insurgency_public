@@ -831,8 +831,8 @@ public Action SHook_OnTouchPropTakeDamage(int entity, int touch) {
 }
 
 void DoDamageToEnt(int entity, int client) {
-	// When a bot touches the prop, deal damage. If the bot has been alive for 1 second or less, deal damage equal to the prop's health.
-	SDKHooks_TakeDamage(entity, client, client, ((GetGameTime() - GetEntDataFloat(client, g_iSpawnTime)) < 1.0) ? float(GetEntProp(entity, Prop_Data, "m_iHealth")) : PROP_DAMAGE_TAKE, DMG_SLASH, -1, NULL_VECTOR, NULL_VECTOR, false);
+	// When a bot touches the prop, deal damage. If the bot has been alive for half a second or less, deal damage equal to the prop's health.
+	SDKHooks_TakeDamage(entity, client, client, ((GetGameTime() - GetEntDataFloat(client, g_iSpawnTime)) < 0.5) ? float(GetEntProp(entity, Prop_Data, "m_iHealth")) : PROP_DAMAGE_TAKE, DMG_SLASH, -1, NULL_VECTOR, NULL_VECTOR, false);
 }
 
 public Action SHook_OnTouchMattress(int entity, int touch) {
