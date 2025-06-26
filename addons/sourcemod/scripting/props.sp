@@ -54,7 +54,7 @@
 #define BOT_BLEED_COOLDOWN 2.0
 #define BOT_BLEED_DAMAGE 40.0
 
-#define MENU_COOLDOWN 2
+#define MENU_COOLDOWN 1
 #define MENU_STAYOPENTIME 10
 
 #define SND_SUPPLYREFUND "ui/receivedsupply.wav"
@@ -159,7 +159,7 @@ public Plugin myinfo = {
 	name        = "props",
 	author      = "Nullifidian",
 	description = "Spawn props",
-	version     = "2.7"
+	version     = "2.8"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -214,10 +214,17 @@ public void OnPluginStart() {
 
 public void OnMapStart() {
 	PrecacheFiles();
+	for (int i = 0; i <= MAXENTITIES; i++) {
+		ga_fPropSoundCooldown[i] = 0.0;
+	}
 }
 
 public void OnClientPostAdminCheck(int client) {
 	if (client > 0) {
+		ga_fLastTouchTime[client] = 0.0;
+		ga_fBotBleedCooldown[client] = 0.0;
+		ga_iShopMenuCooldown[client] = 0;
+		ga_iPropMenuCooldown[client] = 0;
 		if (!IsFakeClient(client)) {
 			SDKHook(client, SDKHook_WeaponSwitchPost, Hook_WeaponSwitch);
 			SDKHook(client, SDKHook_OnTakeDamage, PlayerOnTakeDamage);
@@ -525,12 +532,12 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			}
 		} else {
 			int currentTime = GetTime();
-			if (currentTime - ga_iPropMenuCooldown[client] < MENU_COOLDOWN) {
+			if (ga_iPropMenuCooldown[client] > currentTime) {
 				PrintCenterText(client, "You must wait before opening the menu again.");
 				return;
 			}
 
-			ga_iPropMenuCooldown[client] = currentTime;
+			ga_iPropMenuCooldown[client] = MENU_COOLDOWN + currentTime;
 
 			OpenPropSelectionMenu(client);
 		}
@@ -845,8 +852,8 @@ public Action SHook_OnTouchPropTakeDamage(int entity, int touch) {
 }
 
 void DoDamageToEnt(int entity, int client) {
-	// When a bot touches the prop, deal damage. If the bot has been alive for half a second or less, deal damage equal to the prop's health.
-	SDKHooks_TakeDamage(entity, client, client, ((GetGameTime() - GetEntDataFloat(client, g_iSpawnTime)) < 0.5) ? float(GetEntProp(entity, Prop_Data, "m_iHealth")) : PROP_DAMAGE_TAKE, DMG_SLASH, -1, NULL_VECTOR, NULL_VECTOR, false);
+	// When a bot touches the prop, deal damage.
+	SDKHooks_TakeDamage(entity, client, client, PROP_DAMAGE_TAKE, DMG_SLASH, -1, NULL_VECTOR, NULL_VECTOR, false);
 }
 
 public Action SHook_OnTouchMattress(int entity, int touch) {
@@ -1208,12 +1215,12 @@ bool HasEnoughResources(int client, int cost) {
 
 void OpenShopMenu(int client, bool cooldown = true) {
 	int currentTime = GetTime();
-	if (cooldown && (currentTime - ga_iShopMenuCooldown[client] < MENU_COOLDOWN)) {
+	if (cooldown && (ga_iShopMenuCooldown[client] > currentTime)) {
 		PrintCenterText(client, "You must wait before opening the menu again.");
 		return;
 	}
 
-	ga_iShopMenuCooldown[client] = currentTime;
+	ga_iShopMenuCooldown[client] = currentTime + MENU_COOLDOWN;
 
 	if (ga_bPlayerRefund[client]) {
 		PrintCenterText(client, "Since you recently refunded or changed class, you can only purchase build points after the team completes the current objective.");
