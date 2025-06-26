@@ -41,7 +41,8 @@
 
 #define PROP_ALPHA 125
 #define PROP_ROTATE_STEP 10.0
-#define PROP_DAMAGE_TAKE 2.0
+#define PROP_DAMAGE_TAKE 20.0	// Amount of damage the prop takes each time a bot touches it, limited by PROP_TOUCH_COOLDOWN.
+#define PROP_TOUCH_COOLDOWN 0.25
 #define PROP_GLOWHP_PERCENT 0.25
 #define PROP_HEALTH 6000
 #define PROP_HOLD_DISTANCE 120.0
@@ -65,7 +66,7 @@ ArrayList ga_hPropPlaced[MAXPLAYERS + 1];
 ConVar	g_cvAllFree = null;
 
 #define NUM_WIRESOUNDS 3
-char ga_sBarbWire[NUM_WIRESOUNDS][PLATFORM_MAX_PATH] = {
+char ga_sBarbWire[NUM_WIRESOUNDS][] = {
 	"doi/dynamic/barbedwire_stress_01.ogg",
 	"doi/dynamic/barbedwire_stress_02.ogg",
 	"doi/dynamic/barbedwire_stress_03.ogg"
@@ -113,6 +114,7 @@ char ga_sLastInflictorModel[MAXPLAYERS + 1][PLATFORM_MAX_PATH];
 
 int ga_iPropHolding[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...},
 	ga_iModelIndex[MAXPLAYERS + 1] = {0, ...},
+	g_iSpawnTime,
 	ga_iLastButtons[MAXPLAYERS + 1],
 	ga_iLastInflictor[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...},
 	ga_iEntIdBipodDeployedOn[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...},
@@ -135,14 +137,15 @@ bool ga_bHelpMenuOpen[MAXPLAYERS + 1] = {false, ...},
 
 float ga_fPropSoundCooldown[MAXENTITIES + 1] = {0.0, ...},
 	ga_fBotBleedCooldown[MAXPLAYERS + 1] = {0.0, ...},
-	ga_fPropRotations[MAXPLAYERS + 1][sizeof(ga_sModel)][3];
+	ga_fPropRotations[MAXPLAYERS + 1][sizeof(ga_sModel)][3],
+	ga_fLastTouchTime[MAXPLAYERS + 1] = {0.0, ...};
 
 
 public Plugin myinfo = {
 	name        = "props",
 	author      = "Nullifidian",
 	description = "Spawn props",
-	version     = "2.4"
+	version     = "2.5"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -151,6 +154,11 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 }
 
 public void OnPluginStart() {
+	g_iSpawnTime = FindSendPropInfo("CINSPlayer", "m_flSpawnTime");
+	if (g_iSpawnTime == -1) {
+		SetFailState("Offset \"m_flSpawnTime\" not found!");
+	}
+
 	SetupConVars();
 	
 	HookEvent("player_spawn", Event_PlayerSpawn);
@@ -353,12 +361,12 @@ public Action Event_PlayerDeath_Pre(Event event, const char[] name, bool dontBro
 				char sModelName[PLATFORM_MAX_PATH];
 				GetEntPropString(inflictor, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
 
-				if (StrContains(sModelName, "models/fortifications/barbed_wire_02", false) != -1) {
+				if (strcmp(sModelName, "models/fortifications/barbed_wire_02b.mdl") == 0) {
 					event.SetString("weapon", "Barbed Wire");
 					return Plugin_Changed;
 				}
 			}
-		} else if (StrContains(ga_sLastInflictorModel[victim], "models/fortifications/barbed_wire_02", false) != -1) {
+		} else if (strcmp(ga_sLastInflictorModel[victim], "models/fortifications/barbed_wire_02b.mdl") == 0) {
 			// Use the stored model name if the entity is no longer valid
 			event.SetString("weapon", "Barbed Wire");
 			return Plugin_Changed;
@@ -552,7 +560,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 				char sModelName[PLATFORM_MAX_PATH];
 				GetEntPropString(target, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
 				// Block ammo bag moving to stop resupply limit reset.
-				if (strcmp(sModelName, "models/sernix/ammo_cache/ammo_cache_small.mdl", false) == 0) {
+				if (strcmp(sModelName, "models/sernix/ammo_cache/ammo_cache_small.mdl") == 0) {
 					return;
 				}
 
@@ -708,24 +716,30 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 				ga_iPropOwner[client] = 0;
 			}
 
-			if (strcmp(ga_sModel[modelIndex], "models/sernix/ammo_cache/ammo_cache_small.mdl", false) == 0) {
+			if (strcmp(ga_sModel[modelIndex], "models/sernix/ammo_cache/ammo_cache_small.mdl") == 0) {
 				SetVariantColor({255, 255, 102, 255});
 				SetEntityRenderMode(prop, RENDER_NORMAL);
 				SetEntityRenderColor(prop, 255, 255, 255, 255);
 				AcceptEntityInput(prop, "SetGlowColor");
 				SetEntProp(prop, Prop_Send, "m_bShouldGlow", true);
 				SetEntPropFloat(prop, Prop_Send, "m_flGlowMaxDist", 1600.0);
-			} else if (strcmp(ga_sModel[modelIndex], "models/sernix/ied_jammer/ied_jammer.mdl", false) == 0) {
+				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
+			} else if (strcmp(ga_sModel[modelIndex], "models/sernix/ied_jammer/ied_jammer.mdl") == 0) {
 				SetVariantColor({80, 210, 255, 255});
 				SetEntityRenderMode(prop, RENDER_NORMAL);
 				AcceptEntityInput(prop, "SetGlowColor");
 				SetEntProp(prop, Prop_Send, "m_bShouldGlow", true);
 				SetEntPropFloat(prop, Prop_Send, "m_flGlowMaxDist", 600.0);
+				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
+			} else if (strcmp(ga_sModel[modelIndex], "models/fortifications/barbed_wire_02b.mdl") == 0) {
+				SDKHook(prop, SDKHook_Touch, SHook_OnTouchWire);
+			} else if (strcmp(ga_sModel[modelIndex], "models/static_afghan/prop_interior_mattress_a.mdl") == 0) {
+				SDKHook(prop, SDKHook_Touch, SHook_OnTouchMattress);
+			} else {
+				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
 			}
 
 			DispatchKeyValue(prop, "targetname", PropName);
-
-			SDKHook(prop, SDKHook_Touch, SHook_OnTouch);
 			SDKHook(prop, SDKHook_OnTakeDamage, PropOnTakeDamage);
 
 			if (ga_bPropRotateMenuOpen[client]) {
@@ -796,38 +810,99 @@ int GetNumber(const char[] str, const char[] substr) {
 	return StringToInt(numberStr);
 }
 
-public Action SHook_OnTouch(int entity, int touch) {
+public Action SHook_OnTouchPropTakeDamage(int entity, int touch) {
 	if (touch < 1 || touch > MaxClients) {
 		return Plugin_Continue;
 	}
-	
-	if (GetClientTeam(touch) == 3) {
-		char sModelName[PLATFORM_MAX_PATH];
-		GetEntPropString(entity, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
-		if (StrContains(sModelName, "models/fortifications/barbed_wire_02", false) != -1) {
-			float time = GetGameTime();
-			if (time >= ga_fPropSoundCooldown[entity]) {
-				float vPos[3];
-				ga_fPropSoundCooldown[entity] = time + GetRandomFloat(2.5, 5.0);
-				GetEntPropVector(entity, Prop_Data, "m_vecAbsOrigin", vPos);
-				EmitAmbientSound(ga_sBarbWire[GetRandomInt(0, NUM_WIRESOUNDS - 1)], vPos);
-			}
 
-			if (time >= ga_fBotBleedCooldown[touch]) {
-				// Apply bleeding effect
-				ga_fBotBleedCooldown[touch] = time + BOT_BLEED_COOLDOWN;
-				int propOwner = GetPropOwner(entity);
-				if (propOwner > 0) {
-					SDKHooks_TakeDamage(touch, entity, propOwner, BOT_BLEED_DAMAGE, DMG_SLASH, -1, NULL_VECTOR, NULL_VECTOR, false);
-					// Add particle effect
-					float vPos[3];
-					GetClientAbsOrigin(touch, vPos);
-					CreateBleedEffect(touch, vPos);
-				}
-			}
+	float time = GetGameTime();
+	if (time - ga_fLastTouchTime[touch] < PROP_TOUCH_COOLDOWN) {
+		return Plugin_Continue;
+	}
+
+	if (!IsClientInGame(touch) || !IsPlayerAlive(touch) || GetClientTeam(touch) != 3) {
+		return Plugin_Continue;
+	}
+
+	ga_fLastTouchTime[touch] = time + PROP_TOUCH_COOLDOWN;
+
+	DoDamageToEnt(entity, touch);
+	return Plugin_Continue;
+}
+
+void DoDamageToEnt(int entity, int client) {
+	// When a bot touches the prop, deal damage. If the bot has been alive for 1 second or less, deal damage equal to the prop's health.
+	SDKHooks_TakeDamage(entity, client, client, ((GetGameTime() - GetEntDataFloat(client, g_iSpawnTime)) < 1.0) ? float(GetEntProp(entity, Prop_Data, "m_iHealth")) : PROP_DAMAGE_TAKE, DMG_SLASH, -1, NULL_VECTOR, NULL_VECTOR, false);
+}
+
+public Action SHook_OnTouchMattress(int entity, int touch) {
+	if (touch < 1 || touch > MaxClients) {
+		return Plugin_Continue;
+	}
+
+	float time = GetGameTime();
+	if (time - ga_fLastTouchTime[touch] < PROP_TOUCH_COOLDOWN) {
+		return Plugin_Continue;
+	}
+
+	if (!IsClientInGame(touch) || !IsPlayerAlive(touch)) {
+		return Plugin_Continue;
+	}
+
+	if (entity == GetEntPropEnt(touch, Prop_Send, "m_hGroundEntity")) {
+		SetEntPropVector(touch, Prop_Data, "m_vecBaseVelocity", {0.0, 0.0, 500.0});
+		PlayWireSound(entity);
+	}
+
+	ga_fLastTouchTime[touch] = time + PROP_TOUCH_COOLDOWN;
+
+	if (GetClientTeam(touch) == 3) {
+		DoDamageToEnt(entity, touch);
+	}
+
+	return Plugin_Continue;
+}
+
+public Action SHook_OnTouchWire(int entity, int touch) {
+	if (touch < 1 || touch > MaxClients) {
+		return Plugin_Continue;
+	}
+
+	if (!IsClientInGame(touch) || !IsPlayerAlive(touch) || GetClientTeam(touch) != 3) {
+		return Plugin_Continue;
+	}
+
+	float time = GetGameTime();
+	if (time >= ga_fPropSoundCooldown[entity]) {
+		ga_fPropSoundCooldown[entity] = time + GetRandomFloat(2.5, 5.0);
+		PlayWireSound(entity);
+	}
+
+	if (time >= ga_fBotBleedCooldown[touch]) {
+		// Apply bleeding effect
+		ga_fBotBleedCooldown[touch] = time + BOT_BLEED_COOLDOWN;
+		int propOwner = GetPropOwner(entity);
+		if (propOwner > 0) {
+			SDKHooks_TakeDamage(touch, entity, propOwner, BOT_BLEED_DAMAGE, DMG_SLASH, -1, NULL_VECTOR, NULL_VECTOR, false);
+			// Add particle effect
+			float vPos[3];
+			GetClientAbsOrigin(touch, vPos);
+			CreateBleedEffect(touch, vPos);
 		}
 	}
+
+	if (time - ga_fLastTouchTime[touch] >= PROP_TOUCH_COOLDOWN) {
+		ga_fLastTouchTime[touch] = time + PROP_TOUCH_COOLDOWN;
+		DoDamageToEnt(entity, touch);
+	}
+
 	return Plugin_Continue;
+}
+
+void PlayWireSound(int entity) {
+	float vPos[3];
+	GetEntPropVector(entity, Prop_Data, "m_vecAbsOrigin", vPos);
+	EmitAmbientSound(ga_sBarbWire[GetRandomInt(0, NUM_WIRESOUNDS - 1)], vPos);
 }
 
 void CreateBleedEffect(int client, float vPos[3]) {
@@ -880,7 +955,7 @@ public Action PlayerOnTakeDamage(int victim, int &attacker, int &inflictor, floa
 		if (groundEntity > MaxClients && IsValidEntity(groundEntity)) {
 			char sModelName[PLATFORM_MAX_PATH];
 			GetEntPropString(groundEntity, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
-			if (strcmp(sModelName, "models/static_afghan/prop_interior_mattress_a.mdl", false) == 0) {
+			if (strcmp(sModelName, "models/static_afghan/prop_interior_mattress_a.mdl") == 0) {
 				PrintCenterText(victim, "Mattress cushioned your fall!");
 				// Ignore fall damage
 				return Plugin_Handled;
