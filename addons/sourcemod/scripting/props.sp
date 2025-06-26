@@ -159,7 +159,7 @@ public Plugin myinfo = {
 	name        = "props",
 	author      = "Nullifidian",
 	description = "Spawn props",
-	version     = "2.6"
+	version     = "2.7"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -371,7 +371,7 @@ public Action Event_PlayerDeath_Pre(Event event, const char[] name, bool dontBro
 		if (inflictor != INVALID_ENT_REFERENCE && IsValidEntity(inflictor)) {
 			char inflictorClassname[64];
 			GetEntityClassname(inflictor, inflictorClassname, sizeof(inflictorClassname));
-			if (strcmp(inflictorClassname, "prop_dynamic", false) == 0) {
+			if (strcmp(inflictorClassname, "prop_dynamic") == 0) {
 				char sModelName[PLATFORM_MAX_PATH];
 				GetEntPropString(inflictor, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
 
@@ -830,7 +830,7 @@ public Action SHook_OnTouchPropTakeDamage(int entity, int touch) {
 	}
 
 	float time = GetGameTime();
-	if (time - ga_fLastTouchTime[touch] < PROP_TOUCH_COOLDOWN) {
+	if (ga_fLastTouchTime[touch] > time) {
 		return Plugin_Continue;
 	}
 
@@ -855,7 +855,7 @@ public Action SHook_OnTouchMattress(int entity, int touch) {
 	}
 
 	float time = GetGameTime();
-	if (time - ga_fLastTouchTime[touch] < PROP_TOUCH_COOLDOWN) {
+	if (ga_fLastTouchTime[touch] > time) {
 		return Plugin_Continue;
 	}
 
@@ -905,7 +905,7 @@ public Action SHook_OnTouchWire(int entity, int touch) {
 		}
 	}
 
-	if (time - ga_fLastTouchTime[touch] >= PROP_TOUCH_COOLDOWN) {
+	if (ga_fLastTouchTime[touch] <= time) {
 		ga_fLastTouchTime[touch] = time + PROP_TOUCH_COOLDOWN;
 		DoDamageToEnt(entity, touch);
 	}
