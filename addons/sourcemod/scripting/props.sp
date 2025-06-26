@@ -54,7 +54,7 @@
 #define BOT_BLEED_COOLDOWN 2.0
 #define BOT_BLEED_DAMAGE 40.0
 
-#define MENU_COOLDOWN 1
+#define MENU_COOLDOWN 1.0
 #define MENU_STAYOPENTIME 10
 
 #define SND_SUPPLYREFUND "ui/receivedsupply.wav"
@@ -134,9 +134,7 @@ int ga_iPropHolding[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...},
 	ga_iEntIdBipodDeployedOn[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...},
 	ga_iPlayerBuildPoints[MAXPLAYERS + 1] = {STARTBUILDPOINTS, ...},
 	ga_iPropOwner[MAXPLAYERS + 1] = {0, ...},
-	ga_iShopMenuCooldown[MAXPLAYERS + 1] = {0, ...},
 	ga_iTokensSpent[MAXPLAYERS + 1] = {0, ...},
-	ga_iPropMenuCooldown[MAXPLAYERS + 1] = {0, ...},
 	g_iAllFree;
 
 bool ga_bHelpMenuOpen[MAXPLAYERS + 1] = {false, ...},
@@ -152,14 +150,17 @@ bool ga_bHelpMenuOpen[MAXPLAYERS + 1] = {false, ...},
 float ga_fPropSoundCooldown[MAXENTITIES + 1] = {0.0, ...},
 	ga_fBotBleedCooldown[MAXPLAYERS + 1] = {0.0, ...},
 	ga_fPropRotations[MAXPLAYERS + 1][sizeof(ga_sModel)][3],
-	ga_fLastTouchTime[MAXPLAYERS + 1] = {0.0, ...};
+	ga_fLastTouchTime[MAXPLAYERS + 1] = {0.0, ...},
+	ga_fPressedJumpTime[MAXPLAYERS + 1] = {0.0, ...},
+	ga_fPropMenuCooldown[MAXPLAYERS + 1] = {0.0, ...},
+	ga_iShopMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
 
 
 public Plugin myinfo = {
 	name        = "props",
 	author      = "Nullifidian",
 	description = "Spawn props",
-	version     = "2.8"
+	version     = "2.9"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -223,8 +224,9 @@ public void OnClientPostAdminCheck(int client) {
 	if (client > 0) {
 		ga_fLastTouchTime[client] = 0.0;
 		ga_fBotBleedCooldown[client] = 0.0;
-		ga_iShopMenuCooldown[client] = 0;
-		ga_iPropMenuCooldown[client] = 0;
+		ga_iShopMenuCooldown[client] = 0.0;
+		ga_fPropMenuCooldown[client] = 0.0;
+		ga_fPressedJumpTime[client] = 0.0;
 		if (!IsFakeClient(client)) {
 			SDKHook(client, SDKHook_WeaponSwitchPost, Hook_WeaponSwitch);
 			SDKHook(client, SDKHook_OnTakeDamage, PlayerOnTakeDamage);
@@ -471,6 +473,15 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 }
 
 void OnButtonPress(int client, int button, float vel[3]) {
+	if (button & INS_JUMP) {
+		float GameTime = GetGameTime();
+		if (GameTime - ga_fPressedJumpTime[client] <= 1) {
+			ga_fPressedJumpTime[client] = 0.0;
+		} else {
+			ga_fPressedJumpTime[client] = GameTime;
+		}
+	}
+
 	if (button & INS_SPRINT || button & INS_ATTACK1) {
 		StopHolding(client);
 		if (ga_bHelpMenuOpen[client]) {
@@ -531,13 +542,13 @@ void OnButtonPress(int client, int button, float vel[3]) {
 				}
 			}
 		} else {
-			int currentTime = GetTime();
-			if (ga_iPropMenuCooldown[client] > currentTime) {
+			float GameTime = GetGameTime();
+			if (ga_fPropMenuCooldown[client] > GameTime) {
 				PrintCenterText(client, "You must wait before opening the menu again.");
 				return;
 			}
 
-			ga_iPropMenuCooldown[client] = MENU_COOLDOWN + currentTime;
+			ga_fPropMenuCooldown[client] = MENU_COOLDOWN + GameTime;
 
 			OpenPropSelectionMenu(client);
 		}
@@ -836,8 +847,8 @@ public Action SHook_OnTouchPropTakeDamage(int entity, int touch) {
 		return Plugin_Continue;
 	}
 
-	float time = GetGameTime();
-	if (ga_fLastTouchTime[touch] > time) {
+	float GameTime = GetGameTime();
+	if (ga_fLastTouchTime[touch] > GameTime) {
 		return Plugin_Continue;
 	}
 
@@ -845,7 +856,7 @@ public Action SHook_OnTouchPropTakeDamage(int entity, int touch) {
 		return Plugin_Continue;
 	}
 
-	ga_fLastTouchTime[touch] = time + PROP_TOUCH_COOLDOWN;
+	ga_fLastTouchTime[touch] = GameTime + PROP_TOUCH_COOLDOWN;
 
 	DoDamageToEnt(entity, touch);
 	return Plugin_Continue;
@@ -861,8 +872,8 @@ public Action SHook_OnTouchMattress(int entity, int touch) {
 		return Plugin_Continue;
 	}
 
-	float time = GetGameTime();
-	if (ga_fLastTouchTime[touch] > time) {
+	float GameTime = GetGameTime();
+	if (ga_fLastTouchTime[touch] > GameTime) {
 		return Plugin_Continue;
 	}
 
@@ -871,15 +882,20 @@ public Action SHook_OnTouchMattress(int entity, int touch) {
 	}
 
 	if (entity == GetEntPropEnt(touch, Prop_Send, "m_hGroundEntity") && GetEntProp(touch, Prop_Send, "m_iCurrentStance") == 0) {
-		SetEntPropVector(touch, Prop_Data, "m_vecBaseVelocity", {0.0, 0.0, 500.0});
-		PlayWireSound(entity);
+		if (!IsFakeClient(touch)) {
+			if (GameTime - ga_fPressedJumpTime[touch] <= 1.0) {
+				ga_fPressedJumpTime[touch] = GameTime + 1.0;
+				SetEntPropVector(touch, Prop_Data, "m_vecBaseVelocity", {0.0, 0.0, 500.0});
+				PlayWireSound(entity);
+			}
+		} else {
+			SetEntPropVector(touch, Prop_Data, "m_vecBaseVelocity", {0.0, 0.0, 500.0});
+			PlayWireSound(entity);
+			DoDamageToEnt(entity, touch);
+		}
 	}
 
-	ga_fLastTouchTime[touch] = time + PROP_TOUCH_COOLDOWN;
-
-	if (GetClientTeam(touch) == 3) {
-		DoDamageToEnt(entity, touch);
-	}
+	ga_fLastTouchTime[touch] = GameTime + PROP_TOUCH_COOLDOWN;
 
 	return Plugin_Continue;
 }
@@ -1214,13 +1230,13 @@ bool HasEnoughResources(int client, int cost) {
 }
 
 void OpenShopMenu(int client, bool cooldown = true) {
-	int currentTime = GetTime();
-	if (cooldown && (ga_iShopMenuCooldown[client] > currentTime)) {
+	float GameTime = GetGameTime();
+	if (cooldown && (ga_iShopMenuCooldown[client] > GameTime)) {
 		PrintCenterText(client, "You must wait before opening the menu again.");
 		return;
 	}
 
-	ga_iShopMenuCooldown[client] = currentTime + MENU_COOLDOWN;
+	ga_iShopMenuCooldown[client] = GameTime + MENU_COOLDOWN;
 
 	if (ga_bPlayerRefund[client]) {
 		PrintCenterText(client, "Since you recently refunded or changed class, you can only purchase build points after the team completes the current objective.");
