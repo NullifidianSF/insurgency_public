@@ -37,22 +37,21 @@
 #define DAMAGE_YES 2
 #define DAMAGE_AIM 3
 
-#define STARTBUILDPOINTS 3
+#define STARTBUILDPOINTS 3	// Free starting build points for all players
 
 #define PROP_ALPHA 125
 #define PROP_ROTATE_STEP 10.0
-#define PROP_DAMAGE_TAKE 20.0	// Amount of damage the prop takes each time a bot touches it, limited by PROP_TOUCH_COOLDOWN.
-#define PROP_TOUCH_COOLDOWN 0.25
+#define PROP_DAMAGE_TAKE 200.0	// Amount of damage the prop takes each time a bot touches it, limited by PROP_TOUCH_COOLDOWN.
+#define PROP_TOUCH_COOLDOWN 0.50
 #define PROP_GLOWHP_PERCENT 0.25
 #define PROP_HEALTH 6000
 #define PROP_HOLD_DISTANCE 120.0
-#define PROP_LIMIT 10
+#define PROP_LIMIT 10	// Prop limit per player
 #define PROP_PLAYER_DISTANCE 50.0
 #define PROP_MIN_BOT_DISTANCE 350.0	// If a bot spawns at this distance from the prop, the prop will be destroyed.
 #define PROP_MIN_BOT_VERT_DISTANCE 100.0	// If a bot spawns at this vertical distance from the prop, the prop will be destroyed.
 
-#define BOT_BLEED_COOLDOWN 2.0
-#define BOT_BLEED_DAMAGE 40.0
+#define BOT_BLEED_WIREDAMAGE 10.0	// Amount of bleed damage bot takes from a barbed wire
 
 #define MENU_COOLDOWN 1.0
 #define MENU_STAYOPENTIME 10
@@ -147,9 +146,7 @@ bool ga_bHelpMenuOpen[MAXPLAYERS + 1] = {false, ...},
 	ga_bPlayerRefund[MAXPLAYERS + 1] = {false, ...},
 	ga_bFirstTimeJoinedSquad[MAXPLAYERS + 1] = {true, ...};
 
-float ga_fPropSoundCooldown[MAXENTITIES + 1] = {0.0, ...},
-	ga_fBotBleedCooldown[MAXPLAYERS + 1] = {0.0, ...},
-	ga_fPropRotations[MAXPLAYERS + 1][sizeof(ga_sModel)][3],
+float ga_fPropRotations[MAXPLAYERS + 1][sizeof(ga_sModel)][3],
 	ga_fLastTouchTime[MAXPLAYERS + 1] = {0.0, ...},
 	ga_fPressedJumpTime[MAXPLAYERS + 1] = {0.0, ...},
 	ga_fPropMenuCooldown[MAXPLAYERS + 1] = {0.0, ...},
@@ -215,15 +212,11 @@ public void OnPluginStart() {
 
 public void OnMapStart() {
 	PrecacheFiles();
-	for (int i = 0; i <= MAXENTITIES; i++) {
-		ga_fPropSoundCooldown[i] = 0.0;
-	}
 }
 
 public void OnClientPostAdminCheck(int client) {
 	if (client > 0) {
 		ga_fLastTouchTime[client] = 0.0;
-		ga_fBotBleedCooldown[client] = 0.0;
 		ga_iShopMenuCooldown[client] = 0.0;
 		ga_fPropMenuCooldown[client] = 0.0;
 		ga_fPressedJumpTime[client] = 0.0;
@@ -847,12 +840,12 @@ public Action SHook_OnTouchPropTakeDamage(int entity, int touch) {
 		return Plugin_Continue;
 	}
 
-	float GameTime = GetGameTime();
-	if (ga_fLastTouchTime[touch] > GameTime) {
+	if (!IsClientInGame(touch) || !IsPlayerAlive(touch) || GetClientTeam(touch) != 3) {
 		return Plugin_Continue;
 	}
 
-	if (!IsClientInGame(touch) || !IsPlayerAlive(touch) || GetClientTeam(touch) != 3) {
+	float GameTime = GetGameTime();
+	if (ga_fLastTouchTime[touch] > GameTime) {
 		return Plugin_Continue;
 	}
 
@@ -872,12 +865,12 @@ public Action SHook_OnTouchMattress(int entity, int touch) {
 		return Plugin_Continue;
 	}
 
-	float GameTime = GetGameTime();
-	if (ga_fLastTouchTime[touch] > GameTime) {
+	if (!IsClientInGame(touch) || !IsPlayerAlive(touch)) {
 		return Plugin_Continue;
 	}
 
-	if (!IsClientInGame(touch) || !IsPlayerAlive(touch)) {
+	float GameTime = GetGameTime();
+	if (ga_fLastTouchTime[touch] > GameTime) {
 		return Plugin_Continue;
 	}
 
@@ -909,27 +902,20 @@ public Action SHook_OnTouchWire(int entity, int touch) {
 		return Plugin_Continue;
 	}
 
-	float time = GetGameTime();
-	if (time >= ga_fPropSoundCooldown[entity]) {
-		ga_fPropSoundCooldown[entity] = time + GetRandomFloat(2.5, 5.0);
-		PlayWireSound(entity);
-	}
+	float GameTime = GetGameTime();
+	if (ga_fLastTouchTime[touch] <= GameTime) {
+		ga_fLastTouchTime[touch] = GameTime + PROP_TOUCH_COOLDOWN;
 
-	if (time >= ga_fBotBleedCooldown[touch]) {
 		// Apply bleeding effect
-		ga_fBotBleedCooldown[touch] = time + BOT_BLEED_COOLDOWN;
 		int propOwner = GetPropOwner(entity);
 		if (propOwner > 0) {
-			SDKHooks_TakeDamage(touch, entity, propOwner, BOT_BLEED_DAMAGE, DMG_SLASH, -1, NULL_VECTOR, NULL_VECTOR, false);
+			SDKHooks_TakeDamage(touch, entity, propOwner, BOT_BLEED_WIREDAMAGE, DMG_SLASH, -1, NULL_VECTOR, NULL_VECTOR, false);
 			// Add particle effect
 			float vPos[3];
 			GetClientAbsOrigin(touch, vPos);
 			CreateBleedEffect(touch, vPos);
 		}
-	}
-
-	if (ga_fLastTouchTime[touch] <= time) {
-		ga_fLastTouchTime[touch] = time + PROP_TOUCH_COOLDOWN;
+		PlayWireSound(entity);
 		DoDamageToEnt(entity, touch);
 	}
 
@@ -960,7 +946,7 @@ void CreateBleedEffect(int client, float vPos[3]) {
 	AcceptEntityInput(particle, "start");
 
 	// Set the particle to be removed after some time
-	CreateTimer(BOT_BLEED_COOLDOWN, Timer_RemoveParticle, EntIndexToEntRef(particle));
+	CreateTimer(PROP_TOUCH_COOLDOWN, Timer_RemoveParticle, EntIndexToEntRef(particle));
 }
 
 public Action Timer_RemoveParticle(Handle timer, int particleRef) {
