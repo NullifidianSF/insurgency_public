@@ -41,7 +41,7 @@
 
 #define PROP_ALPHA 125
 #define PROP_ROTATE_STEP 10.0
-#define PROP_DAMAGE_TAKE 200.0	// Amount of damage the prop takes each time a bot touches it, limited by PROP_TOUCH_COOLDOWN.
+#define PROP_DAMAGE_TAKE 100.0	// Amount of damage the prop takes each time a bot touches it, limited by PROP_TOUCH_COOLDOWN.
 #define PROP_TOUCH_COOLDOWN 0.50
 #define PROP_GLOWHP_PERCENT 0.25
 #define PROP_HEALTH 6000
@@ -150,7 +150,8 @@ float ga_fPropRotations[MAXPLAYERS + 1][sizeof(ga_sModel)][3],
 	ga_fLastTouchTime[MAXPLAYERS + 1] = {0.0, ...},
 	ga_fPressedJumpTime[MAXPLAYERS + 1] = {0.0, ...},
 	ga_fPropMenuCooldown[MAXPLAYERS + 1] = {0.0, ...},
-	ga_iShopMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
+	ga_fShopMenuCooldown[MAXPLAYERS + 1] = {0.0, ...},
+	ga_fWireSoundCooldown[MAXENTITIES + 1] = {0.0, ...};
 
 
 public Plugin myinfo = {
@@ -212,12 +213,16 @@ public void OnPluginStart() {
 
 public void OnMapStart() {
 	PrecacheFiles();
+
+	for (int i = 0; i <= MAXENTITIES; i++) {
+		ga_fWireSoundCooldown[i] = 0.0;
+	}
 }
 
 public void OnClientPostAdminCheck(int client) {
 	if (client > 0) {
 		ga_fLastTouchTime[client] = 0.0;
-		ga_iShopMenuCooldown[client] = 0.0;
+		ga_fShopMenuCooldown[client] = 0.0;
 		ga_fPropMenuCooldown[client] = 0.0;
 		ga_fPressedJumpTime[client] = 0.0;
 		if (!IsFakeClient(client)) {
@@ -915,7 +920,11 @@ public Action SHook_OnTouchWire(int entity, int touch) {
 			GetClientAbsOrigin(touch, vPos);
 			CreateBleedEffect(touch, vPos);
 		}
-		PlayWireSound(entity);
+		
+		if (ga_fWireSoundCooldown[entity] <= GameTime) {
+			PlayWireSound(entity);
+			ga_fWireSoundCooldown[entity] = GameTime + 2.0;
+		}
 		DoDamageToEnt(entity, touch);
 	}
 
@@ -1217,12 +1226,12 @@ bool HasEnoughResources(int client, int cost) {
 
 void OpenShopMenu(int client, bool cooldown = true) {
 	float GameTime = GetGameTime();
-	if (cooldown && (ga_iShopMenuCooldown[client] > GameTime)) {
+	if (cooldown && (ga_fShopMenuCooldown[client] > GameTime)) {
 		PrintCenterText(client, "You must wait before opening the menu again.");
 		return;
 	}
 
-	ga_iShopMenuCooldown[client] = GameTime + MENU_COOLDOWN;
+	ga_fShopMenuCooldown[client] = GameTime + MENU_COOLDOWN;
 
 	if (ga_bPlayerRefund[client]) {
 		PrintCenterText(client, "Since you recently refunded or changed class, you can only purchase build points after the team completes the current objective.");
