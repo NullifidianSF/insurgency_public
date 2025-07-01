@@ -16,7 +16,6 @@
 #include <sourcemod>
 #include <sdktools>
 
-
 #define DAMAGE_NO 0
 #define DAMAGE_EVENTS_ONLY 1
 #define DAMAGE_YES 2
@@ -26,7 +25,7 @@ public Plugin myinfo = {
 	name = "marquis_fix",
 	author = "Nullifidian",
 	description = "Spawns invisible solid pillars within non-solid pillars.",
-	version = "1.0"
+	version = "1.1"
 };
 
 public void OnPluginStart() {
@@ -59,8 +58,7 @@ void CreateProp(float vPos[3], float vAng[3], char[] sModel) {
 		TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
 		DispatchKeyValue(prop, "disableshadows", "1");
 		DispatchKeyValue(prop, "disableshadowdepth", "1");
-		SetEntityRenderMode(prop, RENDER_TRANSCOLOR);
-		SetEntityRenderColor(prop, 255, 255, 255, 0);
+		SetEntityRenderMode(prop, RENDER_NONE);
 
 		DispatchSpawn(prop);
 		SetEntityMoveType(prop, MOVETYPE_NONE);
