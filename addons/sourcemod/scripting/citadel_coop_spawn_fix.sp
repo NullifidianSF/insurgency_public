@@ -24,8 +24,16 @@ public Plugin myinfo = {
 	name = "citadel_coop_spawn_fix",
 	author = "Nullifidian",
 	description = "Disables improperly placed security spawns on citadel_coop.",
-	version = "1.0"
+	version = "1.1"
 };
+
+public void OnMapStart() {
+	char sMapName[64];
+	GetCurrentMap(sMapName, sizeof(sMapName));
+	if (strcmp(sMapName, "citadel_coop", false) != 0) {
+		ServerCommand("sm plugins unload disabled/citadel_coop_spawn_fix");
+	}
+}
 
 public void OnPluginStart() {
 	HookEvent("round_start", Event_RoundStart_Pre, EventHookMode_Pre);
