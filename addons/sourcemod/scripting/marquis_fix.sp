@@ -25,11 +25,19 @@ public Plugin myinfo = {
 	name = "marquis_fix",
 	author = "Nullifidian",
 	description = "Spawns invisible solid pillars within non-solid pillars.",
-	version = "1.1"
+	version = "1.2"
 };
 
 public void OnPluginStart() {
 	HookEvent("round_start", Event_RoundStart);
+}
+
+public void OnMapStart() {
+	char sMapName[64];
+	GetCurrentMap(sMapName, sizeof(sMapName));
+	if (strcmp(sMapName, "marquis", false) != 0) {
+		ServerCommand("sm plugins unload disabled/marquis_fix");
+	}
 }
 
 public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
