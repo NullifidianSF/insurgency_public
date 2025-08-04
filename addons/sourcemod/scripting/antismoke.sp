@@ -39,7 +39,7 @@ public Plugin myinfo = {
 	name = "antismoke",
 	author = "Nullifidian",
 	description = "Makes players and bots cough in smoke and triggers other effects if they are not wearing a gas mask or are not in focus (holding breath).",
-	version = "1.1",
+	version = "1.2",
 	url = ""
 };
 
@@ -52,22 +52,6 @@ public void OnPluginStart() {
 	g_iPlayerEquipGear = FindSendPropInfo("CINSPlayer", "m_EquippedGear");
 	if (g_iPlayerEquipGear == -1) {
 		SetFailState("Offset \"m_EquippedGear\" not found!");
-	}
-
-	char sBuffer[64];
-	for (int i = 1; i <= 2; i++) {
-		FormatEx(sBuffer, sizeof(sBuffer), "player/voice/bot/ins_bot_idle_cough_0%d.ogg", i);
-		PrecacheSound(sBuffer);
-	}
-
-	for (int i = 11; i <= 16; i++) {
-		FormatEx(sBuffer, sizeof(sBuffer), "player/voice/bot/investigating%d.ogg", i);
-		PrecacheSound(sBuffer);
-	}
-
-	for (int i = 10; i <= 15; i++) {
-		FormatEx(sBuffer, sizeof(sBuffer), "player/voice/bot/fire%d.ogg", i);
-		PrecacheSound(sBuffer);
 	}
 
 	ga_hDetonatedSmokeRef = new ArrayList();
@@ -110,6 +94,7 @@ public void OnPluginStart() {
 
 public void OnMapStart() {
 	ResetGlobalNadeCooldowns();
+	PrecacheSounds();
 	CreateTimer(1.0, TimerR_SmokeCheck, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 
@@ -260,7 +245,6 @@ Action TimerR_SmokeCheck(Handle timer) {
 			if (--ga_iSoundCoughCd[i] <= 0) {
 				if (!IsFakeClient(i)) {
 					ga_iPlayerCoughedNearNadeRef[i] = EntIndexToEntRef(iEnt);
-					//PrintHintText(i, "You are giving away your position! Hold your breath (focus: aim + sprint)");
 					if (g_bShake) {
 						Client_Shake(i, SHAKE_START, 1.0, 150.0, 1.0);
 					}
@@ -332,6 +316,31 @@ void ConfirmEquipment(int client) {
 	ga_iConfirmedHelmet[client] = GetEntData(client, g_iPlayerEquipGear + (4 * 1));
 }
 
+void PrecacheSounds() {
+	char sBuffer[64];
+	for (int i = 1; i <= 2; i++) {
+		FormatEx(sBuffer, sizeof(sBuffer), "player/voice/bot/ins_bot_idle_cough_0%d.ogg", i);
+		PrecacheSound(sBuffer);
+	}
+
+	for (int i = 11; i <= 16; i++) {
+		FormatEx(sBuffer, sizeof(sBuffer), "player/voice/bot/investigating%d.ogg", i);
+		PrecacheSound(sBuffer);
+	}
+
+	for (int i = 10; i <= 15; i++) {
+		FormatEx(sBuffer, sizeof(sBuffer), "player/voice/bot/fire%d.ogg", i);
+		PrecacheSound(sBuffer);
+	}
+}
+
+void ResetGlobalNadeCooldowns() {
+	for (int i = 0; i <= MAX_ENTITIES; i++) {
+		ga_fSoundNadeInvestCd[i] = 0.0;
+		ga_fSoundNadeFireCd[i] = 0.0;
+	}
+}
+
 void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
 	if (convar == g_cvCough) {
 		g_iCough = g_cvCough.IntValue;
@@ -341,12 +350,5 @@ void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue
 	}
 	else if (convar == g_cvShake) {
 		g_bShake = g_cvShake.BoolValue;
-	}
-}
-
-void ResetGlobalNadeCooldowns() {
-	for (int i = 0; i <= MAX_ENTITIES; i++) {
-		ga_fSoundNadeInvestCd[i] = 0.0;
-		ga_fSoundNadeFireCd[i] = 0.0;
 	}
 }
