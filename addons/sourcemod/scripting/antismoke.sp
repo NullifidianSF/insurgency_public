@@ -268,7 +268,7 @@ Action TimerR_SmokeCheck(Handle timer) {
 					GetClientAbsOrigin(k, fTargetPos);
 					fTempDistance = GetVectorDistance(fPlayerPos, fTargetPos);
 					
-					if (fTempDistance < fNearestDistance || fNearestDistance == -1) {
+					if (fTempDistance < fNearestDistance || fNearestDistance == -1.0) {
 						fNearestDistance = fTempDistance;
 						iNearestBot = k;
 					}
