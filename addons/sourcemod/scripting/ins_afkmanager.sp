@@ -4,7 +4,7 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PL_VERSION		"1.0"
+#define PL_VERSION		"1.1"
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
@@ -94,6 +94,7 @@ public void OnPluginStart() {
 				ResetPlayerGlobalsLate(i);
 		}
 		g_iNumberHumanPlayersInGame = HumanCountInGame();
+		g_iPlayerResource = -1;
 	}
 
 	RegAdminCmd("sm_spec", cmd_spec, ADMFLAG_KICK, "sm_spec <#userid|name|@all> - Move target(s) to spectator");
@@ -111,10 +112,6 @@ public Action ChangeLevelListener(int client, const char[] command, int argc) {
 public void OnMapStart() {
 	g_bIsMapChanging = false;
 	g_bIsGameEnd = false;
-	g_iPlayerResource = GetPlayerResourceEntity();
-	if (g_iPlayerResource == -1)
-		LogError("\"GetPlayerResourceEntity()\" not found!");
-
 	BuildLogFilePath();
 	PurgeOldLogs();
 }
@@ -386,8 +383,7 @@ public Action cmd_spec(int client, int args) {
 		moved++;
 	}
 
-	ReplyToCommand(client, "[SM] %s - moved: %d, already spectator: %d.",
-				targetName, moved, already);
+	ReplyToCommand(client, "[SM] %s - moved: %d, already spectator: %d.", targetName, moved, already);
 	return Plugin_Handled;
 }
 
