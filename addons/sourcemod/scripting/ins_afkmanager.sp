@@ -39,7 +39,6 @@ stock const char COL_SILVER[]	= "\x07C0C0C0";
 stock const char COL_GREY[]		= "\x07BEBEBE";
 stock const char COL_GOLD[]		= "\x07FFD700";
 
-int g_iPlayerResource							= -1;
 int g_iNumberHumanPlayersInGame					= 0;
 int ga_iPlayerLastButtons[MAXPLAYERS + 1]		= {0, ...};
 int ga_iPlayerTeam[MAXPLAYERS + 1]				= {0, ...};
@@ -85,16 +84,14 @@ public void OnPluginStart() {
 		PL_VERSION, gc_fTimeBeforeMoveToSpec, gc_fTimeBeforeKick, gc_fTimeBeforeActionWarn, gc_bIsDeadPlayersExcluded, gc_bIsActionsAnnouncedToAll, gc_bIsAdminsImmuneToKick);
 
 	if (g_bIsLateLoad) {
-		g_iPlayerResource = GetPlayerResourceEntity();
-		if (g_iPlayerResource == -1)
-			LogError("\"GetPlayerResourceEntity()\" not found!");
-
+		int pr = GetPlayerResourceEntity();
+		bool hasSquadProp = (pr != -1) && HasEntProp(pr, Prop_Send, "m_iSquad");
+		float now = GetGameTime();
 		for (int i = 1; i <= MaxClients; i++) {
 			if (IsHumanClientInGame(i))
-				ResetPlayerGlobalsLate(i);
+				ResetPlayerGlobalsLate(i, pr, hasSquadProp, now);
 		}
 		g_iNumberHumanPlayersInGame = HumanCountInGame();
-		g_iPlayerResource = -1;
 	}
 
 	RegAdminCmd("sm_spec", cmd_spec, ADMFLAG_KICK, "sm_spec <#userid|name|@all> - Move target(s) to spectator");
@@ -289,16 +286,16 @@ void ResetPlayerGlobals(int client) {
 	ga_bIsPlayerPickedSquad[client] = false;
 }
 
-void ResetPlayerGlobalsLate(int client) {
+void ResetPlayerGlobalsLate(int client, int pr, bool hasSquadProp, float now) {
 	ga_iPlayerTeam[client] = GetClientTeam(client);
 
-	if (g_iPlayerResource != -1 && HasEntProp(g_iPlayerResource, Prop_Send, "m_iSquad"))
-		ga_bIsPlayerPickedSquad[client] = (GetEntProp(g_iPlayerResource, Prop_Send, "m_iSquad", _, client) > -1);
+	if (pr != -1 && hasSquadProp) {
+		int squad = GetEntProp(pr, Prop_Send, "m_iSquad", _, client);
+		ga_bIsPlayerPickedSquad[client] = (squad > -1);
+	}
 	else ga_bIsPlayerPickedSquad[client] = false;
 
-	if (ga_fTimePlayerLastActive[client] <= 0.0)
-		ga_fTimePlayerLastActive[client] = GetGameTime();
-
+	ga_fTimePlayerLastActive[client] = now;
 	ga_iPlayerLastButtons[client] = 0;
 	ga_fTimeToNextWarning[client] = 0.0;
 	ga_fPlayerNextAfkScanAt[client] = 0.0;
