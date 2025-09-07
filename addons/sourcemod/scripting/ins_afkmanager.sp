@@ -81,9 +81,6 @@ public void OnPluginStart() {
 	AddCommandListener(ChangeLevelListener, "map");
 	AddCommandListener(ChangeLevelListener, "sm_map");
 
-	LogAFK("[AFK] plugin loaded. PL_VERSION=%s, MOVE=%.1f, KICK=%.1f, WARN=%.1f, EXCLUDE_DEAD=%d, ANNOUNCE_ALL=%d, ADMINS_IMMUNE=%d", 
-		PL_VERSION, gc_fTimeBeforeMoveToSpec, gc_fTimeBeforeKick, gc_fTimeBeforeActionWarn, gc_bIsDeadPlayersExcluded, gc_bIsActionsAnnouncedToAll, gc_bIsAdminsImmuneToKick);
-
 	if (g_bIsLateLoad) {
 		int pr = GetPlayerResourceEntity();
 		bool hasSquadProp = (pr != -1) && HasEntProp(pr, Prop_Send, "m_iSquad");
