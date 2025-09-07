@@ -4,7 +4,7 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PL_VERSION		"1.2"
+#define PL_VERSION		"1.3"
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
@@ -19,9 +19,9 @@ static const int gc_iMinPlayersInGameBeforeMove		= 2;		// def = 2
 static const int gc_iMinPlayersInGameBeforeKick		= 10;		// def = 10
 static const int gc_iNumberOfDaysToKeepLogs			= 7;		// def = 7
 
-static const bool gc_bIsDeadPlayersExcluded			= true;
-static const bool gc_bIsAdminsImmuneToKick			= true;
-static const bool gc_bIsActionsAnnouncedToAll		= true;
+static const bool gc_bIsDeadPlayersExcluded			= true;		// def = true
+static const bool gc_bIsAdminsImmuneToKick			= true;		// def = true
+static const bool gc_bIsActionsAnnouncedToAll		= true;		// def = true
 
 stock const char COL_RESET[]	= "\x01";
 stock const char COL_TEAM[]		= "\x03";
@@ -72,9 +72,6 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 
 public void OnPluginStart() {
 	LoadTranslations("common.phrases");
-
-	BuildLogFilePath();
-	PurgeOldLogs();
 
 	HookEvent("player_team",		Event_PlayerTeam);
 	HookEvent("player_pick_squad",	Event_PlayerPickSquad);
@@ -127,7 +124,7 @@ public void OnClientPostAdminCheck(int client) {
 	ResetPlayerGlobals(client);
 	g_iNumberHumanPlayersInGame = HumanCountInGame();
 
-	if (g_iNumberHumanPlayersInGame > 0 && g_hNowTimer == null)
+	if (g_iNumberHumanPlayersInGame > 0)
 		AFK_StartNowTimer();
 }
 
@@ -206,6 +203,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 	}
 
 	if (gc_fTimeBeforeKick > 0.0 && g_iNumberHumanPlayersInGame >= gc_iMinPlayersInGameBeforeKick && idle >= gc_fTimeBeforeKick && !g_bIsGameEnd) {
+		if (gc_bIsAdminsImmuneToKick && IsAfkClientAdmin(client)) return Plugin_Continue;
 		KickForAFK(client, idle);
 		return Plugin_Continue;
 	}
@@ -244,8 +242,6 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 }
 
 void MovePlayerToSpectator(int client, float idle) {
-	if (!IsHumanClientInGame(client)) return;
-
 	ChangeClientTeam(client, TEAM_SPECTATOR);
 
 	char name[MAX_NAME_LENGTH];
@@ -263,10 +259,6 @@ void MovePlayerToSpectator(int client, float idle) {
 }
 
 void KickForAFK(int client, float idle) {
-	if (!IsHumanClientInGame(client)) return;
-
-	if (gc_bIsAdminsImmuneToKick && IsAfkClientAdmin(client)) return;
-
 	char name[MAX_NAME_LENGTH];
 	GetClientName(client, name, sizeof(name));
 
