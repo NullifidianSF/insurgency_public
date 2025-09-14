@@ -30,7 +30,7 @@ public Plugin myinfo = {
 	name		= "iron_dome",
 	author		= "Nullifidian",
 	description	= "The portable Iron Dome defence system that designed to destroy hostile RPGs and grenades",
-	version		= "1.7",
+	version		= "1.8",
 	url			= ""
 };
 
@@ -77,7 +77,7 @@ public void OnMapStart() {
 	PrecacheSound(SND_EXPLODE, true);
 	PrecacheSound(SND_TAKE, true);
 	g_iBeaconBeam = PrecacheModel("sprites/laserbeam.vmt");
-	g_iBeaconHalo = PrecacheModel("sprites/halo01.vmt");
+	g_iBeaconHalo = PrecacheModel("sprites/glow01.vmt");
 	CreateTimer(0.1, TimerR_IronDome, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 
@@ -263,6 +263,7 @@ Action Timer_KillParticle(Handle timer, int entRef) {
 	if (iParticle != INVALID_ENT_REFERENCE && IsValidEntity(iParticle)) {
 		RemoveEntity(iParticle);
 	}
+	return Plugin_Stop;
 }
 
 void ConfirmEquipment(int client) {
