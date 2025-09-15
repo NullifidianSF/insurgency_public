@@ -5,56 +5,58 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define MAXENTITIES				2048
-#define MAX_BUTTONS				29
+#define PL_VERSION		"2.13"
 
-#define INS_PL_BUYZONE			(1 << 7)
-#define INS_DEPLOY_BIPOD		(1 << 1)
-#define INS_ATTACK1				(1 << 0)
-#define INS_JUMP				(1 << 1)
-#define INS_DUCK				(1 << 2)
-#define INS_PRONE				(1 << 3)
-#define INS_FORWARD				(1 << 4)
-#define INS_BACKWARD			(1 << 5)
-#define INS_USE					(1 << 6)
-#define INS_LEFT				(1 << 9)
-#define INS_RIGHT				(1 << 10)
-#define INS_RELOAD				(1 << 11)
-#define INS_FIREMODE			(1 << 12)
-#define INS_LEAN_LEFT			(1 << 13)
-#define INS_LEAN_RIGHT			(1 << 14)
-#define INS_SPRINT				(1 << 15)
-#define INS_WALK				(1 << 16)
-#define INS_SPECIAL1			(1 << 17)
-#define INS_AIM					(1 << 18)
-#define INS_SCOREBOARD			(1 << 19)
-#define INS_FLASHLIGHT			(1 << 22)
-#define INS_AIM_TOGGLE			(1 << 27)
-#define INS_ACCESSORY			(1 << 28)
+#define MAXENTITIES		2048
+#define MAX_BUTTONS		29
 
-#define DAMAGE_NO				0
-#define DAMAGE_EVENTS_ONLY		1
-#define DAMAGE_YES				2
-#define DAMAGE_AIM				3
+#define BTN_ATTACK1		(1 << 0)
+#define BTN_JUMP		(1 << 1)
+#define BTN_DUCK		(1 << 2)
+#define BTN_FORWARD		(1 << 4)
+#define BTN_BACKWARD	(1 << 5)
+#define BTN_USE			(1 << 6)
+#define BTN_LEFT		(1 << 9)
+#define BTN_RIGHT		(1 << 10)
+#define BTN_RELOAD		(1 << 11)
+#define BTN_FIREMODE	(1 << 12)
+#define BTN_LEAN_LEFT	(1 << 13)
+#define BTN_LEAN_RIGHT	(1 << 14)
+#define BTN_SPRINT		(1 << 15)
+#define BTN_WALK		(1 << 16)
+#define BTN_SPECIAL1	(1 << 17)
+#define BTN_AIM			(1 << 18)
+#define BTN_SCOREBOARD	(1 << 19)
+#define BTN_FLASHLIGHT	(1 << 22)
+#define BTN_AIM_TOGGLE	(1 << 27)
+#define BTN_ACCESSORY	(1 << 28)
 
-#define STARTBUILDPOINTS		3		// Free starting build points for all players
+#define PF_DEPLOY_BIPOD	(1 << 1)
+#define PF_BUYZONE		(1 << 7)
 
-#define PROP_ALPHA				125
-#define PROP_ROTATE_STEP		10.0
-#define PROP_DAMAGE_TAKE		100.0	// Amount of damage the prop takes each time a bot touches it, limited by PROP_TOUCH_COOLDOWN.
-#define PROP_TOUCH_COOLDOWN		0.50
-#define PROP_GLOWHP_PERCENT		0.25
-#define PROP_HEALTH				6000
-#define PROP_HOLD_DISTANCE		120.0
-#define PROP_LIMIT				10		// Prop limit per player
-#define PROP_PLAYER_DISTANCE	50.0
-#define PROP_MIN_BOT_DISTANCE	200.0	// If a bot spawns at this distance from the prop, the prop will be destroyed.
-#define PROP_MIN_BOT_VERT_DISTANCE 80.0	// If a bot spawns at this vertical distance from the prop, the prop will be destroyed.
+#define DAMAGE_NO					0
+#define DAMAGE_EVENTS_ONLY			1
+#define DAMAGE_YES					2
+#define DAMAGE_AIM					3
 
-#define BOT_BLEED_WIREDAMAGE	10.0	// Amount of bleed damage bot takes from a barbed wire
+#define STARTBUILDPOINTS			3		// Free starting build points for all players
 
-#define MENU_COOLDOWN			1.0
-#define MENU_STAYOPENTIME		10
+#define PROP_ALPHA					125
+#define PROP_ROTATE_STEP			10.0
+#define PROP_DAMAGE_TAKE			100.0	// Amount of damage the prop takes each time a bot touches it, limited by PROP_TOUCH_COOLDOWN.
+#define PROP_TOUCH_COOLDOWN			0.50
+#define PROP_GLOWHP_PERCENT			0.25
+#define PROP_HEALTH					6000
+#define PROP_HOLD_DISTANCE			120.0
+#define PROP_LIMIT					10		// Prop limit per player
+#define PROP_PLAYER_DISTANCE		50.0
+#define PROP_MIN_BOT_DISTANCE		200.0	// If a bot spawns at this distance from the prop, the prop will be destroyed.
+#define PROP_MIN_BOT_VERT_DISTANCE	80.0	// If a bot spawns at this vertical distance from the prop, the prop will be destroyed.
+
+#define BOT_BLEED_WIREDAMAGE		10.0	// Amount of bleed damage bot takes from a barbed wire
+
+#define MENU_COOLDOWN				1.0
+#define MENU_STAYOPENTIME			10
 
 #define SND_SUPPLYREFUND		"ui/receivedsupply.wav"
 #define SND_BUYBUILDPOINTS		"ui/menu_click.wav"
@@ -87,6 +89,23 @@ enum struct PropDef {
 	bool blocksExplosive;
 }
 
+enum PropId {
+	Prop_BarbWire = 0,
+	Prop_SandbagWall,
+	Prop_TWall,
+	Prop_HescoBasket,
+	Prop_PanjStairs,
+	Prop_Mattress,
+	Prop_ContainerOpen2,
+	Prop_EmbassyCenter02,
+	Prop_IedJammer,
+	Prop_AmmoCacheSmall,
+	
+	Prop_Count
+};
+
+#define MID(%1) (view_as<int>(%1))
+
 static const PropDef g_PropDefs[] = {
 	{ "models/fortifications/barbed_wire_02b.mdl",			2, false },
 	{ "models/static_fortifications/sandbagwall01.mdl",		1, true },
@@ -101,12 +120,11 @@ static const PropDef g_PropDefs[] = {
 };
 
 #define PROP_COUNT (sizeof(g_PropDefs))
+PropId ga_iModelIndex[MAXPLAYERS + 1] = {Prop_BarbWire, ...};
 
 char ga_sLastInflictorModel[MAXPLAYERS + 1][PLATFORM_MAX_PATH];
 
 int ga_iPropHolding[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
-int ga_iModelIndex[MAXPLAYERS + 1] = {0, ...};
-int g_iSpawnTime;
 int ga_iLastButtons[MAXPLAYERS + 1];
 int ga_iLastInflictor[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
 int ga_iEntIdBipodDeployedOn[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
@@ -137,7 +155,7 @@ public Plugin myinfo = {
 	name = "props",
 	author = "Nullifidian",
 	description = "Spawn props",
-	version = "2.11",
+	version = PL_VERSION,
 	url = ""
 };
 
@@ -147,16 +165,20 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 }
 
 public void OnPluginStart() {
-	g_iSpawnTime = FindSendPropInfo("CINSPlayer", "m_flSpawnTime");
-	if (g_iSpawnTime == -1)
-		SetFailState("Offset \"m_flSpawnTime\" not found!");
+	int enumCount  = view_as<int>(Prop_Count);
+	int arrayCount = PROP_COUNT;
+
+	if (enumCount != arrayCount) {
+		SetFailState("PropId count (%d) != g_PropDefs count (%d). Update the enum or the array order.", enumCount, arrayCount);
+		return;
+	}
+		
 	SetupConVars();
 
 	HookEvent("player_spawn", Event_PlayerSpawn);
 	HookEvent("player_death", Event_PlayerDeath_Pre, EventHookMode_Pre);
 	HookEvent("round_start", Event_RoundStart);
 	HookEvent("player_pick_squad", Event_PlayerPickSquad);
-
 	HookEvent("object_destroyed", Event_ObjectiveDone, EventHookMode_PostNoCopy);
 	HookEvent("controlpoint_captured", Event_ObjectiveDone, EventHookMode_PostNoCopy);
 
@@ -288,7 +310,7 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 	return Plugin_Continue;
 }
 
-public Action Event_PlayerSpawn(Event event, char[] name, bool dontBroadcast) {
+public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast) {
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	if (client < 1)
 		return Plugin_Continue;
@@ -431,7 +453,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 }
 
 void OnButtonPress(int client, int button, float vel[3]) {
-	if (button & INS_JUMP) {
+	if (button & BTN_JUMP) {
 		float GameTime = GetGameTime();
 		if (GameTime - ga_fPressedJumpTime[client] <= 1.0)
 			ga_fPressedJumpTime[client] = 0.0;
@@ -439,13 +461,13 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			ga_fPressedJumpTime[client] = GameTime;
 	}
 
-	if ((button & INS_SPRINT) || (button & INS_ATTACK1)) {
+	if ((button & BTN_SPRINT) || (button & BTN_ATTACK1)) {
 		StopHolding(client);
 		CloseAllPropMenus(client);
 		return;
 	}
 
-	if (button & INS_SPECIAL1) {
+	if (button & BTN_SPECIAL1) {
 		if (!ga_bHoldingMeleeWeapon[client]) {
 			if (WeaponWithBipod(client)) {
 				switch (ga_bBipodForced[client]) {
@@ -501,7 +523,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 	}
 
 	if (ga_bBipodForced[client]) {
-		if ((button & INS_JUMP) || (button & INS_DUCK) || (button & INS_FORWARD) || (button & INS_BACKWARD) || (button & INS_LEFT) || (button & INS_RIGHT)) {
+		if ((button & BTN_JUMP) || (button & BTN_DUCK) || (button & BTN_FORWARD) || (button & BTN_BACKWARD) || (button & BTN_LEFT) || (button & BTN_RIGHT)) {
 			ga_bBipodForced[client] = false;
 			ga_iEntIdBipodDeployedOn[client] = 0;
 		}
@@ -510,14 +532,14 @@ void OnButtonPress(int client, int button, float vel[3]) {
 	if (!ga_bHoldingMeleeWeapon[client])
 		return;
 
-	if (button & INS_FIREMODE) {
+	if (button & BTN_FIREMODE) {
 		if (ga_iPropHolding[client] == INVALID_ENT_REFERENCE) {
 			OpenShopMenu(client);
 			return;
 		}
 	}
 
-	if ((button & INS_AIM) || (button & INS_AIM_TOGGLE)) {
+	if ((button & BTN_AIM) || (button & BTN_AIM_TOGGLE)) {
 		if (!ga_bHoldingMeleeWeapon[client])
 			return;
 
@@ -564,7 +586,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 
 				int health = GetEntProp(target, Prop_Data, "m_iHealth");
 				RemoveEntity(target);
-				ga_iModelIndex[client] = GetNumber(sName, "_m#");
+				ga_iModelIndex[client] = view_as<PropId>(GetNumber(sName, "_m#"));
 				ga_iPropOwner[client] = propOwner;
 				CreateProp(client, vPos, vAng, health);
 			}
@@ -623,8 +645,9 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 		return;
 	}
 
-	int modelIndex = ga_iModelIndex[client], buildCost;
-	buildCost = (g_iAllFree == 1) ? 0 : g_PropDefs[modelIndex].cost;
+	PropId modelId = ga_iModelIndex[client];
+	int mid = MID(modelId);
+	int buildCost = (g_iAllFree == 1) ? 0 : g_PropDefs[mid].cost;
 
 	if (!ga_iPropOwner[client] && !HasEnoughResources(client, buildCost)) {
 		if (solid) {
@@ -632,8 +655,9 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 			return;
 		}
 		else if (SetModelIndex(client)) {
-			modelIndex = ga_iModelIndex[client];
-			buildCost = g_PropDefs[modelIndex].cost;
+			modelId = ga_iModelIndex[client];
+			mid = MID(modelId);
+			buildCost = g_PropDefs[mid].cost;
 		}
 		else {
 			PrintCenterText(client, "You don't have enough resources to build. Press 'Cycle Firemode' to open the shop menu.");
@@ -644,7 +668,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 	int prop = CreateEntityByName("prop_dynamic_override");
 	if (prop != -1) {
 		DispatchKeyValue(prop, "physdamagescale", "0.0");
-		DispatchKeyValue(prop, "model", g_PropDefs[modelIndex].model);
+		DispatchKeyValue(prop, "model", g_PropDefs[mid].model);
 		if (solid) {
 			char PropName[64];
 			DispatchKeyValue(prop, "solid", "6");
@@ -652,20 +676,20 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 			if (!ga_iPropOwner[client]) {
 				ga_iPlayerBuildPoints[client] -= buildCost;
 				ClearOldestPropIfLimitReached(client);
-				TeleportEntity(prop, vPos, ga_fPropRotations[client][modelIndex], NULL_VECTOR);
+				TeleportEntity(prop, vPos, ga_fPropRotations[client][mid], NULL_VECTOR);
 
 				if (ga_hPropPlaced[client] == null)
 					ga_hPropPlaced[client] = new ArrayList();
 
 				ga_hPropPlaced[client].Push(EntIndexToEntRef(prop));
-				FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", client, modelIndex);
+				FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", client, mid);
 			}
 			else {
 				TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
 
 				if (ga_hPropPlaced[ga_iPropOwner[client]] != null) {
 					ga_hPropPlaced[ga_iPropOwner[client]].Push(EntIndexToEntRef(prop));
-					FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", ga_iPropOwner[client], modelIndex);
+					FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", ga_iPropOwner[client], mid);
 				}
 				else {
 					ClearOldestPropIfLimitReached(client);
@@ -674,13 +698,13 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 						ga_hPropPlaced[client] = new ArrayList();
 
 					ga_hPropPlaced[client].Push(EntIndexToEntRef(prop));
-					FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", client, modelIndex);
+					FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", client, mid);
 					oldhealth = 0;
 				}
 				ga_iPropOwner[client] = 0;
 			}
 
-			if (strcmp(g_PropDefs[modelIndex].model, "models/sernix/ammo_cache/ammo_cache_small.mdl") == 0) {
+			if (strcmp(g_PropDefs[mid].model, "models/sernix/ammo_cache/ammo_cache_small.mdl") == 0) {
 				SetVariantColor({255, 255, 102, 255});
 				SetEntityRenderMode(prop, RENDER_NORMAL);
 				SetEntityRenderColor(prop, 255, 255, 255, 255);
@@ -689,7 +713,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 				SetEntPropFloat(prop, Prop_Send, "m_flGlowMaxDist", 1600.0);
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
 			}
-			else if (strcmp(g_PropDefs[modelIndex].model, "models/sernix/ied_jammer/ied_jammer.mdl") == 0) {
+			else if (strcmp(g_PropDefs[mid].model, "models/sernix/ied_jammer/ied_jammer.mdl") == 0) {
 				SetVariantColor({80, 210, 255, 255});
 				SetEntityRenderMode(prop, RENDER_NORMAL);
 				AcceptEntityInput(prop, "SetGlowColor");
@@ -697,10 +721,12 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 				SetEntPropFloat(prop, Prop_Send, "m_flGlowMaxDist", 600.0);
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
 			}
-			else if (strcmp(g_PropDefs[modelIndex].model, "models/fortifications/barbed_wire_02b.mdl") == 0)
+			else if (strcmp(g_PropDefs[mid].model, "models/fortifications/barbed_wire_02b.mdl") == 0) {
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchWire);
-			else if (strcmp(g_PropDefs[modelIndex].model, "models/static_afghan/prop_interior_mattress_a.mdl") == 0)
+			}
+			else if (strcmp(g_PropDefs[mid].model, "models/static_afghan/prop_interior_mattress_a.mdl") == 0) {
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchMattress);
+			}
 			else
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
 
@@ -724,7 +750,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 				OpenRotationMenu(client);
 			}
 			else
-				TeleportEntity(prop, vPos, ga_fPropRotations[client][modelIndex], NULL_VECTOR);
+				TeleportEntity(prop, vPos, ga_fPropRotations[client][mid], NULL_VECTOR);
 		}
 
 		DispatchSpawn(prop);
@@ -924,8 +950,9 @@ public Action PlayerOnTakeDamage(int victim, int &attacker, int &inflictor, floa
 					return Plugin_Continue;
 				}
 
-				GetModelName(sModelName, sModelName, sizeof(sModelName));
-				PrintCenterText(victim, "A %s shielded you from the explosion!", sModelName);
+				char shortName[64];
+				GetModelName(sModelName, shortName, sizeof(shortName));
+				PrintCenterText(victim, "A %s shielded you from the explosion!", shortName);
 				CloseHandle(trace);
 				return Plugin_Handled;
 			}
@@ -1059,7 +1086,7 @@ public Action Timer_ForceDeployBipod(Handle timer, DataPack hDatapack) {
 
 	SetEntPropFloat(client, Prop_Send, "m_flPivotYaw", pivot);
 	SetEntPropFloat(client, Prop_Send, "m_flViewOffsetBipod", 55.0);
-	SetEntProp(client, Prop_Send, "m_iPlayerFlags", GetEntProp(client, Prop_Send, "m_iPlayerFlags") | INS_DEPLOY_BIPOD);
+	SetEntProp(client, Prop_Send, "m_iPlayerFlags", GetEntProp(client, Prop_Send, "m_iPlayerFlags") | PF_DEPLOY_BIPOD);
 	ga_bBipodForced[client] = true;
 	ga_iEntIdBipodDeployedOn[client] = sandbag;
 
@@ -1276,12 +1303,15 @@ void RestoreBuildPoints(int client) {
 }
 
 bool SetModelIndex(int client, bool found = false) {
-	int iArraySize = PROP_COUNT;
-	if (iArraySize > 0) {
-		for (int i = 0; i < iArraySize; i++) {
-			ga_iModelIndex[client] = (ga_iModelIndex[client] + 1) % iArraySize;
-			if (HasEnoughResources(client, g_PropDefs[ga_iModelIndex[client]].cost))
-				return (found = true);
+	int count = PROP_COUNT;
+	if (count > 0) {
+		int idx = MID(ga_iModelIndex[client]);
+		for (int i = 0; i < count; i++) {
+			idx = (idx + 1) % count;
+			if (HasEnoughResources(client, g_PropDefs[idx].cost)) {
+				ga_iModelIndex[client] = view_as<PropId>(idx);
+				return true;
+			}
 		}
 	}
 	return found;
@@ -1363,7 +1393,7 @@ public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, in
 
 		int selectedIndex = StringToInt(indexStr);
 		if (selectedIndex >= 0 && selectedIndex < PROP_COUNT) {
-			ga_iModelIndex[client] = selectedIndex;
+			ga_iModelIndex[client] = view_as<PropId>(selectedIndex);
 
 			char modelName[64];
 			GetModelName(g_PropDefs[selectedIndex].model, modelName, sizeof(modelName));
@@ -1461,9 +1491,10 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 		SetEntPropVector(ent, Prop_Send, "m_angRotation", vRot);
 		PrintCenterText(client, "Rotation: Yaw: %.1f°, Pitch: %.1f°, Roll: %.1f°", vRot[1], vRot[0], vRot[2]);
 
-		ga_fPropRotations[client][ga_iModelIndex[client]][0] = vRot[0];
-		ga_fPropRotations[client][ga_iModelIndex[client]][1] = vRot[1];
-		ga_fPropRotations[client][ga_iModelIndex[client]][2] = vRot[2];
+		int mid = MID(ga_iModelIndex[client]);
+		ga_fPropRotations[client][mid][0] = vRot[0];
+		ga_fPropRotations[client][mid][1] = vRot[1];
+		ga_fPropRotations[client][mid][2] = vRot[2];
 
 		OpenRotationMenu(client);
 	}
