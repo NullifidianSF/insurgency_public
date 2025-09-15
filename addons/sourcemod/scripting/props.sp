@@ -81,44 +81,26 @@ char ga_sLmgWeapons[][] = {
 	"weapon_KACStonerA1"
 };
 
-char ga_sModel[][] = {
-	"models/fortifications/barbed_wire_02b.mdl",
-	"models/static_fortifications/sandbagwall01.mdl",
-	"models/iraq/ir_twall_01.mdl",
-	"models/iraq/ir_hesco_basket_01_row.mdl",
-	"models/static_afghan/prop_panj_stairs.mdl",
-	"models/static_afghan/prop_interior_mattress_a.mdl",
-	"models/static_props/container_01_open2.mdl",
-	"models/embassy/embassy_center_02.mdl",
-	"models/sernix/ied_jammer/ied_jammer.mdl",
-	"models/sernix/ammo_cache/ammo_cache_small.mdl"
+enum struct PropDef {
+	char model[PLATFORM_MAX_PATH];
+	int  cost;
+	bool blocksExplosive;
+}
+
+static const PropDef g_PropDefs[] = {
+	{ "models/fortifications/barbed_wire_02b.mdl",			2, false },
+	{ "models/static_fortifications/sandbagwall01.mdl",		1, true },
+	{ "models/iraq/ir_twall_01.mdl",						3, true },
+	{ "models/iraq/ir_hesco_basket_01_row.mdl",				4, true },
+	{ "models/static_afghan/prop_panj_stairs.mdl",			1, false },
+	{ "models/static_afghan/prop_interior_mattress_a.mdl",	2, false },
+	{ "models/static_props/container_01_open2.mdl",			5, true },
+	{ "models/embassy/embassy_center_02.mdl",				6, true },
+	{ "models/sernix/ied_jammer/ied_jammer.mdl",			5, false },
+	{ "models/sernix/ammo_cache/ammo_cache_small.mdl",		8, false }
 };
 
-int ga_iModelCosts[sizeof(ga_sModel)] = {
-	2, // models/fortifications/barbed_wire_02b.mdl
-	1, // models/static_fortifications/sandbagwall01.mdl
-	3, // models/iraq/ir_twall_01.mdl
-	4, // models/iraq/ir_hesco_basket_01_row.mdl
-	1, // models/static_afghan/prop_panj_stairs.mdl
-	2, // models/static_afghan/prop_interior_mattress_a.mdl
-	5, // models/static_props/container_01_open2.mdl
-	6, // models/embassy/embassy_center_02.mdl
-	5, // models/sernix/ied_jammer/ied_jammer.mdl
-	8 // models/sernix/ammo_cache/ammo_cache_small.mdl
-};
-
-bool ga_bModelBlockExplosiveDamage[sizeof(ga_sModel)] = {
-	false, // models/fortifications/barbed_wire_02b.mdl
-	true, // models/static_fortifications/sandbagwall01.mdl
-	true, // models/iraq/ir_twall_01.mdl
-	true, // models/iraq/ir_hesco_basket_01_row.mdl
-	false, // models/static_afghan/prop_panj_stairs.mdl
-	false, // models/static_afghan/prop_interior_mattress_a.mdl
-	true, // models/static_props/container_01_open2.mdl
-	true, // models/embassy/embassy_center_02.mdl
-	false, // models/sernix/ied_jammer/ied_jammer.mdl
-	false // models/sernix/ammo_cache/ammo_cache_small.mdl
-};
+#define PROP_COUNT (sizeof(g_PropDefs))
 
 char ga_sLastInflictorModel[MAXPLAYERS + 1][PLATFORM_MAX_PATH];
 
@@ -144,7 +126,7 @@ bool ga_bBipodForced[MAXPLAYERS + 1] = {false, ...};
 bool ga_bPlayerRefund[MAXPLAYERS + 1] = {false, ...};
 bool ga_bFirstTimeJoinedSquad[MAXPLAYERS + 1] = {true, ...};
 
-float ga_fPropRotations[MAXPLAYERS + 1][sizeof(ga_sModel)][3];
+float ga_fPropRotations[MAXPLAYERS + 1][PROP_COUNT][3];
 float ga_fLastTouchTime[MAXPLAYERS + 1] = {0.0, ...};
 float ga_fPressedJumpTime[MAXPLAYERS + 1] = {0.0, ...};
 float ga_fPropMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
@@ -642,7 +624,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 	}
 
 	int modelIndex = ga_iModelIndex[client], buildCost;
-	buildCost = (g_iAllFree == 1) ? 0 : ga_iModelCosts[modelIndex];
+	buildCost = (g_iAllFree == 1) ? 0 : g_PropDefs[modelIndex].cost;
 
 	if (!ga_iPropOwner[client] && !HasEnoughResources(client, buildCost)) {
 		if (solid) {
@@ -651,7 +633,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 		}
 		else if (SetModelIndex(client)) {
 			modelIndex = ga_iModelIndex[client];
-			buildCost = ga_iModelCosts[modelIndex];
+			buildCost = g_PropDefs[modelIndex].cost;
 		}
 		else {
 			PrintCenterText(client, "You don't have enough resources to build. Press 'Cycle Firemode' to open the shop menu.");
@@ -662,7 +644,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 	int prop = CreateEntityByName("prop_dynamic_override");
 	if (prop != -1) {
 		DispatchKeyValue(prop, "physdamagescale", "0.0");
-		DispatchKeyValue(prop, "model", ga_sModel[modelIndex]);
+		DispatchKeyValue(prop, "model", g_PropDefs[modelIndex].model);
 		if (solid) {
 			char PropName[64];
 			DispatchKeyValue(prop, "solid", "6");
@@ -698,7 +680,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 				ga_iPropOwner[client] = 0;
 			}
 
-			if (strcmp(ga_sModel[modelIndex], "models/sernix/ammo_cache/ammo_cache_small.mdl") == 0) {
+			if (strcmp(g_PropDefs[modelIndex].model, "models/sernix/ammo_cache/ammo_cache_small.mdl") == 0) {
 				SetVariantColor({255, 255, 102, 255});
 				SetEntityRenderMode(prop, RENDER_NORMAL);
 				SetEntityRenderColor(prop, 255, 255, 255, 255);
@@ -707,7 +689,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 				SetEntPropFloat(prop, Prop_Send, "m_flGlowMaxDist", 1600.0);
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
 			}
-			else if (strcmp(ga_sModel[modelIndex], "models/sernix/ied_jammer/ied_jammer.mdl") == 0) {
+			else if (strcmp(g_PropDefs[modelIndex].model, "models/sernix/ied_jammer/ied_jammer.mdl") == 0) {
 				SetVariantColor({80, 210, 255, 255});
 				SetEntityRenderMode(prop, RENDER_NORMAL);
 				AcceptEntityInput(prop, "SetGlowColor");
@@ -715,9 +697,9 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 				SetEntPropFloat(prop, Prop_Send, "m_flGlowMaxDist", 600.0);
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
 			}
-			else if (strcmp(ga_sModel[modelIndex], "models/fortifications/barbed_wire_02b.mdl") == 0)
+			else if (strcmp(g_PropDefs[modelIndex].model, "models/fortifications/barbed_wire_02b.mdl") == 0)
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchWire);
-			else if (strcmp(ga_sModel[modelIndex], "models/static_afghan/prop_interior_mattress_a.mdl") == 0)
+			else if (strcmp(g_PropDefs[modelIndex].model, "models/static_afghan/prop_interior_mattress_a.mdl") == 0)
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchMattress);
 			else
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
@@ -956,9 +938,9 @@ public Action PlayerOnTakeDamage(int victim, int &attacker, int &inflictor, floa
 public bool TraceEntityFilterPlayers(int entity, int contentsMask, any data) { return (entity != data && (entity <= 0 || entity > MaxClients)); }
 
 bool ModelBlocksExplosion(const char[] sModelName) {
-	for (int i = 0; i < sizeof(ga_sModel); i++) {
-		if (strcmp(ga_sModel[i], sModelName) == 0)
-			return ga_bModelBlockExplosiveDamage[i];
+	for (int i = 0; i < PROP_COUNT; i++) {
+		if (strcmp(g_PropDefs[i].model, sModelName) == 0)
+			return g_PropDefs[i].blocksExplosive;
 	}
 	return false;
 }
@@ -1097,8 +1079,8 @@ public Action Hook_WeaponSwitch(int client, int entity) {
 }
 
 void PrecacheFiles() {
-	for (int i = 0; i < sizeof(ga_sModel); i++)
-		PrecacheModel(ga_sModel[i], true);
+	for (int i = 0; i < PROP_COUNT; i++)
+		PrecacheModel(g_PropDefs[i].model, true);
 
 	for (int i = 0; i < NUM_WIRESOUNDS; i++)
 		PrecacheSound(ga_sBarbWire[i], true);
@@ -1294,11 +1276,11 @@ void RestoreBuildPoints(int client) {
 }
 
 bool SetModelIndex(int client, bool found = false) {
-	int iArraySize = sizeof(ga_sModel);
+	int iArraySize = PROP_COUNT;
 	if (iArraySize > 0) {
 		for (int i = 0; i < iArraySize; i++) {
 			ga_iModelIndex[client] = (ga_iModelIndex[client] + 1) % iArraySize;
-			if (HasEnoughResources(client, ga_iModelCosts[ga_iModelIndex[client]]))
+			if (HasEnoughResources(client, g_PropDefs[ga_iModelIndex[client]].cost))
 				return (found = true);
 		}
 	}
@@ -1334,12 +1316,12 @@ void OpenPropSelectionMenu(int client) {
 
 	char itemBuffer[64], modelName[64], indexStr[8];
 
-	for (int i = 0; i < sizeof(ga_sModel); i++) {
-		if (g_iAllFree == 0 && !HasEnoughResources(client, ga_iModelCosts[i]))
+	for (int i = 0; i < PROP_COUNT; i++) {
+		if (g_iAllFree == 0 && !HasEnoughResources(client, g_PropDefs[i].cost))
 			continue;
 
-		GetModelName(ga_sModel[i], modelName, sizeof(modelName));
-		FormatEx(itemBuffer, sizeof(itemBuffer), "%s - Cost: %d", modelName, (g_iAllFree == 0 ? ga_iModelCosts[i] : 0));
+		GetModelName(g_PropDefs[i].model, modelName, sizeof(modelName));
+		FormatEx(itemBuffer, sizeof(itemBuffer), "%s - Cost: %d", modelName, (g_iAllFree == 0 ? g_PropDefs[i].cost : 0));
 		IntToString(i, indexStr, sizeof(indexStr));
 		propMenu.AddItem(indexStr, itemBuffer);
 	}
@@ -1350,12 +1332,12 @@ void OpenPropSelectionMenu(int client) {
 	propMenu.AddItem("98", "Open shop menu (Cycle Firemode)");
 
 	if (g_iAllFree == 0) {
-		for (int i = 0; i < sizeof(ga_sModel); i++) {
-			if (HasEnoughResources(client, ga_iModelCosts[i]))
+		for (int i = 0; i < PROP_COUNT; i++) {
+			if (HasEnoughResources(client, g_PropDefs[i].cost))
 				continue;
 
-			GetModelName(ga_sModel[i], modelName, sizeof(modelName));
-			FormatEx(itemBuffer, sizeof(itemBuffer), "%s - Cost: %d (Can't afford)", modelName, ga_iModelCosts[i]);
+			GetModelName(g_PropDefs[i].model, modelName, sizeof(modelName));
+			FormatEx(itemBuffer, sizeof(itemBuffer), "%s - Cost: %d (Can't afford)", modelName, g_PropDefs[i].cost);
 			IntToString(i, indexStr, sizeof(indexStr));
 			propMenu.AddItem(indexStr, itemBuffer, ITEMDRAW_DISABLED);
 		}
@@ -1380,12 +1362,12 @@ public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, in
 			return 0;
 
 		int selectedIndex = StringToInt(indexStr);
-		if (selectedIndex >= 0 && selectedIndex < sizeof(ga_sModel)) {
+		if (selectedIndex >= 0 && selectedIndex < PROP_COUNT) {
 			ga_iModelIndex[client] = selectedIndex;
 
 			char modelName[64];
-			GetModelName(ga_sModel[selectedIndex], modelName, sizeof(modelName));
-			PrintCenterText(client, "Selected prop: %s (Cost: %d)", modelName, ga_iModelCosts[selectedIndex]);
+			GetModelName(g_PropDefs[selectedIndex].model, modelName, sizeof(modelName));
+			PrintCenterText(client, "Selected prop: %s (Cost: %d)", modelName, g_PropDefs[selectedIndex].cost);
 
 			int ent = EntRefToEntIndex(ga_iPropHolding[client]);
 			if (ent <= MaxClients || !IsValidEntity(ent)) {
@@ -1486,7 +1468,7 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 		OpenRotationMenu(client);
 	}
 	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients)
-			ga_bPropRotateMenuOpen[client] = false;
+		ga_bPropRotateMenuOpen[client] = false;
 	return 0;
 }
 
