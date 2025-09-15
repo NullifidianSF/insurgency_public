@@ -5,7 +5,7 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PL_VERSION		"2.13"
+#define PL_VERSION		"2.14"
 
 #define MAXENTITIES		2048
 #define MAX_BUTTONS		29
@@ -1272,11 +1272,18 @@ public int RefundConfirmHandler(Menu menu, MenuAction action, int client, int pa
 	return 0;
 }
 
-void CloseAllPropMenus(int client) {
-	// if (GetClientMenu(client) != MenuSource_None)
-	// 	CancelClientMenu(client);
+bool AnyPropMenuFlagOpen(int client) {
+	return ga_bHelpMenuOpen[client] || ga_bPropRotateMenuOpen[client] || ga_bBuildMenuOpen[client] || ga_bShopMenuOpen[client];
+}
 
-	ClientCommand(client, "slot9");
+void CloseAllPropMenus(int client, bool sendSlot9IfNeeded = true) {
+	bool hadSmMenu = (GetClientMenu(client) != MenuSource_None);
+	if (hadSmMenu)
+		CancelClientMenu(client);
+
+	bool hadOurFlags = AnyPropMenuFlagOpen(client);
+	if (sendSlot9IfNeeded && (hadSmMenu || hadOurFlags)) 
+		ClientCommand(client, "slot9");
 
 	ga_bHelpMenuOpen[client] = false;
 	ga_bPropRotateMenuOpen[client] = false;
@@ -1420,7 +1427,7 @@ public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, in
 			OpenRotationMenu(client);
 		}
 		else if (selectedIndex == 99)
-			DeconstructAllProps(client);
+			OpenDeconstructConfirmMenu(client);
 		else if (selectedIndex == 98) {
 			if (ga_iPropHolding[client] != INVALID_ENT_REFERENCE)
 				StopHolding(client);
@@ -1500,6 +1507,41 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 	}
 	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients)
 		ga_bPropRotateMenuOpen[client] = false;
+	return 0;
+}
+
+void OpenDeconstructConfirmMenu(int client) {
+	int count = (ga_hPropPlaced[client] != null) ? ga_hPropPlaced[client].Length : 0;
+
+	Menu confirm = new Menu(DeconstructConfirmHandler);
+	confirm.SetTitle("Deconstruct ALL your props? (%d placed)\n\nAre you sure?", count);
+	confirm.AddItem("yes", "Yes - deconstruct all props");
+	confirm.AddItem("no",  "No - go back");
+	confirm.ExitBackButton = false;
+	confirm.Display(client, 10);
+}
+
+public int DeconstructConfirmHandler(Menu menu, MenuAction action, int client, int param) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Select) {
+		if (param < 0)
+			return 0;
+
+		char item[8], display[64];
+		int style;
+		if (!menu.GetItem(param, item, sizeof(item), style, display, sizeof(display)))
+			return 0;
+
+		if (strcmp(item, "yes", false) == 0) {
+			DeconstructAllProps(client);
+			PrintToChat(client, "All your props have been deconstructed.");
+			ga_bBuildMenuOpen[client] = false;
+			CancelClientMenu(client);
+		}
+		else
+			OpenPropSelectionMenu(client);
+	}
 	return 0;
 }
 
