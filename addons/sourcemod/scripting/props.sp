@@ -155,7 +155,7 @@ public Plugin myinfo = {
 	name = "props",
 	author = "Nullifidian",
 	description = "Spawn props",
-	version = "2.10",
+	version = "2.11",
 	url = ""
 };
 
@@ -1038,8 +1038,10 @@ public Action Panel_HelpInfo(int client) {
 	return Plugin_Continue;
 }
 
-public int PanelHandler1(Menu menu, MenuAction action, int param1, int param2) {
-	ga_bHelpMenuOpen[param1] = false;
+public int PanelHandler1(Menu menu, MenuAction action, int client, int param2) {
+	if ((action == MenuAction_Cancel || action == MenuAction_Select) && client >= 1 && client <= MaxClients) {
+		ga_bHelpMenuOpen[client] = false;
+	}
 	return 0;
 }
 
@@ -1180,38 +1182,49 @@ void OpenShopMenu(int client, bool cooldown = true) {
 }
 
 public int BuyMenuHandler(Menu menu, MenuAction action, int client, int param) {
-	if (action == MenuAction_End) {
-		ga_bShopMenuOpen[client] = false;
-		delete menu;
-	}
-	else if (action == MenuAction_Cancel)
-		ga_bShopMenuOpen[client] = false;
-	else if (action == MenuAction_Select) {
-		char item[16];
-		menu.GetItem(param, item, sizeof(item));
-
-		if (strcmp(item, "1", false) == 0 || strcmp(item, "max", false) == 0) {
-			int playerTokens = GetEntProp(client, Prop_Send, "m_nAvailableTokens");
-			int cost = (strcmp(item, "1", false) == 0) ? 1 : playerTokens;
-			int buildPoints = cost;
-
-			if (playerTokens >= cost && cost >= 1) {
-				SetEntProp(client, Prop_Send, "m_nAvailableTokens", playerTokens - cost);
-				ga_iPlayerBuildPoints[client] += buildPoints;
-				ga_iTokensSpent[client] += cost;
-
-				PrintToChat(client, buildPoints > 1 ? "You purchased %d build points." : "You purchased %d build point.", buildPoints);
-				EmitSoundToClient(client, SND_BUYBUILDPOINTS, SOUND_FROM_PLAYER, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, 1.0);
-			}
-			else {
-				PrintToChat(client, "You do not have enough supply.");
-				EmitSoundToClient(client, SND_CANTBUY, SOUND_FROM_PLAYER, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, 1.0);
-			}
-
-			OpenShopMenu(client, false);
+	switch (action) {
+		case MenuAction_End:
+			delete menu;
+		case MenuAction_Cancel: {
+			if (client >= 1 && client <= MaxClients)
+				ga_bShopMenuOpen[client] = false;
 		}
-		else if (strcmp(item, "refund", false) == 0)
-			OpenRefundConfirmMenu(client);
+		case MenuAction_Select: {
+			if (client < 1 || client > MaxClients)
+				return 0;
+			if (param < 0)
+				return 0;
+
+			char item[16], display[128];
+			int style;
+			if (!menu.GetItem(param, item, sizeof(item), style, display, sizeof(display)))
+				return 0;
+			if (style & ITEMDRAW_SPACER || style & ITEMDRAW_DISABLED)
+				return 0;
+
+			if (strcmp(item, "1", false) == 0 || strcmp(item, "max", false) == 0) {
+				int playerTokens = GetEntProp(client, Prop_Send, "m_nAvailableTokens");
+				int cost = (strcmp(item, "1", false) == 0) ? 1 : playerTokens;
+				int buildPoints = cost;
+
+				if (playerTokens >= cost && cost >= 1) {
+					SetEntProp(client, Prop_Send, "m_nAvailableTokens", playerTokens - cost);
+					ga_iPlayerBuildPoints[client] += buildPoints;
+					ga_iTokensSpent[client] += cost;
+
+					PrintToChat(client, buildPoints > 1 ? "You purchased %d build points." : "You purchased %d build point.", buildPoints);
+					EmitSoundToClient(client, SND_BUYBUILDPOINTS, SOUND_FROM_PLAYER, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, 1.0);
+				}
+				else {
+					PrintToChat(client, "You do not have enough supply.");
+					EmitSoundToClient(client, SND_CANTBUY, SOUND_FROM_PLAYER, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, 1.0);
+				}
+
+				OpenShopMenu(client, false);
+			}
+			else if (strcmp(item, "refund", false) == 0)
+				OpenRefundConfirmMenu(client);
+		}
 	}
 	return 0;
 }
@@ -1229,8 +1242,13 @@ public int RefundConfirmHandler(Menu menu, MenuAction action, int client, int pa
 	if (action == MenuAction_End)
 		delete menu;
 	else if (action == MenuAction_Select) {
-		char item[8];
-		menu.GetItem(param, item, sizeof(item));
+		if (param < 0)
+			return 0;
+
+		char item[8], display[64];
+		int style;
+		if (!menu.GetItem(param, item, sizeof(item), style, display, sizeof(display)))
+			return 0;
 
 		if (strcmp(item, "yes", false) == 0) {
 			ga_bPlayerRefund[client] = true;
@@ -1351,10 +1369,17 @@ public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, in
 	if (action == MenuAction_End)
 		delete menu;
 	else if (action == MenuAction_Select) {
-		char indexStr[8];
-		menu.GetItem(param, indexStr, sizeof(indexStr));
-		int selectedIndex = StringToInt(indexStr);
+		if (param < 0)
+			return 0;
 
+		char indexStr[8], display[96];
+		int style;
+		if (!menu.GetItem(param, indexStr, sizeof(indexStr), style, display, sizeof(display)))
+			return 0;
+		if (style & ITEMDRAW_DISABLED)
+			return 0;
+
+		int selectedIndex = StringToInt(indexStr);
 		if (selectedIndex >= 0 && selectedIndex < sizeof(ga_sModel)) {
 			ga_iModelIndex[client] = selectedIndex;
 
@@ -1393,8 +1418,8 @@ public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, in
 		else
 			PrintToChat(client, "Invalid prop selection.");
 	}
-	else if (action == MenuAction_Cancel)
-		ga_bBuildMenuOpen[client] = false;
+	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients)
+			ga_bBuildMenuOpen[client] = false;
 	return 0;
 }
 
@@ -1420,15 +1445,21 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 	if (action == MenuAction_End)
 		delete menu;
 	else if (action == MenuAction_Select) {
+		if (param < 0)
+			return 0;
+
+		char item[16], display[64];
+		int style;
+		if (!menu.GetItem(param, item, sizeof(item), style, display, sizeof(display)))
+			return 0;
+		if (style & ITEMDRAW_DISABLED)
+			return 0;
 		int ent = EntRefToEntIndex(ga_iPropHolding[client]);
 		if (ent <= MaxClients || !IsValidEntity(ent))
 			return 0;
 
 		float vRot[3];
 		GetEntPropVector(ent, Prop_Send, "m_angRotation", vRot);
-
-		char item[16];
-		menu.GetItem(param, item, sizeof(item));
 
 		if (strcmp(item, "y+") == 0)
 			vRot[1] += PROP_ROTATE_STEP;
@@ -1454,8 +1485,8 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 
 		OpenRotationMenu(client);
 	}
-	else if (action == MenuAction_Cancel)
-		ga_bPropRotateMenuOpen[client] = false;
+	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients)
+			ga_bPropRotateMenuOpen[client] = false;
 	return 0;
 }
 
