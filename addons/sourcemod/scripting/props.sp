@@ -5,7 +5,7 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PL_VERSION		"2.14"
+#define PL_VERSION		"2.15"
 
 #define MAXENTITIES		2048
 #define MAX_BUTTONS		29
@@ -61,6 +61,27 @@
 #define SND_SUPPLYREFUND		"ui/receivedsupply.wav"
 #define SND_BUYBUILDPOINTS		"ui/menu_click.wav"
 #define SND_CANTBUY				"ui/vote_no.wav"
+
+static const char JC_Sounds[][] = {
+	"soundscape/emitters/oneshot/mil_radio_01.ogg",
+	"soundscape/emitters/oneshot/mil_radio_02.ogg",
+	"soundscape/emitters/oneshot/mil_radio_03.ogg",
+	"soundscape/emitters/oneshot/mil_radio_04.ogg",
+	"player/voip_end_transmit_beep_01.wav",
+	"player/voip_end_transmit_beep_02.wav",
+	"player/voip_end_transmit_beep_03.wav",
+	"player/voip_end_transmit_beep_04.wav",
+	"player/voip_end_transmit_beep_05.wav",
+	"player/voip_end_transmit_beep_06.wav",
+	"player/voip_end_transmit_beep_07.wav",
+	"player/voip_end_transmit_beep_08.wav"
+};
+
+static const float JC_MinDelay = 15.0;
+static const float JC_MaxDelay = 25.0;
+
+ArrayList	g_hJammers = null;
+Handle		g_hJammerTimer = INVALID_HANDLE;
 
 ArrayList ga_hPropPlaced[MAXPLAYERS + 1];
 ConVar g_cvAllFree = null;
@@ -213,6 +234,13 @@ public void OnMapStart() {
 	PrecacheFiles();
 	for (int i = 0; i <= MAXENTITIES; i++)
 		ga_fWireSoundCooldown[i] = 0.0;
+
+	if (g_hJammers != null)
+		delete g_hJammers;
+
+	g_hJammers = new ArrayList();
+
+	JC_ScheduleNext(15.0);
 }
 
 public void OnClientPostAdminCheck(int client) {
@@ -720,6 +748,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 				SetEntProp(prop, Prop_Send, "m_bShouldGlow", true);
 				SetEntPropFloat(prop, Prop_Send, "m_flGlowMaxDist", 600.0);
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
+				JC_AddJammer(prop);
 			}
 			else if (strcmp(g_PropDefs[mid].model, "models/fortifications/barbed_wire_02b.mdl") == 0) {
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchWire);
@@ -985,6 +1014,8 @@ public void OnEntityDestroyed(int entity) {
 	if (entity <= MaxClients)
 		return;
 
+	JC_RemoveJammer(entity);
+
 	int propOwner = GetPropOwner(entity);
 	if (propOwner < 1)
 		return;
@@ -1111,6 +1142,9 @@ void PrecacheFiles() {
 
 	for (int i = 0; i < NUM_WIRESOUNDS; i++)
 		PrecacheSound(ga_sBarbWire[i], true);
+
+	for (int i = 0; i < sizeof(JC_Sounds); i++)
+		PrecacheSound(JC_Sounds[i], true);
 
 	PrecacheSound(SND_SUPPLYREFUND, true);
 	PrecacheSound(SND_BUYBUILDPOINTS, true);
@@ -1584,6 +1618,73 @@ bool IsPlayerOnProp(int client) {
 	return (StrContains(entityName, "bmprop_c#", false) != -1);
 }
 
+void JC_Stop() {
+	if (g_hJammerTimer != INVALID_HANDLE) {
+		KillTimer(g_hJammerTimer);
+		g_hJammerTimer = INVALID_HANDLE;
+	}
+}
+
+void JC_ScheduleNext(float delay = -1.0) {
+	JC_Stop();
+	if (delay < 0.0)
+		delay = GetRandomFloat(JC_MinDelay, JC_MaxDelay);
+	g_hJammerTimer = CreateTimer(delay, JC_Timer_Play, _, TIMER_FLAG_NO_MAPCHANGE);
+}
+
+void JC_AddJammer(int ent) {
+	if (g_hJammers == null)
+		g_hJammers = new ArrayList();
+	g_hJammers.Push(EntIndexToEntRef(ent));
+}
+
+void JC_RemoveJammer(int ent) {
+	if (g_hJammers == null)
+		return;
+
+	for (int i = g_hJammers.Length - 1; i >= 0; i--) {
+		int idx = EntRefToEntIndex(g_hJammers.Get(i));
+		if (idx == ent || idx == INVALID_ENT_REFERENCE)
+			g_hJammers.Erase(i);
+	}
+}
+
+int JC_PlayRandomFromAll() {
+	if (g_hJammers == null || g_hJammers.Length == 0)
+		return 0;
+
+	int played = 0;
+	int pick = GetRandomInt(0, sizeof(JC_Sounds) - 1);
+
+	for (int i = g_hJammers.Length - 1; i >= 0; i--) {
+		int ent = EntRefToEntIndex(g_hJammers.Get(i));
+		if (ent == INVALID_ENT_REFERENCE || ent <= MaxClients || !IsValidEntity(ent)) {
+			g_hJammers.Erase(i);
+			continue;
+		}
+
+		EmitSoundToAll(JC_Sounds[pick], ent, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, 0.30);
+		played++;
+	}
+
+	return played;
+}
+
+public Action JC_Timer_Play(Handle timer) {
+	g_hJammerTimer = INVALID_HANDLE;
+	JC_PlayRandomFromAll();
+	JC_ScheduleNext();
+	return Plugin_Stop;
+}
+
+public void OnMapEnd() {
+	JC_Stop();
+	if (g_hJammers != null) {
+		delete g_hJammers;
+		g_hJammers = null;
+	}
+}
+
 public void OnPluginEnd() {
 	for (int i = 1; i <= MaxClients; i++) {
 		if (!IsClientInGame(i) || IsFakeClient(i))
@@ -1604,6 +1705,12 @@ public void OnPluginEnd() {
 		}
 
 		delete ga_hPropPlaced[i];
+	}
+
+	JC_Stop();
+	if (g_hJammers != null) {
+		delete g_hJammers;
+		g_hJammers = null;
 	}
 }
 
