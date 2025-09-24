@@ -4,7 +4,7 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PL_VERSION		"1.4"
+#define PL_VERSION		"1.5"
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
@@ -90,8 +90,8 @@ public void OnPluginStart() {
 			if (IsHumanClientInGame(i))
 				ResetPlayerGlobalsLate(i, pr, hasSquadProp, now);
 		}
+		
 		g_iNumberHumanPlayersInGame = HumanCountInGame();
-
 		if (g_iNumberHumanPlayersInGame > 0)
 			AFK_StartNowTimer();
 	}
@@ -100,10 +100,22 @@ public void OnPluginStart() {
 }
 
 public Action ChangeLevelListener(int client, const char[] command, int argc) {
-	char nextMap[PLATFORM_MAX_PATH];
+	if (StrEqual(command, "sm_map", false)) {
+		if (client > 0 && !CheckCommandAccess(client, "sm_map", ADMFLAG_CHANGEMAP, true))
+			return Plugin_Continue;
+	}
+	else if (StrEqual(command, "map", false) || StrEqual(command, "changelevel", false)) {
+		if (client > 0)
+			return Plugin_Continue;
+	}
+	else
+		return Plugin_Continue;
+
 	if (argc > 0) {
+		char nextMap[PLATFORM_MAX_PATH];
 		GetCmdArg(1, nextMap, sizeof(nextMap));
-		if (IsMapValid(nextMap)) g_bIsMapChanging = true;
+		if (IsMapValid(nextMap))
+			g_bIsMapChanging = true;
 	}
 	return Plugin_Continue;
 }
@@ -117,7 +129,8 @@ public void OnMapStart() {
 }
 
 public void OnClientPostAdminCheck(int client) {
-	if (!IsHumanClientInGame(client)) return;
+	if (!IsHumanClientInGame(client))
+		return;
 
 	ResetPlayerGlobals(client);
 	g_iNumberHumanPlayersInGame = HumanCountInGame();
@@ -127,7 +140,8 @@ public void OnClientPostAdminCheck(int client) {
 }
 
 public void OnClientDisconnect(int client) {
-	if (g_bIsGameEnd || g_bIsMapChanging) return;
+	if (g_bIsGameEnd || g_bIsMapChanging)
+		return;
 	
 	ResetPlayerGlobals(client);
 	if (!g_bRecountQueued) {
@@ -136,17 +150,18 @@ public void OnClientDisconnect(int client) {
 	}
 }
 
-static void Frame_OnClientDisconnect(any data) {
+void Frame_OnClientDisconnect(any data) {
 	g_bRecountQueued = false;
-
-	if (g_bIsGameEnd || g_bIsMapChanging) return;
+	if (g_bIsGameEnd || g_bIsMapChanging)
+		return;
 
 	g_iNumberHumanPlayersInGame = HumanCountInGame();
 }
 
 public Action Event_PlayerTeam(Event event, const char[] name, bool dontBroadcast) {
 	int client = GetClientOfUserId(event.GetInt("userid"));
-	if (!IsHumanClientInGame(client)) return Plugin_Continue;
+	if (!IsHumanClientInGame(client))
+		return Plugin_Continue;
 
 	ga_iPlayerTeam[client] = event.GetInt("team");
 	ga_fTimePlayerLastActive[client] = AFK_Now();
@@ -157,7 +172,8 @@ public Action Event_PlayerTeam(Event event, const char[] name, bool dontBroadcas
 
 public Action Event_PlayerPickSquad(Event event, const char[] name, bool dontBroadcast) {
 	int client = GetClientOfUserId(event.GetInt("userid"));
-	if (!IsHumanClientInGame(client)) return Plugin_Continue;
+	if (!IsHumanClientInGame(client))
+		return Plugin_Continue;
 
 	ga_bIsPlayerPickedSquad[client] = true;
 	ga_fTimePlayerLastActive[client] = AFK_Now();
@@ -166,7 +182,8 @@ public Action Event_PlayerPickSquad(Event event, const char[] name, bool dontBro
 }
 
 public Action OnClientSayCommand(int client, const char[] command, const char[] sArgs) {
-	if (!IsHumanClientInGame(client)) return Plugin_Continue;
+	if (!IsHumanClientInGame(client))
+		return Plugin_Continue;
 
 	ga_fTimePlayerLastActive[client] = AFK_Now();
 	ga_fTimeToNextWarning[client] = 0.0;
@@ -178,7 +195,8 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 		return Plugin_Continue;
 	
 	float now = AFK_Now();
-	if (now < ga_fPlayerNextAfkScanAt[client]) return Plugin_Continue;
+	if (now < ga_fPlayerNextAfkScanAt[client])
+		return Plugin_Continue;
 
 	ga_fPlayerNextAfkScanAt[client] = now + gc_fTimerInterval;
 
@@ -204,25 +222,29 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 	}
 
 	if (gc_fTimeBeforeKick > 0.0 && g_iNumberHumanPlayersInGame >= gc_iMinPlayersInGameBeforeKick && idle >= gc_fTimeBeforeKick && !g_bIsGameEnd) {
-		if (gc_bIsAdminsImmuneToKick && IsAfkClientAdmin(client)) return Plugin_Continue;
+		if (gc_bIsAdminsImmuneToKick && IsAfkClientAdmin(client))
+			return Plugin_Continue;
+
 		KickForAFK(client, idle);
 		return Plugin_Continue;
 	}
 
-	if (gc_fTimeBeforeActionWarn == 0.0) return Plugin_Continue;
+	if (gc_fTimeBeforeActionWarn == 0.0)
+		return Plugin_Continue;
 
 	const float BIG = 999999.0;
 	float moveLeft = BIG, kickLeft = BIG;
 
-	if (gc_fTimeBeforeMoveToSpec > 0.0 && (team == TEAM_SECURITY || team == TEAM_INSURGENT)
-		&& g_iNumberHumanPlayersInGame >= gc_iMinPlayersInGameBeforeMove) {
+	if (gc_fTimeBeforeMoveToSpec > 0.0 && (team == TEAM_SECURITY || team == TEAM_INSURGENT) && g_iNumberHumanPlayersInGame >= gc_iMinPlayersInGameBeforeMove) {
 		float t = gc_fTimeBeforeMoveToSpec - idle;
-		if (t > 0.0) moveLeft = t;
+		if (t > 0.0)
+			moveLeft = t;
 	}
 
 	if (gc_fTimeBeforeKick > 0.0) {
 		float t = gc_fTimeBeforeKick - idle;
-		if (t > 0.0) kickLeft = t;
+		if (t > 0.0)
+			kickLeft = t;
 	}
 
 	if (gc_bIsAdminsImmuneToKick && IsAfkClientAdmin(client))
@@ -233,8 +255,10 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 
 	if (nextAction <= gc_fTimeBeforeActionWarn && now >= ga_fTimeToNextWarning[client]) {
 		int secs = (nextAction > 0.0) ? RoundToCeil(nextAction) : 0;
-		if (warnKick)	PrintToChat(client, "%s[AFK] %sYou will be kicked in %s%d%s seconds.", COL_ORANGE, COL_RED, COL_GOLD, secs, COL_RED);
-		else			PrintToChat(client, "%s[AFK] %sYou will be moved to spectator in %s%d%s seconds.", COL_ORANGE, COL_RED, COL_GOLD, secs, COL_RED);
+		if (warnKick)
+			PrintToChat(client, "%s[AFK] %sYou will be kicked in %s%d%s seconds.", COL_ORANGE, COL_RED, COL_GOLD, secs, COL_RED);
+		else
+			PrintToChat(client, "%s[AFK] %sYou will be moved to spectator in %s%d%s seconds.", COL_ORANGE, COL_RED, COL_GOLD, secs, COL_RED);
 
 		ga_fTimeToNextWarning[client] = now + (secs >= 20 ? 10.0 : 1.0);
 	}
@@ -242,7 +266,8 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 }
 
 void MovePlayerToSpectator(int client, float idle) {
-	if (!IsHumanClientInGame(client)) return;
+	if (!IsHumanClientInGame(client))
+		return;
 
 	ChangeClientTeam(client, TEAM_SPECTATOR);
 
@@ -250,7 +275,8 @@ void MovePlayerToSpectator(int client, float idle) {
 	GetClientName(client, name, sizeof(name));
 
 	if (gc_bIsActionsAnnouncedToAll) PrintToChatAll("%s[AFK] %s%s%s was moved to spectator (idle %.0fs).", COL_ORANGE, COL_GOLD, name, COL_RESET, idle);
-	else PrintToChat(client, "%s[AFK] %sYou were moved to spectator (idle %.0fs).", COL_ORANGE, COL_RED, idle);
+	else
+		PrintToChat(client, "%s[AFK] %sYou were moved to spectator (idle %.0fs).", COL_ORANGE, COL_RED, idle);
 
 	char auth[32];
 	if (!GetClientAuthId(client, AuthId_Steam2, auth, sizeof(auth)))
@@ -262,13 +288,16 @@ void MovePlayerToSpectator(int client, float idle) {
 }
 
 void KickForAFK(int client, float idle) {
-	if (!IsHumanClientInGame(client)) return;
+	if (!IsHumanClientInGame(client))
+		return;
 
 	char name[MAX_NAME_LENGTH];
 	GetClientName(client, name, sizeof(name));
 
-	if (gc_bIsActionsAnnouncedToAll)	PrintToChatAll("%s[AFK] %s%s%s was kicked for being AFK (idle %.0fs).", COL_ORANGE, COL_GOLD, name, COL_RESET, idle);
-	else								PrintToChat(client, "%s[AFK] %sYou were kicked for being AFK (idle %.0fs).", COL_ORANGE, COL_RED, idle);
+	if (gc_bIsActionsAnnouncedToAll)
+		PrintToChatAll("%s[AFK] %s%s%s was kicked for being AFK (idle %.0fs).", COL_ORANGE, COL_GOLD, name, COL_RESET, idle);
+	else
+		PrintToChat(client, "%s[AFK] %sYou were kicked for being AFK (idle %.0fs).", COL_ORANGE, COL_RED, idle);
 
 	char auth[32];
 	if (!GetClientAuthId(client, AuthId_Steam2, auth, sizeof(auth)))
@@ -312,9 +341,8 @@ void ResetPlayerGlobalsLate(int client, int pr, bool hasSquadProp, float now) {
 	if (pr != -1 && hasSquadProp) {
 		int squad = GetEntProp(pr, Prop_Send, "m_iSquad", _, client);
 		ga_bIsPlayerPickedSquad[client] = (squad > -1);
-	} else {
+	} else
 		ga_bIsPlayerPickedSquad[client] = false;
-	}
 
 	ga_fTimePlayerLastActive[client] = now;
 	ga_iPlayerLastButtons[client] = 0;
@@ -329,21 +357,27 @@ void BuildLogFilePath() {
 }
 
 void PurgeOldLogs() {
-	if (gc_iNumberOfDaysToKeepLogs < 1) return;
+	if (gc_iNumberOfDaysToKeepLogs < 1)
+		return;
 
 	char logDir[PLATFORM_MAX_PATH];
 	BuildPath(Path_SM, logDir, sizeof(logDir), "logs");
-	if (!DirExists(logDir)) return;
+	if (!DirExists(logDir))
+		return;
 
 	Handle dir = OpenDirectory(logDir);
-	if (dir == null) return;
+	if (dir == null)
+		return;
 
 	int cutoff = GetTime() - (gc_iNumberOfDaysToKeepLogs * 86400);
 	char name[PLATFORM_MAX_PATH];
 	FileType type;
 	while (ReadDirEntry(dir, name, sizeof(name), type)) {
-		if (type != FileType_File) continue;
-		if (StrContains(name, "ins_afkmanager_", false) == -1) continue;
+		if (type != FileType_File)
+			continue;
+
+		if (StrContains(name, "ins_afkmanager_", false) == -1)
+			continue;
 
 		char full[PLATFORM_MAX_PATH];
 		Format(full, sizeof(full), "%s/%s", logDir, name);
@@ -387,11 +421,13 @@ public Action cmd_spec(int client, int args) {
 	for (int i = 0; i < count; i++) {
 		int t = targets[i];
 
-		if (!IsClientInGame(t) || IsClientSourceTV(t) || IsFakeClient(t)) {
+		if (!IsClientInGame(t) || IsClientSourceTV(t) || IsFakeClient(t))
+			continue;
+
+		if (GetClientTeam(t) == TEAM_SPECTATOR) {
+			already++;
 			continue;
 		}
-
-		if (GetClientTeam(t) == TEAM_SPECTATOR) { already++; continue; }
 
 		ChangeClientTeam(t, TEAM_SPECTATOR);
 		ga_iPlayerTeam[t] = TEAM_SPECTATOR;
@@ -417,17 +453,23 @@ float AFK_Now() {
 }
 
 void AFK_StartNowTimer() {
-	if (g_bNowTimerRunning) return;
+	if (g_bNowTimerRunning)
+		return;
+
 	g_bNowTimerRunning = true;
 	g_fTimeNow = GetGameTime();
 	CreateTimer(gc_fTimerInterval, TimerR_GetGameTime, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 
-public void Event_GameEnd(Event event, const char[] name, bool dontBroadcast) { g_bIsGameEnd = true; }
+public void Event_GameEnd(Event event, const char[] name, bool dontBroadcast) {
+	g_bIsGameEnd = true;
+}
 
 public void OnMapEnd() {
 	g_bIsMapChanging = true;
 	g_bNowTimerRunning = false;
 }
 
-public void OnPluginEnd() { g_bNowTimerRunning = false; }
+public void OnPluginEnd() {
+	g_bNowTimerRunning = false;
+}
