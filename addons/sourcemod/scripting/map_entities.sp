@@ -19,19 +19,19 @@ enum {
 	ins_dog_red,
 	arcate_aof,
 	dedust1p2_aof,
-	game_day_coop_ws,
 	hard_rain,
 	facilityb2_coop_v1_1,
 	cs_workout_v1,
 	ins_mountain_escape_v1_3,
-	karkand_redux_p2
+	karkand_redux_p2,
+	pipeline_coop
 };
 
 public Plugin myinfo = {
 	name = "map_entities",
 	author = "Nullifidian",
 	description = "remove or modify entities for some maps",
-	version = "2.3"
+	version = "2.6"
 };
 
 public void OnPluginStart() {
@@ -83,9 +83,6 @@ public void OnMapStart() {
 		g_iMapId = dedust1p2_aof;
 		RemoveEntities("logic_relay", "logic_breakdoor");
 	}
-	else if (strcmp(sMapName, "game_day_coop_ws", false) == 0) {
-		g_iMapId = game_day_coop_ws;
-	}
 	else if (strcmp(sMapName, "hard_rain", false) == 0) {
 		g_iMapId = hard_rain;
 		RemoveEntities("env_fog_controller");
@@ -104,17 +101,20 @@ public void OnMapStart() {
 		g_iMapId = karkand_redux_p2;
 		RemoveEntities("env_fog_controller");
 	}
+	else if (strcmp(sMapName, "pipeline_coop", false) == 0) {
+		g_iMapId = pipeline_coop;
+	}
 	else if (g_bEventHooked) {
-		HookFreezeRoundEnd(false);
+		HookRoundStartEvent(false);
 		return;
 	}
 
 	if (!g_bEventHooked) {
-		HookFreezeRoundEnd();
+		HookRoundStartEvent();
 	}
 }
 
-public Action Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroadcast) {
+public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
 	switch (g_iMapId) {
 		case embassy_coop, congress_coop, congress_open_coop: {
 			RemoveEntities("prop_sprinkler");
@@ -124,11 +124,11 @@ public Action Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroa
 			RemoveEntities("func_dustmotes");
 		}
 		case prospect_coop_b6: {
-			int iEnt = MaxClients + 1;
+			int iEnt = -1;
 			while ((iEnt = FindEntityByClassname(iEnt, "env_fog_controller")) != -1) {
 				AcceptEntityInput(iEnt, "TurnOff");	//turn off fog
 				//turn on FarZ to improve FPS
-				SetVariantString("8500");
+				SetVariantString("7000");
 				AcceptEntityInput(iEnt, "SetFarZ");
 			}
 		}
@@ -157,11 +157,8 @@ public Action Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroa
 			RemoveEntities("func_breakable", "breakdoor");
 			RemoveEntities("prop_dynamic", "ied_model");
 		}
-		case game_day_coop_ws: {
-			RemoveEntities("func_door");
-		}
 		case facilityb2_coop_v1_1: {
-			int iEnt = MaxClients + 1;
+			int iEnt = -1;
 			while ((iEnt = FindEntityByClassname(iEnt, "func_breakable")) != -1) {
 				//set hp on windows so we can break them
 				SetVariantString("100");
@@ -172,33 +169,44 @@ public Action Event_RoundFreezeEnd(Event event, const char[] name, bool dontBroa
 			RemoveEntities("func_door_rotating");	//remove doors
 			//remove door handles
 			char sModelName[64];
-			int iEnt = MaxClients + 1;
+			int iEnt = -1;
 			while ((iEnt = FindEntityByClassname(iEnt, "prop_dynamic")) != -1) {
 				GetEntPropString(iEnt, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
 				if (StrContains(sModelName, "door_handle_01", false) > -1) {
-					RemoveEntity(iEnt);
+					SafeKill(iEnt);
 				}
 			}
 		}
+		case pipeline_coop: {
+			int iEnt = -1;
+			while ((iEnt = FindEntityByClassname(iEnt, "func_breakable")) != -1) {
+				if (GetEntProp(iEnt, Prop_Data, "m_iHealth") != 500)
+					SafeKill(iEnt);
+			}
+			
+			RemoveEntities("prop_door_rotating");
+			RemoveEntities("func_brush");
+		}
 	}
+	return Plugin_Continue;
 }
 
 void RemoveEntities(char[] sClass, char[] sName = "") {
 	int	iCount = 0,
-		iEnt = MaxClients + 1;
+		iEnt = -1;
 
 	if (strlen(sName) > 0) {
 		char sTempName[64];
 		while ((iEnt = FindEntityByClassname(iEnt, sClass)) != -1) {
 			GetEntPropString(iEnt, Prop_Data, "m_iName", sTempName, sizeof(sTempName));
 			if (strcmp(sTempName, sName, false) == 0) {
-				RemoveEntity(iEnt);
+				SafeKill(iEnt);
 				iCount++;
 			}
 		}
 	} else {
 		while ((iEnt = FindEntityByClassname(iEnt, sClass)) != -1) {
-			RemoveEntity(iEnt);
+			SafeKill(iEnt);
 			iCount++;
 		}
 	}
@@ -227,20 +235,26 @@ public Action cmd_totalent(int client, int args) {
 
 int CountEnt() {
 	int iCount = 0;
-	for (int i = 0; i <= 2048; i++) {
-		if (!IsValidEntity(i))
+	for (int i = 0; i < GetMaxEntities(); i++) {
+		if (IsValidEntity(i))
 			continue;
 		iCount++;
 	}
 	return iCount;
 }
 
-void HookFreezeRoundEnd(bool hook = true) {
+void HookRoundStartEvent(bool hook = true) {
 	if (hook) {
-		HookEvent("round_freeze_end", Event_RoundFreezeEnd, EventHookMode_PostNoCopy);
 		g_bEventHooked = true;
+		HookEvent("round_start", Event_RoundStart, EventHookMode_PostNoCopy);
 	} else {
-		UnhookEvent("round_freeze_end", Event_RoundFreezeEnd, EventHookMode_PostNoCopy);
+		UnhookEvent("round_start", Event_RoundStart, EventHookMode_PostNoCopy);
 		g_bEventHooked = false;
 	}
+}
+
+stock bool SafeKill(int ent) {
+	if (ent <= MaxClients || !IsValidEntity(ent)) return false;
+	if (!AcceptEntityInput(ent, "Kill")) RemoveEntity(ent);
+	return true;
 }
