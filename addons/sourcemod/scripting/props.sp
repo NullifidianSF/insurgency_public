@@ -4,32 +4,37 @@
 #include <sourcemod>
 #include <sdktools>
 #include <sdkhooks>
+#tryinclude <bm_respawn>
 
-#define PL_VERSION		"2.15"
+#define PL_VERSION		"2.19"
 
 #define MAXENTITIES		2048
-#define MAX_BUTTONS		29
 
-#define BTN_ATTACK1		(1 << 0)
-#define BTN_JUMP		(1 << 1)
-#define BTN_DUCK		(1 << 2)
-#define BTN_FORWARD		(1 << 4)
-#define BTN_BACKWARD	(1 << 5)
-#define BTN_USE			(1 << 6)
-#define BTN_LEFT		(1 << 9)
-#define BTN_RIGHT		(1 << 10)
-#define BTN_RELOAD		(1 << 11)
-#define BTN_FIREMODE	(1 << 12)
-#define BTN_LEAN_LEFT	(1 << 13)
-#define BTN_LEAN_RIGHT	(1 << 14)
-#define BTN_SPRINT		(1 << 15)
-#define BTN_WALK		(1 << 16)
-#define BTN_SPECIAL1	(1 << 17)
-#define BTN_AIM			(1 << 18)
-#define BTN_SCOREBOARD	(1 << 19)
-#define BTN_FLASHLIGHT	(1 << 22)
-#define BTN_AIM_TOGGLE	(1 << 27)
-#define BTN_ACCESSORY	(1 << 28)
+#define MAX_BUTTONS         30
+#define BTN_ATTACK1         (1 << 0)
+#define BTN_JUMP            (1 << 1)
+#define BTN_DUCK            (1 << 2)
+#define BTN_PRONE           (1 << 3)
+#define BTN_FORWARD         (1 << 4)
+#define BTN_BACKWARD        (1 << 5)
+#define BTN_USE             (1 << 6)
+#define BTN_LEFT            (1 << 9)
+#define BTN_RIGHT           (1 << 10)
+#define BTN_RELOAD          (1 << 11)
+#define BTN_FIREMODE        (1 << 12)
+#define BTN_LEAN_LEFT       (1 << 13)
+#define BTN_LEAN_RIGHT      (1 << 14)
+#define BTN_SPRINT          (1 << 15)
+#define BTN_WALK            (1 << 16)
+#define BTN_SPECIAL1        (1 << 17)
+#define BTN_AIM             (1 << 18)
+#define BTN_SCOREBOARD      (1 << 19)
+#define BTN_FLASHLIGHT      (1 << 22)
+#define BTN_DUCK_TOGGLE     (1 << 24)
+#define BTN_SPRINT_TOGGLE   (1 << 26)
+#define BTN_AIM_TOGGLE      (1 << 27)
+#define BTN_ACCESSORY       (1 << 28)
+#define BTN_STANCE_TOGGLE   (1 << 29)
 
 #define PF_DEPLOY_BIPOD	(1 << 1)
 #define PF_BUYZONE		(1 << 7)
@@ -39,7 +44,7 @@
 #define DAMAGE_YES					2
 #define DAMAGE_AIM					3
 
-#define STARTBUILDPOINTS			3		// Free starting build points for all players
+#define STARTBUILDPOINTS			3	// Free starting build points for all players
 
 #define PROP_ALPHA					125
 #define PROP_ROTATE_STEP			10.0
@@ -50,8 +55,8 @@
 #define PROP_HOLD_DISTANCE			120.0
 #define PROP_LIMIT					10		// Prop limit per player
 #define PROP_PLAYER_DISTANCE		50.0
-#define PROP_MIN_BOT_DISTANCE		200.0	// If a bot spawns at this distance from the prop, the prop will be destroyed.
-#define PROP_MIN_BOT_VERT_DISTANCE	80.0	// If a bot spawns at this vertical distance from the prop, the prop will be destroyed.
+#define PROP_MIN_BOT_DISTANCE		250.0	// Minimum horizontal distance from any bot spawn to allow prop placement (units)
+#define PROP_MIN_BOT_VERT_DISTANCE	80.0	// Maximum allowed vertical difference from a bot spawn to allow placement (units)
 
 #define BOT_BLEED_WIREDAMAGE		10.0	// Amount of bleed damage bot takes from a barbed wire
 
@@ -83,8 +88,8 @@ static const float JC_MaxDelay = 25.0;
 ArrayList	g_hJammers = null;
 Handle		g_hJammerTimer = INVALID_HANDLE;
 
-ArrayList ga_hPropPlaced[MAXPLAYERS + 1];
-ConVar g_cvAllFree = null;
+ArrayList	ga_hPropPlaced[MAXPLAYERS + 1];
+ConVar		g_cvAllFree = null;
 
 #define NUM_WIRESOUNDS 3
 char ga_sBarbWire[NUM_WIRESOUNDS][] = {
@@ -121,7 +126,7 @@ enum PropId {
 	Prop_EmbassyCenter02,
 	Prop_IedJammer,
 	Prop_AmmoCacheSmall,
-	
+
 	Prop_Count
 };
 
@@ -145,32 +150,53 @@ PropId ga_iModelIndex[MAXPLAYERS + 1] = {Prop_BarbWire, ...};
 
 char ga_sLastInflictorModel[MAXPLAYERS + 1][PLATFORM_MAX_PATH];
 
-int ga_iPropHolding[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
-int ga_iLastButtons[MAXPLAYERS + 1];
-int ga_iLastInflictor[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
-int ga_iEntIdBipodDeployedOn[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
-int ga_iPlayerBuildPoints[MAXPLAYERS + 1] = {STARTBUILDPOINTS, ...};
-int ga_iPropOwner[MAXPLAYERS + 1] = {0, ...};
-int ga_iTokensSpent[MAXPLAYERS + 1] = {0, ...};
-int g_iAllFree;
+int		ga_iPropHolding[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
+int		ga_iLastButtons[MAXPLAYERS + 1];
+int		ga_iLastInflictor[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
+int		ga_iEntIdBipodDeployedOn[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
+int		ga_iPlayerBuildPoints[MAXPLAYERS + 1] = {STARTBUILDPOINTS, ...};
+int		ga_iPropOwner[MAXPLAYERS + 1] = {0, ...};
+int		ga_iTokensSpent[MAXPLAYERS + 1] = {0, ...};
+int		g_iAllFree;
 
-bool ga_bHelpMenuOpen[MAXPLAYERS + 1] = {false, ...};
-bool ga_bPropRotateMenuOpen[MAXPLAYERS + 1] = {false, ...};
-bool ga_bBuildMenuOpen[MAXPLAYERS + 1] = {false, ...};
-bool ga_bShopMenuOpen[MAXPLAYERS + 1] = {false, ...};
-bool ga_bIgnoreRemoval[MAXPLAYERS + 1] = {false, ...};
-bool ga_bHoldingMeleeWeapon[MAXPLAYERS + 1] = {false, ...};
-bool g_bLateLoad;
-bool ga_bBipodForced[MAXPLAYERS + 1] = {false, ...};
-bool ga_bPlayerRefund[MAXPLAYERS + 1] = {false, ...};
-bool ga_bFirstTimeJoinedSquad[MAXPLAYERS + 1] = {true, ...};
+bool	ga_bHelpMenuOpen[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bPropRotateMenuOpen[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bBuildMenuOpen[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bShopMenuOpen[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bIgnoreRemoval[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bHoldingMeleeWeapon[MAXPLAYERS + 1] = {false, ...};
+bool	g_bLateLoad;
+bool	ga_bBipodForced[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bPlayerRefund[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bFirstTimeJoinedSquad[MAXPLAYERS + 1] = {true, ...};
 
-float ga_fPropRotations[MAXPLAYERS + 1][PROP_COUNT][3];
-float ga_fLastTouchTime[MAXPLAYERS + 1] = {0.0, ...};
-float ga_fPressedJumpTime[MAXPLAYERS + 1] = {0.0, ...};
-float ga_fPropMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
-float ga_fShopMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
-float ga_fWireSoundCooldown[MAXENTITIES + 1] = {0.0, ...};
+bool	ga_bPlacingNow[MAXPLAYERS + 1] = { false, ... };
+float	ga_fLastPlaceTime[MAXPLAYERS + 1] = { 0.0, ... };
+bool	ga_bJustPlaced[MAXPLAYERS + 1] = { false, ... };
+const float gc_fPlaceDebounce = 0.20;
+
+float	ga_fPropRotations[MAXPLAYERS + 1][PROP_COUNT][3];
+float	ga_fLastTouchTime[MAXPLAYERS + 1] = {0.0, ...};
+float	ga_fPressedJumpTime[MAXPLAYERS + 1] = {0.0, ...};
+float	ga_fPropMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
+float	ga_fShopMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
+float	ga_fWireSoundCooldown[MAXENTITIES + 1] = {0.0, ...};
+
+static bool g_bHasBMRespawn;
+
+public void OnAllPluginsLoaded() {
+	g_bHasBMRespawn = LibraryExists("bm_respawn");
+}
+
+public void OnLibraryAdded(const char[] name) {
+	if (StrEqual(name, "bm_respawn"))
+		g_bHasBMRespawn = true;
+}
+
+public void OnLibraryRemoved(const char[] name) {
+	if (StrEqual(name, "bm_respawn"))
+		g_bHasBMRespawn = false;
+}
 
 public Plugin myinfo = {
 	name = "props",
@@ -193,10 +219,9 @@ public void OnPluginStart() {
 		SetFailState("PropId count (%d) != g_PropDefs count (%d). Update the enum or the array order.", enumCount, arrayCount);
 		return;
 	}
-		
+
 	SetupConVars();
 
-	HookEvent("player_spawn", Event_PlayerSpawn);
 	HookEvent("player_death", Event_PlayerDeath_Pre, EventHookMode_Pre);
 	HookEvent("round_start", Event_RoundStart);
 	HookEvent("player_pick_squad", Event_PlayerPickSquad);
@@ -244,13 +269,16 @@ public void OnMapStart() {
 }
 
 public void OnClientPostAdminCheck(int client) {
-	if (client < 1)
+	if (client < 1 || client > MaxClients || !IsClientInGame(client))
 		return;
 
-	ga_fLastTouchTime[client]   = 0.0;
+	ga_fLastTouchTime[client]    = 0.0;
 	ga_fShopMenuCooldown[client] = 0.0;
 	ga_fPropMenuCooldown[client] = 0.0;
-	ga_fPressedJumpTime[client] = 0.0;
+	ga_fPressedJumpTime[client]  = 0.0;
+	ga_bPlacingNow[client]       = false;
+	ga_fLastPlaceTime[client]    = 0.0;
+	ga_bJustPlaced[client] = false;
 
 	if (!IsFakeClient(client)) {
 		SDKHook(client, SDKHook_WeaponSwitchPost, Hook_WeaponSwitch);
@@ -285,8 +313,8 @@ public void OnClientDisconnect(int client) {
 		for (int i = iArraySize - 1; i >= 0; i--) {
 			ent = EntRefToEntIndex(ga_hPropPlaced[client].Get(i));
 			if (ent > MaxClients && IsValidEntity(ent)) {
-				RemoveEntity(ent);
-				removed = true;
+				if (SafeKill(ent))
+					removed = true;
 			}
 		}
 	}
@@ -333,53 +361,10 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 		ga_iPropHolding[i] = INVALID_ENT_REFERENCE;
 		ga_iPropOwner[i] = 0;
 		ga_bPlayerRefund[i] = false;
+		ga_bPlacingNow[i] = false;
+		ga_fLastPlaceTime[i] = 0.0;
+		ga_bJustPlaced[i] = false;
 		RestoreBuildPoints(i);
-	}
-	return Plugin_Continue;
-}
-
-public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast) {
-	int client = GetClientOfUserId(event.GetInt("userid"));
-	if (client < 1)
-		return Plugin_Continue;
-
-	if (!IsFakeClient(client)) {
-		ga_bBipodForced[client] = false;
-		ga_iEntIdBipodDeployedOn[client] = INVALID_ENT_REFERENCE;
-	}
-	else {
-		for (int i = 1; i <= MaxClients; i++) {
-			if (ga_hPropPlaced[i] == null || ga_hPropPlaced[i].Length < 1)
-				continue;
-
-			int iArraySize = ga_hPropPlaced[i].Length, ent, removedCount = 0;
-			float vPos[3], vPosClient[3];
-			char message[256] = "", temp[64], finalMessage[256];
-
-			for (int j = iArraySize - 1; j >= 0; j--) {
-				ent = EntRefToEntIndex(ga_hPropPlaced[i].Get(j));
-				if (ent <= MaxClients || !IsValidEntity(ent))
-					continue;
-
-				GetEntPropVector(ent, Prop_Send, "m_vecOrigin", vPos);
-				GetClientAbsOrigin(client, vPosClient);
-				if (GetVectorDistance(vPos, vPosClient, true) <= (PROP_MIN_BOT_DISTANCE * PROP_MIN_BOT_DISTANCE) && FloatAbs(vPos[2] - vPosClient[2]) <= PROP_MIN_BOT_VERT_DISTANCE) {
-					FormatEx(temp, sizeof(temp), " #%d", j + 1);
-					StrCat(message, sizeof(message), temp);
-					RemoveEntity(ent);
-					removedCount++;
-				}
-			}
-
-			if (removedCount > 0) {
-				if (removedCount == 1)
-					FormatEx(finalMessage, sizeof(finalMessage), "Your prop%s was removed for being placed too close to a bot spawn.", message);
-				else
-					FormatEx(finalMessage, sizeof(finalMessage), "Your props%s were removed for being placed too close to a bot spawn.", message);
-
-				PrintHintText(i, "%s", finalMessage);
-			}
-		}
 	}
 	return Plugin_Continue;
 }
@@ -427,9 +412,51 @@ public Action Event_ObjectiveDone(Event event, const char[] name, bool dontBroad
 	return Plugin_Continue;
 }
 
+static bool Props_IsTooCloseToSpawn(const float vPos[3]) {
+	if (!g_bHasBMRespawn)
+		return false;
+
+	if (BM_IsNearBotSpawn2D(vPos, PROP_MIN_BOT_DISTANCE, PROP_MIN_BOT_VERT_DISTANCE) && BM_GetRemainingLivesIns() > 5)
+		return true;
+
+	if (BM_IsNearNextBotSpawn2D(vPos, PROP_MIN_BOT_DISTANCE, PROP_MIN_BOT_VERT_DISTANCE))
+		return true;
+
+	return false;
+}
+
+void GetPositionInFront(float vPos[3], const float vAng[3], float distance) {
+	float vecForward[3];
+	GetAngleVectors(vAng, vecForward, NULL_VECTOR, NULL_VECTOR);
+
+	vPos[0] += vecForward[0] * distance;
+	vPos[1] += vecForward[1] * distance;
+	vPos[2] += vecForward[2] * distance;
+}
+
+int IsPlayerOnGround(int client) { return GetEntityFlags(client) & FL_ONGROUND; }
+
+static bool BeginPlaceLock(int client) {
+	if (ga_bPlacingNow[client]) return false;
+	ga_bPlacingNow[client] = true;
+	return true;
+}
+
+static void EndPlaceLock(int client) { ga_bPlacingNow[client] = false; }
+
+static bool CanPlaceNow(int client) {
+	float now = GetGameTime();
+	if (now - ga_fLastPlaceTime[client] < gc_fPlaceDebounce) return false;
+	ga_fLastPlaceTime[client] = now;
+	return true;
+}
+
 void HoldProp(int client) {
-	if (client < 1 || !IsClientInGame(client) || !IsPlayerAlive(client) || ga_iPropHolding[client] != INVALID_ENT_REFERENCE)
+	if (client < 1 || !IsClientInGame(client) || !IsPlayerAlive(client))
 		return;
+
+	if (ga_iPropHolding[client] != INVALID_ENT_REFERENCE)
+		StopHolding(client);
 
 	float vPos[3], vAng[3];
 	GetClientEyePosition(client, vPos);
@@ -439,14 +466,17 @@ void HoldProp(int client) {
 }
 
 void StopHolding(int client) {
-	if (ga_iPropHolding[client] != INVALID_ENT_REFERENCE) {
-		int ent = EntRefToEntIndex(ga_iPropHolding[client]);
-		if (ent > MaxClients && IsValidEntity(ent)) {
-			ga_bIgnoreRemoval[client] = true;
-			RemoveEntity(ent);
-			ga_bIgnoreRemoval[client] = false;
-		}
-		ga_iPropHolding[client] = INVALID_ENT_REFERENCE;
+	int ref = ga_iPropHolding[client];
+	if (ref == INVALID_ENT_REFERENCE)
+		return;
+
+	ga_iPropHolding[client] = INVALID_ENT_REFERENCE;
+
+	int ent = EntRefToEntIndex(ref);
+	if (ent > MaxClients && IsValidEntity(ent)) {
+		ga_bIgnoreRemoval[client] = true;
+		SafeKill(ent);
+		ga_bIgnoreRemoval[client] = false;
 	}
 }
 
@@ -489,10 +519,14 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			ga_fPressedJumpTime[client] = GameTime;
 	}
 
-	if ((button & BTN_SPRINT) || (button & BTN_ATTACK1)) {
+	if ((button & BTN_SPRINT) || (button & BTN_SPRINT_TOGGLE) || (button & BTN_ATTACK1)) {
 		StopHolding(client);
 		CloseAllPropMenus(client);
 		return;
+	}
+
+	if ((button & BTN_AIM) || (button & BTN_AIM_TOGGLE)) {
+		if (ga_bJustPlaced[client]) return;
 	}
 
 	if (button & BTN_SPECIAL1) {
@@ -551,7 +585,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 	}
 
 	if (ga_bBipodForced[client]) {
-		if ((button & BTN_JUMP) || (button & BTN_DUCK) || (button & BTN_FORWARD) || (button & BTN_BACKWARD) || (button & BTN_LEFT) || (button & BTN_RIGHT)) {
+		if ((button & BTN_JUMP) || (button & BTN_DUCK) || (button & BTN_DUCK_TOGGLE) || (button & BTN_FORWARD) || (button & BTN_BACKWARD) || (button & BTN_LEFT) || (button & BTN_RIGHT)) {
 			ga_bBipodForced[client] = false;
 			ga_iEntIdBipodDeployedOn[client] = 0;
 		}
@@ -613,22 +647,29 @@ void OnButtonPress(int client, int button, float vel[3]) {
 				}
 
 				int health = GetEntProp(target, Prop_Data, "m_iHealth");
-				RemoveEntity(target);
+				SafeKill(target);
 				ga_iModelIndex[client] = view_as<PropId>(GetNumber(sName, "_m#"));
 				ga_iPropOwner[client] = propOwner;
 				CreateProp(client, vPos, vAng, health);
 			}
-			else
-				HoldProp(client);
 			return;
 		}
 		else {
-			int ent = EntRefToEntIndex(ga_iPropHolding[client]);
-			if (ent <= MaxClients || !IsValidEntity(ent))
+			if (ga_bJustPlaced[client])
 				return;
 
-			if (vel[0] != 0.0 || vel[1] != 0.0 || vel[2] != 0.0)
+			if (!BeginPlaceLock(client))
 				return;
+
+			if (!CanPlaceNow(client)) {
+				EndPlaceLock(client);
+				return;
+			}
+
+			int ent = EntRefToEntIndex(ga_iPropHolding[client]);
+			if (ent <= MaxClients || !IsValidEntity(ent)) { EndPlaceLock(client); return; }
+
+			if (vel[0] != 0.0 || vel[1] != 0.0 || vel[2] != 0.0) { EndPlaceLock(client); return; }
 
 			float vAng[3];
 			GetClientEyeAngles(client, vAng);
@@ -638,8 +679,17 @@ void OnButtonPress(int client, int button, float vel[3]) {
 
 			if (IsCollidingWithPlayer(client, vPos)) {
 				PrintCenterText(client, "Too close to another player.");
+				EndPlaceLock(client);
 				return;
 			}
+
+			if (!InCounterAttack() && Props_IsTooCloseToSpawn(vPos)) {
+				PrintCenterText(client, "Too close to a bot spawn point.");
+				EndPlaceLock(client);
+				return;
+			}
+
+			ga_bJustPlaced[client] = true;
 
 			TeleportEntity(ent, vPos, NULL_VECTOR, NULL_VECTOR);
 
@@ -650,26 +700,19 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			StopHolding(client);
 			CreateProp(client, vPos, vAng, health, true);
 
+			EndPlaceLock(client);
+
+			RequestFrame(ClearJustPlaced_NextFrame, GetClientSerial(client));
+
 			PrintCenterText(client, "Prop: %d/%d", (ga_hPropPlaced[client] != null) ? ga_hPropPlaced[client].Length : 0, PROP_LIMIT);
 		}
 		return;
 	}
 }
 
-void GetPositionInFront(float vPos[3], const float vAng[3], float distance) {
-	float vecForward[3];
-	GetAngleVectors(vAng, vecForward, NULL_VECTOR, NULL_VECTOR);
-
-	vPos[0] += vecForward[0] * distance;
-	vPos[1] += vecForward[1] * distance;
-	vPos[2] += vecForward[2] * distance;
-}
-
-int IsPlayerOnGround(int client) { return GetEntityFlags(client) & FL_ONGROUND; }
-
 void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, bool solid = false) {
 	if (IsPlayerOnGround(client) != 1) {
-		PrintHintText(client, "You cannot build a prop while falling!");
+		PrintCenterText(client, "You cannot build a prop while falling!");
 		return;
 	}
 
@@ -702,7 +745,18 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 			DispatchKeyValue(prop, "solid", "6");
 
 			if (!ga_iPropOwner[client]) {
-				ga_iPlayerBuildPoints[client] -= buildCost;
+				if (g_iAllFree != 1) {
+					int buildCostActual = g_PropDefs[mid].cost;
+					if (!HasEnoughResources(client, buildCostActual)) {
+						PrintCenterText(client, "Not enough resources.");
+						ga_bIgnoreRemoval[client] = true;
+						SafeKill(prop);
+						ga_bIgnoreRemoval[client] = false;
+						return;
+					}
+					ga_iPlayerBuildPoints[client] -= buildCostActual;
+				}
+
 				ClearOldestPropIfLimitReached(client);
 				TeleportEntity(prop, vPos, ga_fPropRotations[client][mid], NULL_VECTOR);
 
@@ -750,12 +804,10 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
 				JC_AddJammer(prop);
 			}
-			else if (strcmp(g_PropDefs[mid].model, "models/fortifications/barbed_wire_02b.mdl") == 0) {
+			else if (strcmp(g_PropDefs[mid].model, "models/fortifications/barbed_wire_02b.mdl") == 0)
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchWire);
-			}
-			else if (strcmp(g_PropDefs[mid].model, "models/static_afghan/prop_interior_mattress_a.mdl") == 0) {
+			else if (strcmp(g_PropDefs[mid].model, "models/static_afghan/prop_interior_mattress_a.mdl") == 0)
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchMattress);
-			}
 			else
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
 
@@ -805,7 +857,7 @@ void ClearOldestPropIfLimitReached(int client) {
 		ent = EntRefToEntIndex(ga_hPropPlaced[client].Get(0));
 		if (ent > MaxClients && IsValidEntity(ent)) {
 			ga_bIgnoreRemoval[client] = true;
-			RemoveEntity(ent);
+			SafeKill(ent);
 			ga_bIgnoreRemoval[client] = false;
 		}
 		ga_hPropPlaced[client].Erase(0);
@@ -858,12 +910,12 @@ public Action SHook_OnTouchMattress(int entity, int touch) {
 		if (!IsFakeClient(touch)) {
 			if (GameTime - ga_fPressedJumpTime[touch] <= 1.0) {
 				ga_fPressedJumpTime[touch] = GameTime + 1.0;
-				SetEntPropVector(touch, Prop_Data, "m_vecBaseVelocity", {0.0, 0.0, 500.0});
+				SetEntPropVector(touch, Prop_Data, "m_vecBaseVelocity", {0.0, 0.0, 700.0});
 				PlayWireSound(entity);
 			}
 		}
 		else {
-			SetEntPropVector(touch, Prop_Data, "m_vecBaseVelocity", {0.0, 0.0, 500.0});
+			SetEntPropVector(touch, Prop_Data, "m_vecBaseVelocity", {0.0, 0.0, 700.0});
 			PlayWireSound(entity);
 			DoDamageToEnt(entity, touch);
 		}
@@ -904,9 +956,11 @@ public Action SHook_OnTouchWire(int entity, int touch) {
 }
 
 void PlayWireSound(int entity) {
-	float vPos[3];
-	GetEntPropVector(entity, Prop_Data, "m_vecAbsOrigin", vPos);
-	EmitAmbientSound(ga_sBarbWire[GetRandomInt(0, NUM_WIRESOUNDS - 1)], vPos);
+	if (entity > 0 && entity <= MAXENTITIES && IsValidEntity(entity)) {
+		float vPos[3];
+		GetEntPropVector(entity, Prop_Data, "m_vecAbsOrigin", vPos);
+		EmitAmbientSound(ga_sBarbWire[GetRandomInt(0, NUM_WIRESOUNDS - 1)], vPos);
+	}
 }
 
 void CreateBleedEffect(int client, float vPos[3]) {
@@ -933,7 +987,7 @@ void CreateBleedEffect(int client, float vPos[3]) {
 public Action Timer_RemoveParticle(Handle timer, int particleRef) {
 	int particle = EntRefToEntIndex(particleRef);
 	if (particle != INVALID_ENT_REFERENCE && IsValidEntity(particle))
-		RemoveEntity(particle);
+		SafeKill(particle);
 	else
 		PrintToServer("Failed to remove particle system entity. It might not exist.");
 	return Plugin_Stop;
@@ -1156,7 +1210,7 @@ bool IsHoldingMeleeWeapon(int client) {
 	if (iWeapon < 1)
 		return false;
 
-	// slot 2 = melee in Ins2014
+	// slot 2 = melee
 	if (GetPlayerWeaponSlot(client, 2) != iWeapon)
 		return false;
 
@@ -1316,7 +1370,7 @@ void CloseAllPropMenus(int client, bool sendSlot9IfNeeded = true) {
 		CancelClientMenu(client);
 
 	bool hadOurFlags = AnyPropMenuFlagOpen(client);
-	if (sendSlot9IfNeeded && (hadSmMenu || hadOurFlags)) 
+	if (sendSlot9IfNeeded && (hadSmMenu || hadOurFlags))
 		ClientCommand(client, "slot9");
 
 	ga_bHelpMenuOpen[client] = false;
@@ -1335,7 +1389,7 @@ void DeconstructAllProps(int client) {
 
 	for (int i = iArraySize - 1; i >= 0; i--) {
 		int ent = EntRefToEntIndex(ga_hPropPlaced[client].Get(i));
-		if (ent > MaxClients && IsValidEntity(ent)) RemoveEntity(ent);
+		SafeKill(ent);
 	}
 }
 
@@ -1451,12 +1505,12 @@ public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, in
 			GetEntPropVector(ent, Prop_Send, "m_vecOrigin", vPos);
 			GetEntPropVector(ent, Prop_Send, "m_angRotation", vAng);
 
-			RemoveEntity(ent);
-			ga_iPropHolding[client] = INVALID_ENT_REFERENCE;
+			StopHolding(client);
 
 			if (!ga_iPropOwner[client])
 				CreateProp(client, vPos, vAng);
-			else ga_iPropOwner[client] = 0;
+			else
+				ga_iPropOwner[client] = 0;
 
 			OpenRotationMenu(client);
 		}
@@ -1472,7 +1526,7 @@ public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, in
 			PrintToChat(client, "Invalid prop selection.");
 	}
 	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients)
-			ga_bBuildMenuOpen[client] = false;
+		ga_bBuildMenuOpen[client] = false;
 	return 0;
 }
 
@@ -1699,8 +1753,7 @@ public void OnPluginEnd() {
 		if (iArraySize > 0) {
 			for (int j = iArraySize - 1; j >= 0; j--) {
 				int ent = EntRefToEntIndex(ga_hPropPlaced[i].Get(j));
-				if (ent > MaxClients && IsValidEntity(ent))
-					RemoveEntity(ent);
+				SafeKill(ent);
 			}
 		}
 
@@ -1724,3 +1777,19 @@ void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue
 	if (convar == g_cvAllFree)
 		g_iAllFree = g_cvAllFree.IntValue;
 }
+
+stock bool SafeKill(int ent)
+{
+	if (ent <= MaxClients || !IsValidEntity(ent)) return false;
+	if (!AcceptEntityInput(ent, "Kill")) RemoveEntity(ent);
+	return true;
+}
+
+static void ClearJustPlaced_NextFrame(any serial)
+{
+	int client = GetClientFromSerial(serial);
+	if (client >= 1 && client <= MaxClients)
+		ga_bJustPlaced[client] = false;
+}
+
+bool InCounterAttack() { return view_as<bool>(GameRules_GetProp("m_bCounterAttack")); }
