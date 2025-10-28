@@ -98,7 +98,7 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 }
 
 public void OnClientPostAdminCheck(int client) {
-	if (client && !IsFakeClient(client)) {
+	if (client > 0 && client < MaxClients && IsClientInGame(client) && !IsFakeClient(client)) {
 		ga_iConfirmedMisc[client] = -1;
 		ga_iBlocks[client] = 1;
 		ga_iLastButtons[client] = 0;
@@ -230,7 +230,7 @@ Action TimerR_IronDome(Handle timer) {
 			else
 				PrintToChat(client, "\x070088cc[ID]\x01 Shot down explosive device \x01Ammo: \x070088cc%d\x01/\x070088cc%d", ga_iBlocks[client], gc_iMaxAllowedBlocks);
 
-			RemoveEntity(ent);
+			SafeKillIdx(ent);
 
 			if (ga_iBlocks[client] < 1)
 				break;
@@ -263,9 +263,7 @@ void CreateParticle(const float fPos[3]) {
 }
 
 public Action Timer_KillParticle(Handle timer, int entRef) {
-	int iParticle = EntRefToEntIndex(entRef);
-	if (iParticle != INVALID_ENT_REFERENCE && IsValidEntity(iParticle))
-		RemoveEntity(iParticle);
+	SafeKillRef(entRef);
 	return Plugin_Stop;
 }
 
@@ -323,8 +321,28 @@ void OnButtonPress(int client, int button) {
 	}
 
 	EmitSoundToAll(SND_TAKE, target, SNDCHAN_AUTO, SNDLEVEL_NORMAL);
-	RemoveEntity(target);
+	SafeKillIdx(target);
 
 	ga_iBlocks[client]++;
 	PrintToChat(client, "\x070088cc[ID]\x01 Ammo: \x070088cc%d\x01/\x070088cc%d", ga_iBlocks[client], gc_iMaxAllowedBlocks);
+}
+
+stock void SafeKillIdx(int ent) {
+	if (ent <= MaxClients) return;
+	int ref = EntIndexToEntRef(ent);
+	if (ref == INVALID_ENT_REFERENCE) return;
+	RequestFrame(NF_KillEntity, ref);
+}
+
+stock void SafeKillRef(int entref) {
+	if (entref == INVALID_ENT_REFERENCE) return;
+	RequestFrame(NF_KillEntity, entref);
+}
+
+stock void NF_KillEntity(any entref) {
+	int ent = EntRefToEntIndex(entref);
+	if (ent <= MaxClients || !IsValidEntity(ent)) return;
+
+	if (!AcceptEntityInput(ent, "Kill"))
+		RemoveEntity(ent);
 }

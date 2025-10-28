@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #tryinclude <bm_respawn>
 
-#define PL_VERSION		"2.19"
+#define PL_VERSION		"2.20"
 
 #define MAXENTITIES		2048
 
@@ -37,7 +37,6 @@
 #define BTN_STANCE_TOGGLE   (1 << 29)
 
 #define PF_DEPLOY_BIPOD	(1 << 1)
-#define PF_BUYZONE		(1 << 7)
 
 #define DAMAGE_NO					0
 #define DAMAGE_EVENTS_ONLY			1
@@ -163,7 +162,6 @@ bool	ga_bHelpMenuOpen[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bPropRotateMenuOpen[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bBuildMenuOpen[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bShopMenuOpen[MAXPLAYERS + 1] = {false, ...};
-bool	ga_bIgnoreRemoval[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bHoldingMeleeWeapon[MAXPLAYERS + 1] = {false, ...};
 bool	g_bLateLoad;
 bool	ga_bBipodForced[MAXPLAYERS + 1] = {false, ...};
@@ -296,40 +294,25 @@ public void OnClientPostAdminCheck(int client) {
 }
 
 public void OnClientDisconnect(int client) {
-	if (IsFakeClient(client))
-		return;
+	if (IsFakeClient(client)) return;
 
 	ga_iLastButtons[client] = 0;
 	StopHolding(client);
 
-	if (ga_hPropPlaced[client] == null)
-		return;
-
-	int iArraySize = ga_hPropPlaced[client].Length;
-	bool removed = false;
-
-	if (iArraySize > 0) {
-		int ent;
-		for (int i = iArraySize - 1; i >= 0; i--) {
-			ent = EntRefToEntIndex(ga_hPropPlaced[client].Get(i));
-			if (ent > MaxClients && IsValidEntity(ent)) {
-				if (SafeKill(ent))
-					removed = true;
-			}
-		}
-	}
-
-	if (removed) {
-		for (int i = 1; i <= MaxClients; i++) {
-			if (!IsClientInGame(i) || i == client)
-				continue;
-			if (ga_iPropOwner[i] == client)
-				ga_iPropOwner[i] = 0;
-		}
-	}
-
-	delete ga_hPropPlaced[client];
+	ArrayList list = ga_hPropPlaced[client];
 	ga_hPropPlaced[client] = null;
+
+	if (list != null) {
+		for (int i = 0; i < list.Length; i++)
+			SafeKillRef(list.Get(i));
+
+		delete list;
+	}
+
+	for (int i = 1; i <= MaxClients; i++) {
+		if (ga_iPropOwner[i] == client)
+			ga_iPropOwner[i] = 0;
+	}
 }
 
 public Action Event_PlayerPickSquad(Event event, const char[] name, bool dontBroadcast) {
@@ -465,19 +448,17 @@ void HoldProp(int client) {
 	CreateProp(client, vPos, NULL_VECTOR);
 }
 
-void StopHolding(int client) {
+void StopHolding(int client, bool now = false) {
 	int ref = ga_iPropHolding[client];
 	if (ref == INVALID_ENT_REFERENCE)
 		return;
 
 	ga_iPropHolding[client] = INVALID_ENT_REFERENCE;
 
-	int ent = EntRefToEntIndex(ref);
-	if (ent > MaxClients && IsValidEntity(ent)) {
-		ga_bIgnoreRemoval[client] = true;
-		SafeKill(ent);
-		ga_bIgnoreRemoval[client] = false;
-	}
+	if (now)
+		KillNowRef(ref);
+	else
+		SafeKillRef(ref);
 }
 
 public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon) {
@@ -625,7 +606,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 					return;
 				}
 
-				if (IsPlayerOnGround(client) != 1)
+				if (!IsPlayerOnGround(client))
 					return;
 
 				float vPos[3], vAng[3];
@@ -647,7 +628,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 				}
 
 				int health = GetEntProp(target, Prop_Data, "m_iHealth");
-				SafeKill(target);
+				SafeKillIdx(target);
 				ga_iModelIndex[client] = view_as<PropId>(GetNumber(sName, "_m#"));
 				ga_iPropOwner[client] = propOwner;
 				CreateProp(client, vPos, vAng, health);
@@ -711,7 +692,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 }
 
 void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, bool solid = false) {
-	if (IsPlayerOnGround(client) != 1) {
+	if (!IsPlayerOnGround(client)) {
 		PrintCenterText(client, "You cannot build a prop while falling!");
 		return;
 	}
@@ -749,9 +730,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 					int buildCostActual = g_PropDefs[mid].cost;
 					if (!HasEnoughResources(client, buildCostActual)) {
 						PrintCenterText(client, "Not enough resources.");
-						ga_bIgnoreRemoval[client] = true;
-						SafeKill(prop);
-						ga_bIgnoreRemoval[client] = false;
+						SafeKillIdx(prop);
 						return;
 					}
 					ga_iPlayerBuildPoints[client] -= buildCostActual;
@@ -852,13 +831,12 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 }
 
 void ClearOldestPropIfLimitReached(int client) {
-	int ent;
 	while (ga_hPropPlaced[client] != null && ga_hPropPlaced[client].Length >= PROP_LIMIT && PROP_LIMIT > 1) {
-		ent = EntRefToEntIndex(ga_hPropPlaced[client].Get(0));
+		int ref = ga_hPropPlaced[client].Get(0);
+		int ent = EntRefToEntIndex(ref);
 		if (ent > MaxClients && IsValidEntity(ent)) {
-			ga_bIgnoreRemoval[client] = true;
-			SafeKill(ent);
-			ga_bIgnoreRemoval[client] = false;
+			DispatchKeyValue(ent, "targetname", "bmprop_deleted");
+			SafeKillRef(ref);
 		}
 		ga_hPropPlaced[client].Erase(0);
 	}
@@ -985,11 +963,7 @@ void CreateBleedEffect(int client, float vPos[3]) {
 }
 
 public Action Timer_RemoveParticle(Handle timer, int particleRef) {
-	int particle = EntRefToEntIndex(particleRef);
-	if (particle != INVALID_ENT_REFERENCE && IsValidEntity(particle))
-		SafeKill(particle);
-	else
-		PrintToServer("Failed to remove particle system entity. It might not exist.");
+	SafeKillRef(particleRef);
 	return Plugin_Stop;
 }
 
@@ -1086,7 +1060,7 @@ public void OnEntityDestroyed(int entity) {
 
 	if (propOwner > 0 && ga_hPropPlaced[propOwner] != null) {
 		int iArraySize = ga_hPropPlaced[propOwner].Length;
-		if (iArraySize < 1 || ga_bIgnoreRemoval[propOwner])
+		if (iArraySize < 1)
 			return;
 
 		for (int i = iArraySize - 1; i >= 0; i--) {
@@ -1152,7 +1126,7 @@ bool WeaponWithBipod(int client) {
 	}
 
 	char sWeapon[32];
-	GetEdictClassname(iWeapon, sWeapon, sizeof(sWeapon));
+	GetEntityClassname(iWeapon, sWeapon, sizeof(sWeapon));
 	for (int count = 0; count < sizeof(ga_sLmgWeapons); count++) {
 		if (strcmp(sWeapon, ga_sLmgWeapons[count], false) == 0)
 			return true;
@@ -1380,16 +1354,11 @@ void CloseAllPropMenus(int client, bool sendSlot9IfNeeded = true) {
 }
 
 void DeconstructAllProps(int client) {
-	if (ga_hPropPlaced[client] == null)
-		return;
+	ArrayList list = ga_hPropPlaced[client];
+	if (list == null) return;
 
-	int iArraySize = ga_hPropPlaced[client].Length;
-	if (iArraySize < 1)
-		return;
-
-	for (int i = iArraySize - 1; i >= 0; i--) {
-		int ent = EntRefToEntIndex(ga_hPropPlaced[client].Get(i));
-		SafeKill(ent);
+	for (int i = list.Length - 1; i >= 0; i--) {
+		SafeKillRef( list.Get(i));
 	}
 }
 
@@ -1412,17 +1381,22 @@ bool SetModelIndex(int client, bool found = false) {
 	return found;
 }
 
-void RefundAllSupply(int client) {
-	StopHolding(client);
+void RefundAllSupply(int client, bool immediateKill = false, bool silent = false) {
+	StopHolding(client, immediateKill);
 
 	if (ga_iTokensSpent[client] == 0)
 		return;
 
-	SetEntProp(client, Prop_Send, "m_nAvailableTokens", GetEntProp(client, Prop_Send, "m_nAvailableTokens") + ga_iTokensSpent[client]);
-	PrintToChat(client, "You have been refunded %d supply points.", ga_iTokensSpent[client]);
+	SetEntProp(client, Prop_Send, "m_nAvailableTokens",
+		GetEntProp(client, Prop_Send, "m_nAvailableTokens") + ga_iTokensSpent[client]);
+
+	if (!silent) {
+		PrintToChat(client, "You have been refunded %d supply points.", ga_iTokensSpent[client]);
+		EmitSoundToClient(client, SND_SUPPLYREFUND, SOUND_FROM_PLAYER, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, 1.0);
+	}
+
 	ga_iTokensSpent[client] = 0;
 	RestoreBuildPoints(client);
-	EmitSoundToClient(client, SND_SUPPLYREFUND, SOUND_FROM_PLAYER, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, 1.0);
 }
 
 public Action cmd_prophelp(int client, int args) {
@@ -1744,20 +1718,14 @@ public void OnPluginEnd() {
 		if (!IsClientInGame(i) || IsFakeClient(i))
 			continue;
 
-		RefundAllSupply(i);
+		RefundAllSupply(i, true, true);
 
-		if (ga_hPropPlaced[i] == null)
-			continue;
-
-		int iArraySize = ga_hPropPlaced[i].Length;
-		if (iArraySize > 0) {
-			for (int j = iArraySize - 1; j >= 0; j--) {
-				int ent = EntRefToEntIndex(ga_hPropPlaced[i].Get(j));
-				SafeKill(ent);
-			}
+		if (ga_hPropPlaced[i] != null) {
+			for (int j = ga_hPropPlaced[i].Length - 1; j >= 0; j--)
+				KillNowRef(ga_hPropPlaced[i].Get(j));
+			delete ga_hPropPlaced[i];
+			ga_hPropPlaced[i] = null;
 		}
-
-		delete ga_hPropPlaced[i];
 	}
 
 	JC_Stop();
@@ -1778,11 +1746,32 @@ void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue
 		g_iAllFree = g_cvAllFree.IntValue;
 }
 
-stock bool SafeKill(int ent)
-{
-	if (ent <= MaxClients || !IsValidEntity(ent)) return false;
-	if (!AcceptEntityInput(ent, "Kill")) RemoveEntity(ent);
-	return true;
+stock void SafeKillIdx(int ent) {
+	if (ent <= MaxClients) return;
+	int ref = EntIndexToEntRef(ent);
+	if (ref == INVALID_ENT_REFERENCE) return;
+	RequestFrame(NF_KillEntity, ref);
+}
+
+stock void SafeKillRef(int entref) {
+	if (entref == INVALID_ENT_REFERENCE) return;
+	RequestFrame(NF_KillEntity, entref);
+}
+
+stock void NF_KillEntity(any entref) {
+	int ent = EntRefToEntIndex(entref);
+	if (ent <= MaxClients || !IsValidEntity(ent)) return;
+
+	if (!AcceptEntityInput(ent, "Kill"))
+		RemoveEntity(ent);
+}
+
+stock void KillNowRef(int entref) {
+	int ent = EntRefToEntIndex(entref);
+	if (ent > MaxClients && IsValidEntity(ent)) {
+		if (!AcceptEntityInput(ent, "Kill"))
+			RemoveEntity(ent);
+	}
 }
 
 static void ClearJustPlaced_NextFrame(any serial)

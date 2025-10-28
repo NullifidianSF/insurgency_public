@@ -39,7 +39,7 @@ static void SweepAndCullUnlinkedCaches()
 
 		if (!CacheHasCPLink(e))
 		{
-			AcceptEntityInput(e, "Kill");	// preferred, lets map I/O clean up
+			SafeKillIdx(e);
 		}
 	}
 }
@@ -54,4 +54,24 @@ static bool CacheHasCPLink(int ent)
 		GetEntPropString(ent, Prop_Send, "m_iszControlPoint", buf, sizeof buf);
 
 	return (buf[0] != '\0');
+}
+
+stock void SafeKillIdx(int ent) {
+	if (ent <= MaxClients) return;
+	int ref = EntIndexToEntRef(ent);
+	if (ref == INVALID_ENT_REFERENCE) return;
+	RequestFrame(NF_KillEntity, ref);
+}
+
+stock void SafeKillRef(int entref) {
+	if (entref == INVALID_ENT_REFERENCE) return;
+	RequestFrame(NF_KillEntity, entref);
+}
+
+stock void NF_KillEntity(any entref) {
+	int ent = EntRefToEntIndex(entref);
+	if (ent <= MaxClients || !IsValidEntity(ent)) return;
+
+	if (!AcceptEntityInput(ent, "Kill"))
+		RemoveEntity(ent);
 }

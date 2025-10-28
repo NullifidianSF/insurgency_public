@@ -41,7 +41,7 @@ public void OnPluginStart() {
 }
 
 public void OnClientPostAdminCheck(int client) {
-	if (client > 0 && !IsFakeClient(client))
+	if (client > 0 && client <= MaxClients && IsClientInGame(client) && !IsFakeClient(client))
 		SDKHook(client, SDKHook_WeaponEquip, Hook_WeaponEquip);
 }
 
@@ -84,7 +84,6 @@ public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float
 
 	int credited = ResolveAttacker(attacker, inflictor);
 	pack.WriteCell( (credited > 0) ? EntIndexToEntRef(credited) : INVALID_ENT_REFERENCE );
-
 
 	IgniteEntity(victim, fTime);
 
@@ -147,7 +146,7 @@ void GoBoom(int victim, int attacker) {
 	if (!IsValidEntity(molly))
 		return;
 
-	RemoveEntity(victim);
+	SafeKillIdx(victim);
 
 	SetEntPropEnt(molly, Prop_Data, "m_hOwnerEntity", (owner > 0) ? owner : -1);
 	SetEntProp(molly,   Prop_Data, "m_takedamage", 2);
@@ -157,7 +156,7 @@ void GoBoom(int victim, int attacker) {
 	TeleportEntity(molly, origin, NULL_VECTOR, NULL_VECTOR);
 
 	if (!DispatchSpawn(molly)) {
-		RemoveEntity(molly);
+		SafeKillIdx(molly);
 		return;
 	}
 
@@ -177,5 +176,25 @@ void GoBoom(int victim, int attacker) {
 	AcceptEntityInput(hurt, "Hurt", (owner > 0) ? owner : -1);
 
 	DispatchKeyValue(molly, "targetname", "donthurtme");
-	RemoveEntity(hurt);
+	SafeKillIdx(hurt);
+}
+
+stock void SafeKillIdx(int ent) {
+	if (ent <= MaxClients) return;
+	int ref = EntIndexToEntRef(ent);
+	if (ref == INVALID_ENT_REFERENCE) return;
+	RequestFrame(NF_KillEntity, ref);
+}
+
+stock void SafeKillRef(int entref) {
+	if (entref == INVALID_ENT_REFERENCE) return;
+	RequestFrame(NF_KillEntity, entref);
+}
+
+stock void NF_KillEntity(any entref) {
+	int ent = EntRefToEntIndex(entref);
+	if (ent <= MaxClients || !IsValidEntity(ent)) return;
+
+	if (!AcceptEntityInput(ent, "Kill"))
+		RemoveEntity(ent);
 }

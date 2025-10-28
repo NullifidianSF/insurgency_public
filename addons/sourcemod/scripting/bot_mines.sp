@@ -5,7 +5,7 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PLUGIN_VERSION		"3.3"
+#define PLUGIN_VERSION		"3.4"
 
 #define MAXENTITIES			2048
 #define ENTIDX_OK(%1)	((%1) > 0 && (%1) <= MAXENTITIES)
@@ -186,8 +186,7 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 
 	for (int i = 0; i < ga_hMines.Length; i++)
 	{
-		int ent = EntRefToEntIndex(ga_hMines.Get(i));
-		if (ent != INVALID_ENT_REFERENCE && IsValidEntity(ent)) AcceptEntityInput(ent, "Kill");
+		SafeKillRef(ga_hMines.Get(i));
 	}
 	ga_hMines.Clear();
 
@@ -434,7 +433,7 @@ bool CreateMineAt(int userid, const float snapPos[3])
 		if (ent != INVALID_ENT_REFERENCE && IsValidEntity(ent))
 		{
 			if (!ENTIDX_OK(ent) || !ga_iTouchedBy[ent])
-				AcceptEntityInput(ent, "Kill");
+				SafeKillIdx(ent);
 			if (ENTIDX_OK(ent)) ga_iTouchedBy[ent] = 0;
 		}
 		ga_hMines.Erase(0);
@@ -445,8 +444,8 @@ bool CreateMineAt(int userid, const float snapPos[3])
 
 	DispatchKeyValue(iEnt, "physdamagescale", "0.0");
 	DispatchKeyValue(iEnt, "model", g_sModelMine);
-	DispatchKeyValue(iEnt, "Solid", "6");
-	if (!DispatchSpawn(iEnt)) { SafeKill(iEnt); return false; }
+	DispatchKeyValue(iEnt, "solid", "6");
+	if (!DispatchSpawn(iEnt)) { SafeKillIdx(iEnt); return false; }
 
 	ga_hMines.Push(EntIndexToEntRef(iEnt));
 	if (ENTIDX_OK(iEnt))
@@ -494,14 +493,14 @@ bool CreateMineAt(int userid, const float snapPos[3])
 	return true;
 }
 
-public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype)
+public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype) 
 {
 	if (!ENTIDX_OK(victim)) return Plugin_Continue;
 
 	if (attacker < 1 || attacker > MaxClients || !IsClientInGame(attacker) || IsFakeClient(attacker))
 		return Plugin_Handled;
 
-	if (damagetype == DMG_SLASH)
+	if (damagetype & DMG_SLASH)
 	{
 		if (ga_iTouchedBy[victim] == attacker)
 			return Plugin_Handled;
@@ -517,7 +516,7 @@ public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float
 				PrintToChatAll("\x070088cc%N\x01 saved \x070088cc%N\x01's life by defusing the mine.", attacker, ga_iTouchedBy[victim]);
 			}
 
-			AcceptEntityInput(victim, "Kill");
+			SafeKillIdx(victim);
 			ga_iDefuseCount[attacker]++;
 			PrintMineStats(attacker);
 			SendDefusedMessage(attacker);
@@ -527,7 +526,7 @@ public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float
 
 	if (ga_iTouchedBy[victim]) return Plugin_Handled;
 
-	if (damagetype != DMG_BULLET && damagetype != DMG_BUCKSHOT && damagetype != (DMG_BULLET + DMG_BUCKSHOT))
+	if ((damagetype & (DMG_BULLET | DMG_BUCKSHOT)) == 0 )
 		return Plugin_Handled;
 
 	damage = 1000.0;
@@ -705,9 +704,7 @@ void Mine_OnBreak(const char[] output, int caller, int activator, float delay)
 
 Action Timer_KillParticle(Handle timer, int entRef)
 {
-	int iParticle = EntRefToEntIndex(entRef);
-	if (iParticle != INVALID_ENT_REFERENCE && IsValidEntity(iParticle))
-		AcceptEntityInput(iParticle, "Kill");
+	SafeKillRef(entRef);
 	return Plugin_Stop;
 }
 
@@ -906,20 +903,18 @@ void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue
 
 public void OnEntityDestroyed(int ent)
 {
-	// Only scrub if it's an index we track
 	if (!ENTIDX_OK(ent)) return;
 
-	// If we didn't store anything for this ent, bail
-	if (!ga_iTouchedBy[ent] && ga_fMineSoundCooldown[ent] == 0.0)
-		return;
-
-	// Clear touched-by to avoid stale client ids later
 	ga_iTouchedBy[ent] = 0;
+	ga_fMineSoundCooldown[ent] = 0.0;
 
-	// Remove from list if present
 	for (int i = 0; i < ga_hMines.Length; i++)
 	{
-		if (ent == EntRefToEntIndex(ga_hMines.Get(i))) { ga_hMines.Erase(i); break; }
+		if (ent == EntRefToEntIndex(ga_hMines.Get(i)))
+		{
+			ga_hMines.Erase(i);
+			break;
+		}
 	}
 }
 
@@ -927,9 +922,10 @@ public void OnPluginEnd()
 {
 	for (int i = 0; i < ga_hMines.Length; i++)
 	{
-		int iMine = EntRefToEntIndex(ga_hMines.Get(i));
-		if (iMine != INVALID_ENT_REFERENCE && IsValidEntity(iMine)) AcceptEntityInput(iMine, "Kill");
+		KillNowRef(ga_hMines.Get(i));
 	}
+
+	delete ga_hMines;
 
 	for (int j = 1; j <= MaxClients; j++)
 	{
@@ -946,8 +942,35 @@ public void OnPluginEnd()
 	}
 }
 
-stock void SafeKill(int ent)
+stock void KillNowRef(int entref)
 {
+	int ent = EntRefToEntIndex(entref);
+	if (ent > MaxClients && IsValidEntity(ent))
+	{
+		if (!AcceptEntityInput(ent, "Kill"))
+			RemoveEntity(ent);
+	}
+}
+
+void SafeKillIdx(int ent)
+{
+	if (ent <= MaxClients) return;
+	int ref = EntIndexToEntRef(ent);
+	if (ref == INVALID_ENT_REFERENCE) return;
+	RequestFrame(NF_KillEntity, ref);
+}
+
+void SafeKillRef(int entref)
+{
+	if (entref == INVALID_ENT_REFERENCE) return;
+	RequestFrame(NF_KillEntity, entref);
+}
+
+void NF_KillEntity(any entref)
+{
+	int ent = EntRefToEntIndex(entref);
 	if (ent <= MaxClients || !IsValidEntity(ent)) return;
-	if (!AcceptEntityInput(ent, "Kill")) RemoveEntity(ent);
+
+	if (!AcceptEntityInput(ent, "Kill"))
+		RemoveEntity(ent);
 }
