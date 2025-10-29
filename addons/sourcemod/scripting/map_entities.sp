@@ -24,18 +24,21 @@ enum {
 	cs_workout_v1,
 	ins_mountain_escape_v1_3,
 	karkand_redux_p2,
-	pipeline_coop
+	pipeline_coop,
+	ins_coastdawn_a3
 };
 
 public Plugin myinfo = {
 	name = "map_entities",
-	author = "Nullifidian",
+	author = "Nullifidian + ChatGPT",
 	description = "remove or modify entities for some maps",
-	version = "2.6"
+	version = "2.7"
 };
 
 public void OnPluginStart() {
 	RegAdminCmd("sm_totalent", cmd_totalent, ADMFLAG_RCON, "Print total entities");
+	RegAdminCmd("sm_entstats", cmd_entstats, ADMFLAG_RCON, "List entity counts by classname.");
+	RegAdminCmd("sm_entdelete", cmd_entdelete, ADMFLAG_RCON, "Delete ents by classname with optional name/model filters");
 }
 
 public void OnMapStart() {
@@ -103,6 +106,10 @@ public void OnMapStart() {
 	}
 	else if (strcmp(sMapName, "pipeline_coop", false) == 0) {
 		g_iMapId = pipeline_coop;
+	}
+	else if (strcmp(sMapName, "ins_coastdawn_a3", false) == 0) {
+		g_iMapId = ins_coastdawn_a3;
+		RemoveEntities("env_sprite");
 	}
 	else if (g_bEventHooked) {
 		HookRoundStartEvent(false);
@@ -173,7 +180,7 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 			while ((iEnt = FindEntityByClassname(iEnt, "prop_dynamic")) != -1) {
 				GetEntPropString(iEnt, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
 				if (StrContains(sModelName, "door_handle_01", false) > -1) {
-					SafeKill(iEnt);
+					SafeKillIdx(iEnt);
 				}
 			}
 		}
@@ -181,11 +188,14 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 			int iEnt = -1;
 			while ((iEnt = FindEntityByClassname(iEnt, "func_breakable")) != -1) {
 				if (GetEntProp(iEnt, Prop_Data, "m_iHealth") != 500)
-					SafeKill(iEnt);
+					SafeKillIdx(iEnt);
 			}
 			
 			RemoveEntities("prop_door_rotating");
 			RemoveEntities("func_brush");
+		}
+		case ins_coastdawn_a3: {
+			RemoveEntities("func_breakable");
 		}
 	}
 	return Plugin_Continue;
@@ -200,13 +210,13 @@ void RemoveEntities(char[] sClass, char[] sName = "") {
 		while ((iEnt = FindEntityByClassname(iEnt, sClass)) != -1) {
 			GetEntPropString(iEnt, Prop_Data, "m_iName", sTempName, sizeof(sTempName));
 			if (strcmp(sTempName, sName, false) == 0) {
-				SafeKill(iEnt);
+				SafeKillIdx(iEnt);
 				iCount++;
 			}
 		}
 	} else {
 		while ((iEnt = FindEntityByClassname(iEnt, sClass)) != -1) {
-			SafeKill(iEnt);
+			SafeKillIdx(iEnt);
 			iCount++;
 		}
 	}
@@ -236,7 +246,7 @@ public Action cmd_totalent(int client, int args) {
 int CountEnt() {
 	int iCount = 0;
 	for (int i = 0; i < GetMaxEntities(); i++) {
-		if (IsValidEntity(i))
+		if (!IsValidEntity(i))
 			continue;
 		iCount++;
 	}
@@ -253,8 +263,201 @@ void HookRoundStartEvent(bool hook = true) {
 	}
 }
 
-stock bool SafeKill(int ent) {
-	if (ent <= MaxClients || !IsValidEntity(ent)) return false;
-	if (!AcceptEntityInput(ent, "Kill")) RemoveEntity(ent);
-	return true;
+public Action cmd_entstats(int client, int args) {
+	StringMap counts = new StringMap();
+	int used = 0;
+	char cls[64];
+
+	int maxe = GetMaxEntities();
+	for (int i = 0; i < maxe; i++) {
+		if (!IsValidEntity(i))
+			continue;
+
+		if (i >= 1 && i <= MaxClients)
+			continue;
+
+		GetEntityClassname(i, cls, sizeof(cls));
+		if (!cls[0])
+			continue;
+
+		int c;
+		if (counts.GetValue(cls, c))
+			counts.SetValue(cls, c + 1);
+		else
+			counts.SetValue(cls, 1);
+
+		used++;
+	}
+
+	StringMapSnapshot snap = counts.Snapshot();
+	int n = snap.Length;
+
+	int[] order = new int[n];
+	for (int i = 0; i < n; i++)
+		order[i] = i;
+
+	for (int a = 0; a < n - 1; a++) {
+		int best = a;
+		int bestCount = EntClassCountBySnap(counts, snap, order[best]);
+
+		for (int b = a + 1; b < n; b++) {
+			int curCount = EntClassCountBySnap(counts, snap, order[b]);
+			if (curCount > bestCount) {
+				best = b;
+				bestCount = curCount;
+			}
+		}
+
+		if (best != a) {
+			int tmp = order[a];
+			order[a] = order[best];
+			order[best] = tmp;
+		}
+	}
+
+	bool toClient = (client > 0 && IsClientInGame(client));
+	if (toClient) {
+		PrintToConsole(client, "=== Entity class counts (excluding players) ===");
+		PrintToConsole(client, "Used edicts: %d / %d (free: %d)", used, maxe, (maxe - used));
+		PrintToConsole(client, "%-5s  %-40s  %s", "#", "classname", "count");
+	}
+	else {
+		PrintToServer("=== Entity class counts (excluding players) ===");
+		PrintToServer("Used edicts: %d / %d (free: %d)", used, maxe, (maxe - used));
+		PrintToServer("%-5s  %-40s  %s", "#", "classname", "count");
+	}
+
+	char key[64];
+	for (int i = 0; i < n; i++) {
+		snap.GetKey(order[i], key, sizeof(key));
+		int cnt = 0;
+		counts.GetValue(key, cnt);
+
+		if (toClient)
+			PrintToConsole(client, "%-5d  %-40s  %d", i + 1, key, cnt);
+		else
+			PrintToServer("%-5d  %-40s  %d", i + 1, key, cnt);
+	}
+
+	if (toClient)
+		ReplyToCommand(client, "Entity stats printed to your console.");
+
+	delete snap;
+	delete counts;
+	return Plugin_Handled;
+}
+
+public Action cmd_entdelete(int client, int args) {
+	if (args < 1) {
+		ReplyToCommand(client, "Usage: sm_entdelete <classname> [name|model:<substr>] [-contains]");
+		return Plugin_Handled;
+	}
+
+	char cls[64];
+	GetCmdArg(1, cls, sizeof(cls));
+
+	char nameFilter[64]; nameFilter[0] = '\0';
+	char modelFilter[PLATFORM_MAX_PATH]; modelFilter[0] = '\0';
+	bool contains = false;
+
+	if (args >= 2) {
+		char arg2[PLATFORM_MAX_PATH];
+		GetCmdArg(2, arg2, sizeof(arg2));
+
+		if (StrContains(arg2, "model:", false) == 0) {
+			strcopy(modelFilter, sizeof(modelFilter), arg2[6]);
+		}
+		else {
+			strcopy(nameFilter, sizeof(nameFilter), arg2);
+		}
+	}
+
+	if (args >= 3) {
+		char arg3[32];
+		GetCmdArg(3, arg3, sizeof(arg3));
+		contains = (StrEqual(arg3, "-contains", false) || StrEqual(arg3, "-c", false));
+	}
+
+	int removed = RemoveEntitiesByCmd(cls, nameFilter, contains, modelFilter);
+
+	if (removed > 0)
+		ReplyToCommand(client, "[map_entities] Removed \"%s\" %s%s%s x %d",
+			cls,
+			modelFilter[0] ? "model~" : (nameFilter[0] ? "named " : ""),
+			modelFilter[0] ? modelFilter : (nameFilter[0] ? nameFilter : ""),
+			contains && nameFilter[0] ? " (contains)" : "",
+			removed);
+	else
+		ReplyToCommand(client, "[map_entities] No matches for \"%s\" with given filters.", cls);
+
+	return Plugin_Handled;
+}
+
+static int RemoveEntitiesByCmd(const char[] sClass, const char[] sNameFilter = "", bool contains = false, const char[] sModelFilter = "") {
+	int count = 0;
+	int ent = -1;
+
+	char tempName[64];
+	char tempModel[PLATFORM_MAX_PATH];
+
+	while ((ent = FindEntityByClassname(ent, sClass)) != -1) {
+		if (ent <= MaxClients || !IsValidEntity(ent))
+			continue;
+
+		bool match = true;
+
+		if (sModelFilter[0]) {
+			GetEntPropString(ent, Prop_Data, "m_ModelName", tempModel, sizeof(tempModel));
+			if (!tempModel[0] || StrContains(tempModel, sModelFilter, false) == -1)
+				match = false;
+		}
+
+		if (match && sNameFilter[0]) {
+			GetEntPropString(ent, Prop_Data, "m_iName", tempName, sizeof(tempName));
+			if (contains) {
+				if (StrContains(tempName, sNameFilter, false) == -1)
+					match = false;
+			}
+			else {
+				if (strcmp(tempName, sNameFilter, false) != 0)
+					match = false;
+			}
+		}
+
+		if (!match)
+			continue;
+
+		SafeKillIdx(ent);
+		count++;
+	}
+
+	return count;
+}
+
+static int EntClassCountBySnap(StringMap map, StringMapSnapshot snap, int snapIndex) {
+	char k[64];
+	snap.GetKey(snapIndex, k, sizeof(k));
+	int c = 0;
+	map.GetValue(k, c);
+	return c;
+}
+
+stock void SafeKillIdx(int ent) {
+	if (ent <= MaxClients) return;
+	int ref = EntIndexToEntRef(ent);
+	if (ref == INVALID_ENT_REFERENCE) return;
+	RequestFrame(NF_KillEntity, ref);
+}
+
+stock void SafeKillRef(int entref) {
+	if (entref == INVALID_ENT_REFERENCE) return;
+	RequestFrame(NF_KillEntity, entref);
+}
+
+stock void NF_KillEntity(any entref) {
+	int ent = EntRefToEntIndex(entref);
+	if (ent <= MaxClients || !IsValidEntity(ent)) return;
+
+	if (!AcceptEntityInput(ent, "Kill"))
+		RemoveEntity(ent);
 }
