@@ -32,7 +32,7 @@ public Plugin myinfo = {
 	name = "map_entities",
 	author = "Nullifidian + ChatGPT",
 	description = "remove or modify entities for some maps",
-	version = "2.7"
+	version = "2.8"
 };
 
 public void OnPluginStart() {
@@ -196,6 +196,9 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 		}
 		case ins_coastdawn_a3: {
 			RemoveEntities("func_breakable");
+			RemoveEntities("prop_dynamic", "road_cars");
+			RemoveEntities("prop_dynamic", "road_semi_truck");
+			RemoveEntities("prop_dynamic", "road_model_truck");
 		}
 	}
 	return Plugin_Continue;
