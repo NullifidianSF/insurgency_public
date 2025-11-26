@@ -4,9 +4,8 @@
 #include <sourcemod>
 #include <sdktools>
 #include <sdkhooks>
-#tryinclude <bm_respawn>
 
-#define PL_VERSION		"2.20"
+#define PL_VERSION		"2.21"
 
 #define MAXENTITIES		2048
 
@@ -54,8 +53,8 @@
 #define PROP_HOLD_DISTANCE			120.0
 #define PROP_LIMIT					10		// Prop limit per player
 #define PROP_PLAYER_DISTANCE		50.0
-#define PROP_MIN_BOT_DISTANCE		250.0	// Minimum horizontal distance from any bot spawn to allow prop placement (units)
-#define PROP_MIN_BOT_VERT_DISTANCE	80.0	// Maximum allowed vertical difference from a bot spawn to allow placement (units)
+#define PROP_MIN_BOT_DISTANCE		150.0	// Minimum horizontal distance from any bot spawn to allow prop placement (units)
+#define PROP_MIN_BOT_VERT_DISTANCE	60.0	// Maximum allowed vertical difference from a bot spawn to allow placement (units)
 
 #define BOT_BLEED_WIREDAMAGE		10.0	// Amount of bleed damage bot takes from a barbed wire
 
@@ -179,22 +178,6 @@ float	ga_fPressedJumpTime[MAXPLAYERS + 1] = {0.0, ...};
 float	ga_fPropMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
 float	ga_fShopMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
 float	ga_fWireSoundCooldown[MAXENTITIES + 1] = {0.0, ...};
-
-static bool g_bHasBMRespawn;
-
-public void OnAllPluginsLoaded() {
-	g_bHasBMRespawn = LibraryExists("bm_respawn");
-}
-
-public void OnLibraryAdded(const char[] name) {
-	if (StrEqual(name, "bm_respawn"))
-		g_bHasBMRespawn = true;
-}
-
-public void OnLibraryRemoved(const char[] name) {
-	if (StrEqual(name, "bm_respawn"))
-		g_bHasBMRespawn = false;
-}
 
 public Plugin myinfo = {
 	name = "props",
@@ -393,19 +376,6 @@ public Action Event_ObjectiveDone(Event event, const char[] name, bool dontBroad
 		RestoreBuildPoints(i);
 	}
 	return Plugin_Continue;
-}
-
-static bool Props_IsTooCloseToSpawn(const float vPos[3]) {
-	if (!g_bHasBMRespawn)
-		return false;
-
-	if (BM_IsNearBotSpawn2D(vPos, PROP_MIN_BOT_DISTANCE, PROP_MIN_BOT_VERT_DISTANCE) && BM_GetRemainingLivesIns() > 5)
-		return true;
-
-	if (BM_IsNearNextBotSpawn2D(vPos, PROP_MIN_BOT_DISTANCE, PROP_MIN_BOT_VERT_DISTANCE))
-		return true;
-
-	return false;
 }
 
 void GetPositionInFront(float vPos[3], const float vAng[3], float distance) {
@@ -660,12 +630,6 @@ void OnButtonPress(int client, int button, float vel[3]) {
 
 			if (IsCollidingWithPlayer(client, vPos)) {
 				PrintCenterText(client, "Too close to another player.");
-				EndPlaceLock(client);
-				return;
-			}
-
-			if (!InCounterAttack() && Props_IsTooCloseToSpawn(vPos)) {
-				PrintCenterText(client, "Too close to a bot spawn point.");
 				EndPlaceLock(client);
 				return;
 			}
@@ -1780,5 +1744,3 @@ static void ClearJustPlaced_NextFrame(any serial)
 	if (client >= 1 && client <= MaxClients)
 		ga_bJustPlaced[client] = false;
 }
-
-bool InCounterAttack() { return view_as<bool>(GameRules_GetProp("m_bCounterAttack")); }

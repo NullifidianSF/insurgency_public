@@ -5,7 +5,7 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PLUGIN_VERSION		"3.4"
+#define PLUGIN_VERSION		"3.5"
 
 #define MAXENTITIES			2048
 #define ENTIDX_OK(%1)	((%1) > 0 && (%1) <= MAXENTITIES)
@@ -559,7 +559,7 @@ public Action Hook_StartTouch(int entity, int touch)
 		}
 		else
 		{
-			AcceptEntityInput(entity, "Break");
+			RequestFrame(BreakNextFrame, EntIndexToEntRef(entity));
 		}
 	}
 	return Plugin_Continue;
@@ -629,7 +629,7 @@ public Action Hook_EndTouch(int entity, int touch)
 		SetEntProp(touch, Prop_Send, "m_bGlowEnabled", false);
 	}
 
-	AcceptEntityInput(entity, "Break");
+	RequestFrame(BreakNextFrame, EntIndexToEntRef(entity));
 	return Plugin_Continue;
 }
 
@@ -973,4 +973,11 @@ void NF_KillEntity(any entref)
 
 	if (!AcceptEntityInput(ent, "Kill"))
 		RemoveEntity(ent);
+}
+
+void BreakNextFrame(any entref)
+{
+	int ent = EntRefToEntIndex(entref);
+	if (ent > MaxClients && IsValidEntity(ent))
+		AcceptEntityInput(ent, "Break");
 }
