@@ -53,8 +53,6 @@
 #define PROP_HOLD_DISTANCE			120.0
 #define PROP_LIMIT					10		// Prop limit per player
 #define PROP_PLAYER_DISTANCE		50.0
-#define PROP_MIN_BOT_DISTANCE		150.0	// Minimum horizontal distance from any bot spawn to allow prop placement (units)
-#define PROP_MIN_BOT_VERT_DISTANCE	60.0	// Maximum allowed vertical difference from a bot spawn to allow placement (units)
 
 #define BOT_BLEED_WIREDAMAGE		10.0	// Amount of bleed damage bot takes from a barbed wire
 
