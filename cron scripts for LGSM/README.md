@@ -279,7 +279,7 @@ fi
   ```bash
   CFG="/home/USERNAME/lgsm/config-lgsm/insserver/insserver.cfg"
   ...
-  awk -v new="defaultmap="$CHOICE"" '...'
+  awk -v new="defaultmap=\"$CHOICE\"" ' '...'
   ```
 
 So next time you run `./insserver start` or `./insserver restart`,  
