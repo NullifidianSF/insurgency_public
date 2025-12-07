@@ -1,3 +1,3 @@
-*/5 * * * * /home/USERNAME/insserver monitor > /dev/null 2>&1
-0 4 * * * /home/USERNAME/empty_restart.sh >/dev/null 2>&1
+*/5 * * * * /home/USERNAME/insserver monitor >/dev/null 2>&1
 0 3 * * * /home/USERNAME/rotate_defaultmap.sh >/dev/null 2>&1
+0 5,7,9 * * * /home/USERNAME/empty_restart.sh >/dev/null 2>&1
