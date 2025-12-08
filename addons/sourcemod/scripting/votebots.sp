@@ -9,31 +9,33 @@ public Plugin myinfo =
 	name = "votebots",
 	author = "Nullifidian + ChatGPT",
 	description = "vote menu to change bot count",
-	version = "2.9"
+	version = "2.10"
 };
 
 #define VB_PREFIX "\x070088cc[!vb]\x01"
 
 const int g_iVoteOptions = 5;
 
-int ga_iVotedFor[MAXPLAYERS + 1] = {0, ...};
-int ga_iTotalVotes[g_iVoteOptions + 1] = {0, ...};
-int g_iLivesMultiNow;
-int g_iLivesMultiDef;
-int g_iNeedVotes;
-int g_iSecPlayers;
+int		ga_iVotedFor[MAXPLAYERS + 1] = {0, ...};
+int		ga_iTotalVotes[g_iVoteOptions + 1] = {0, ...};
+int		g_iLivesMultiNow;
+int		g_iLivesMultiDef;
+int		g_iNeedVotes;
+int		g_iSecPlayers;
 
-float g_fVotePercent;
+float	g_fVotePercent;
 
-bool g_bRoundStarted = false;
-bool g_bLateLoad = false;
-bool ga_bPlayerVoted[MAXPLAYERS + 1] = {false, ...};
-bool g_bShownTeamHint[MAXPLAYERS + 1] = {false, ...};
+bool	g_bRoundStarted = false;
+bool	g_bLateLoad = false;
+bool	ga_bPlayerVoted[MAXPLAYERS + 1] = {false, ...};
+bool	g_bShownTeamHint[MAXPLAYERS + 1] = {false, ...};
 
-ConVar g_cvVotePercent = null;
-ConVar g_cvBotLives = null;
+ConVar	g_cvVotePercent = null;
+ConVar	g_cvBotLives = null;
 
-char g_sVoteSound[] = "ui/vote_success.wav";
+char	g_sVoteSound[] = "ui/vote_success.wav";
+
+Handle	g_hCountVotesTimer = null;
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
 {
@@ -53,7 +55,9 @@ public void OnPluginStart()
 	g_cvVotePercent.AddChangeHook(OnConVarChanged);
 
 	if (g_bLateLoad)
+	{
 		g_bRoundStarted = true;
+	}
 
 	HookEvent("round_start", Event_RoundStart, EventHookMode_PostNoCopy);
 	HookEvent("round_end", Event_RoundEnd, EventHookMode_PostNoCopy);
@@ -91,6 +95,12 @@ public void OnMapStart()
 public void OnMapEnd()
 {
 	g_bRoundStarted = false;
+
+	if (g_hCountVotesTimer != null)
+	{
+		CloseHandle(g_hCountVotesTimer);
+		g_hCountVotesTimer = null;
+	}
 }
 
 // Simple integer abs helper
@@ -123,6 +133,7 @@ int GetBotsForOption(int optionIndex)
 		{
 			if (optionIndex == i)
 			{
+                // This option is the "default" value
 				return g_iLivesMultiDef;
 			}
 
@@ -173,7 +184,8 @@ public Action Event_PlayerDisconnect(Event event, const char[] name, bool dontBr
 		ResetPlayerVote(client, true);
 	}
 
-	CountVotes();
+	// Debounced recount
+	ScheduleCountVotes();
 	return Plugin_Continue;
 }
 
@@ -208,7 +220,8 @@ public Action Event_PlayerTeam(Event event, const char[] name, bool dontBroadcas
 		PrintHintText(client, "%T", "VB_JoinHint_Hint", client);
 	}
 
-	CreateTimer(0.1, Timer_CountVotes);
+	// Debounced recount
+	ScheduleCountVotes();
 	return Plugin_Continue;
 }
 
@@ -622,8 +635,17 @@ void CountVotes()
 	}
 }
 
+void ScheduleCountVotes()
+{
+	if (g_hCountVotesTimer == null)
+	{
+		g_hCountVotesTimer = CreateTimer(0.1, Timer_CountVotes, _, TIMER_FLAG_NO_MAPCHANGE);
+	}
+}
+
 Action Timer_CountVotes(Handle timer)
 {
+	g_hCountVotesTimer = null;
 	CountVotes();
 	return Plugin_Stop;
 }
