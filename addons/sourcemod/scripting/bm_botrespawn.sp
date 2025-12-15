@@ -5,15 +5,19 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PL_VERSION		"1.0.1"
+#define PL_VERSION		"1.1.1"
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
 #define TEAM_INSURGENT	3
 
-#define MAX_CPS 32
+#define MAX_CPS			32
 
-float g_fMinSpawnDistHuman = 1300.0;		// how far from humans a CP spawn must be
+// ------------------------------------------------------------
+// Config / state
+// ------------------------------------------------------------
+
+float g_fMinSpawnDistHuman = 1150.0;		// how far from humans a CP spawn must be
 float g_fProximityGraceSeconds = 15.0;		// disable proximity check for this long
 
 float g_fProxGraceUntil = 0.0;
@@ -23,8 +27,8 @@ ArrayList g_CASpawns[MAX_CPS];
 int g_iNumCPs = 0;
 int g_iActiveCP = 0;
 
-Handle	g_hForceRespawn = null;
-Handle	g_hGameConfig = null;
+Handle g_hForceRespawn = null;
+Handle g_hGameConfig = null;
 
 ConVar cv_hBotLives = null;
 ConVar cv_hMaxCounterAttackDuration = null;
@@ -35,10 +39,27 @@ ConVar cv_hCounterAttackAlways = null;
 ConVar cv_hCounterAttackChance = null;
 ConVar cv_hMinSpawnDistHuman = null;
 ConVar cv_hProximityGraceSeconds = null;
+ConVar cv_hBomberRespawns = null;
+ConVar cv_hTankRespawns = null;
 
-int g_iMaxCounterAttackDuration;
-int g_iMinCounterAttackDuration;
-float g_fCounterAttackChance;
+ConVar g_cvCADelay = null;
+ConVar g_cvCADelayFinale = null;
+ConVar g_cvCAWarnRadius = null;
+
+int g_iMaxCounterAttackDuration = 0;
+int g_iMinCounterAttackDuration = 0;
+float g_fCounterAttackChance = 0.0;
+
+const int gc_iBomber = 31;
+const int gc_iTank = 32;
+bool ga_bIsBomber[MAXPLAYERS + 1] = {false, ...};
+bool ga_bIsTank[MAXPLAYERS + 1] = {false, ...};
+
+int g_iBomberRespawnsMax = 0;
+int g_iTankRespawnsMax = 0;
+
+int g_iBomberRespawCount = 0;
+int g_iTankRespawnCount = 0;
 
 int ga_iStuckCheckSount[MAXPLAYERS + 1] = {0, ...};
 bool ga_bIsBotStuck[MAXPLAYERS + 1] = {false, ...};
@@ -53,9 +74,9 @@ int ga_iBotIdleMoveChecks[MAXPLAYERS + 1] = {0, ...};
 int g_iBotLives = 0;
 int g_iBotLivesRemain = 0;
 
-int g_iPlayerEquipGear;
+int g_iPlayerEquipGear = -1;
 static const int g_iRadioGearID = 4;
-int g_iTotalAliveEnemies;
+int g_iTotalAliveEnemies = 0;
 
 bool g_bIsMapChanging = false;
 bool g_bIsGameEnd = false;
@@ -66,59 +87,120 @@ char g_sObjResNetClass[32];
 
 bool ga_bPickSquad[MAXPLAYERS + 1] = {false, ...};
 
-bool g_bLateLoad;
+bool g_bLateLoad = false;
 
-public Plugin myinfo = {
+// CA countdown state
+static const char g_sCASound1[] = "hq/outpost/outpost_nextwave8.ogg";
+static const char g_sCASound2[] = "hq/outpost/outpost_nextwave5.ogg";
+
+Handle g_hCACountdownTimer = null;
+Handle g_hCAProbeTimer = null;
+
+int g_iCADelay = 0;
+int g_iCADelayFinale = 0;
+int g_iCACountdownLeft = 0;
+bool g_bCAFinaleCountdown = false;
+float g_fCAWarnRadius = 350.0;
+
+// ------------------------------------------------------------
+// Plugin info
+// ------------------------------------------------------------
+
+public Plugin myinfo =
+{
 	name		= "bm_botrespawn",
 	author		= "Nullifidian + ChatGPT",
-	description	= "Respawns bots at custom spawn locations",
+	description	= "Respawns bots at custom spawn locations + integrated CA countdown and spawn warnings",
 	version		= PL_VERSION
 };
 
-public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
+public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
+{
 	g_bLateLoad = late;
 	return APLRes_Success;
 }
 
-public void OnPluginStart() {
+// ------------------------------------------------------------
+// Plugin start / map start / end
+// ------------------------------------------------------------
+
+public void OnPluginStart()
+{
 	if ((g_hGameConfig = LoadGameConfigFile("insurgency.games")) == INVALID_HANDLE)
+	{
 		SetFailState("Fatal Error: Missing File \"insurgency.games\"!");
+	}
 
 	if ((g_iPlayerEquipGear = FindSendPropInfo("CINSPlayer", "m_EquippedGear")) == -1)
+	{
 		SetFailState("Offset \"m_EquippedGear\" not found!");
+	}
 
 	StartPrepSDKCall(SDKCall_Player);
 	PrepSDKCall_SetFromConf(g_hGameConfig, SDKConf_Signature, "ForceRespawn");
 	if ((g_hForceRespawn = EndPrepSDKCall()) == INVALID_HANDLE)
+	{
 		SetFailState("Fatal Error: Unable to find signature for \"ForceRespawn\"!");
+	}
 
-	for (int i = 0; i < MAX_CPS; i++) {
-		if (g_CPSpawns[i] == null) g_CPSpawns[i] = new ArrayList(3);
-		if (g_CASpawns[i] == null) g_CASpawns[i] = new ArrayList(3);
+	for (int i = 0; i < MAX_CPS; i++)
+	{
+        if (g_CPSpawns[i] == null)
+		{
+			g_CPSpawns[i] = new ArrayList(3);
+		}
+        if (g_CASpawns[i] == null)
+		{
+			g_CASpawns[i] = new ArrayList(3);
+		}
 	}
 
 	SetupCvars();
 	
-	HookEvent("player_spawn", Event_PlayerSpawn);
-	HookEvent("player_death", Event_PlayerDeath);
-	HookEvent("object_destroyed", Event_ObjDone_NoCopy, EventHookMode_PostNoCopy);
-	HookEvent("controlpoint_captured", Event_ObjDone_NoCopy, EventHookMode_PostNoCopy);
-	HookEvent("game_end", Event_GameEnd, EventHookMode_PostNoCopy);
-	HookEvent("round_start", Event_RoundStart);
-	HookEvent("round_end", Event_RoundEnd);
-	HookEvent("player_pick_squad", Event_PlayerPickSquad_Post, EventHookMode_Post);
-	HookEvent("player_team", Event_PlayerTeam);
+	HookEvent("player_spawn",				Event_PlayerSpawn);
+	HookEvent("player_death",				Event_PlayerDeath);
+	HookEvent("object_destroyed",			Event_ObjDone_NoCopy, EventHookMode_PostNoCopy);
+	HookEvent("controlpoint_captured",		Event_ObjDone_NoCopy, EventHookMode_PostNoCopy);
+	HookEvent("game_end",					Event_GameEnd, EventHookMode_PostNoCopy);
+	HookEvent("round_start",				Event_RoundStart);
+	HookEvent("round_end",					Event_RoundEnd);
+	HookEvent("player_pick_squad",			Event_PlayerPickSquad_Post, EventHookMode_Post);
+	HookEvent("player_team",				Event_PlayerTeam_Post, EventHookMode_Post);
 
-	HookEvent("object_destroyed", Event_Objectives_Pre, EventHookMode_Pre);
-	HookEvent("controlpoint_captured", Event_Objectives_Pre, EventHookMode_Pre);
+	HookEvent("object_destroyed",			Event_Objectives_Pre, EventHookMode_Pre);
+	HookEvent("controlpoint_captured",		Event_Objectives_Pre, EventHookMode_Pre);
+
+	// CA countdown hooks
+	HookEvent("controlpoint_captured",		CA_Event_ControlPointCaptured);
+	HookEvent("object_destroyed",			CA_Event_ObjectDestroyed);
 
 	LoadTranslations("common.phrases");
 
-	RegAdminCmd("sm_respawn", cmd_respawn, ADMFLAG_SLAY, "sm_respawn <#userid|name|@all|@bots|@humans|@me> - Respawn player(s).");
-	RegAdminCmd("sm_bots", cmd_bots, ADMFLAG_BAN, "sm_bots - How many bots alive and lives remain.");
+	RegAdminCmd("sm_respawn",	cmd_respawn, ADMFLAG_SLAY, "sm_respawn <#userid|name|@all|@bots|@humans|@me> - Respawn player(s).");
+	RegAdminCmd("sm_bots",		cmd_bots, ADMFLAG_BAN, "sm_bots - How many bots alive and lives remain.");
 
 	if (g_bLateLoad)
+	{
 		g_bIsRoundActive = true;
+
+		int iClass;
+		for (int i = 1; i <= MaxClients; i++)
+		{
+			if (!IsClientInGame(i) || GetClientTeam(i) != TEAM_INSURGENT)
+				continue;
+
+			iClass = GetEntProp(GetPlayerResourceEntity(), Prop_Send, "m_iPlayerClass", _, i);
+
+			if (iClass == gc_iTank)
+			{
+				ga_bIsTank[i] = true;
+			}
+			else if (iClass == gc_iBomber)
+			{
+				ga_bIsBomber[i] = true;
+			}
+		}
+	}
 
 	char sBuffer[PLATFORM_MAX_PATH];
 	GetPluginFilename(INVALID_HANDLE, sBuffer, sizeof(sBuffer));
@@ -126,19 +208,32 @@ public void OnPluginStart() {
 	AutoExecConfig(true, sBuffer);
 }
 
-public void OnMapStart() {
-	char map[64]; GetCurrentMap(map, sizeof map);
+public void OnMapStart()
+{
+	char map[64];
+	GetCurrentMap(map, sizeof map);
 
+	// Cache OR + CP info (may be -1 early, but we clamp)
 	g_iNumCPs = ObjectiveResource_GetProp("m_iNumControlPoints");
-	if (g_iNumCPs < 0 || g_iNumCPs > MAX_CPS) g_iNumCPs = MAX_CPS;
+	if (g_iNumCPs < 0 || g_iNumCPs > MAX_CPS)
+	{
+		g_iNumCPs = MAX_CPS;
+	}
 
 	g_iActiveCP = ObjectiveResource_GetProp("m_nActivePushPointIndex");
-	if (g_iActiveCP < 0) g_iActiveCP = 0;
-	if (g_iActiveCP > g_iNumCPs && g_iNumCPs > 0) g_iActiveCP = g_iNumCPs - 1;
+	if (g_iActiveCP < 0)
+	{
+		g_iActiveCP = 0;
+	}
+	if (g_iActiveCP > g_iNumCPs && g_iNumCPs > 0)
+	{
+		g_iActiveCP = g_iNumCPs - 1;
+	}
 
 	LoadSpawnsForMap(map, g_CPSpawns, g_CASpawns, (g_iNumCPs > 0 ? g_iNumCPs : MAX_CPS));
 
-	if (!g_bLateLoad) {
+	if (!g_bLateLoad)
+	{
 		g_bIsRoundActive = false;
 		g_bLateLoad = false;
 	}
@@ -146,28 +241,60 @@ public void OnMapStart() {
 	g_bIsMapChanging = false;
 	g_bIsGameEnd = false;
 
+	ResetTankBomberRespawnCount();
+
+	// CA countdown sounds
+	PrecacheSound(g_sCASound1, true);
+	PrecacheSound(g_sCASound2, true);
+
+	// Init CA delay cvars once entities are ready
+	CreateTimer(0.1, CA_Timer_InitConVars, _, TIMER_FLAG_NO_MAPCHANGE);
+
 	CreateTimer(30.0, Timer_Enemies_Remaining, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 	CreateTimer(5.0, Timer_MapStart, _, TIMER_FLAG_NO_MAPCHANGE);
 	CreateTimer(60.0, Timer_CheckSpawnMovedGlobal, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 
-Action Timer_MapStart(Handle timer) {
+Action Timer_MapStart(Handle timer)
+{
 	ServerCommand("exec betterbots.cfg");
 	return Plugin_Stop;
 }
 
-public void OnMapEnd() {
+public void OnMapEnd()
+{
 	g_bIsMapChanging = true;
 	g_bIsRoundActive = false;
 	g_iObjResEntity = -1;
 	g_sObjResNetClass[0] = '\0';
+
+	// CA countdown cleanup
+	if (g_hCACountdownTimer != null)
+	{
+		KillTimer(g_hCACountdownTimer);
+		g_hCACountdownTimer = null;
+	}
+	if (g_hCAProbeTimer != null)
+	{
+		KillTimer(g_hCAProbeTimer);
+		g_hCAProbeTimer = null;
+	}
+	g_iCACountdownLeft = 0;
+	g_bCAFinaleCountdown = false;
 }
 
-public void OnClientPostAdminCheck(int client) {
+// ------------------------------------------------------------
+// Client connect / disconnect
+// ------------------------------------------------------------
+
+public void OnClientPostAdminCheck(int client)
+{
 	if (client < 1 || client > MaxClients || !IsClientInGame(client))
 		return;
 
 	ga_bPickSquad[client] = false;
+	ga_bIsTank[client] = false;
+	ga_bIsBomber[client] = false;
 	ga_bBotSpawnOriginValid[client] = false;
 	ga_iBotNoMoveChecks[client] = 0;
 	ga_fBotSpawnTime[client] = 0.0;
@@ -175,11 +302,14 @@ public void OnClientPostAdminCheck(int client) {
 	ga_iBotIdleMoveChecks[client] = 0;
 }
 
-public void OnClientDisconnect(int client) {
+public void OnClientDisconnect(int client)
+{
 	if (client < 1 || client > MaxClients)
 		return;
 
 	ga_bPickSquad[client] = false;
+	ga_bIsTank[client] = false;
+	ga_bIsBomber[client] = false;
 	ga_bBotSpawnOriginValid[client] = false;
 	ga_iBotNoMoveChecks[client] = 0;
 	ga_fBotSpawnTime[client] = 0.0;
@@ -187,28 +317,64 @@ public void OnClientDisconnect(int client) {
 	ga_iBotIdleMoveChecks[client] = 0;
 }
 
-public Action Event_PlayerTeam(Event event, const char[] name, bool dontBroadcast) {
+// ------------------------------------------------------------
+// Events: team / squad / round
+// ------------------------------------------------------------
+
+public Action Event_PlayerTeam_Post(Event event, const char[] name, bool dontBroadcast)
+{
 	int client = GetClientOfUserId(event.GetInt("userid"));
 
 	if (client < 1 || client > MaxClients)
 		return Plugin_Continue;
 
 	ga_bPickSquad[client] = false;
+	ga_bIsTank[client] = false;
+	ga_bIsBomber[client] = false;
+
+	if (!event.GetBool("isbot") && event.GetInt("team") == TEAM_SECURITY)
+	{
+		BM_MaybeBoostBotLives();
+	}
 
 	return Plugin_Continue;
 }
 
-public Action Event_PlayerPickSquad_Post(Event event, const char[] name, bool dontBroadcast) {
+public Action Event_PlayerPickSquad_Post(Event event, const char[] name, bool dontBroadcast)
+{
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	if (client < 1 || client > MaxClients || !IsClientInGame(client))
 		return Plugin_Continue;
 
 	ga_bPickSquad[client] = true;
 
+	if (GetClientTeam(client) == TEAM_INSURGENT)
+	{
+		char class_template[64];
+		event.GetString("class_template", class_template, sizeof(class_template));
+
+		if (StrContains(class_template, "tank", false) != -1)
+		{
+			ga_bIsTank[client] = true;
+			ga_bIsBomber[client] = false;
+		}
+		else if (StrContains(class_template, "bomber", false) != -1)
+		{
+			ga_bIsBomber[client] = true;
+			ga_bIsTank[client] = false;
+		}
+		else
+		{
+			ga_bIsTank[client] = false;
+			ga_bIsBomber[client] = false;
+		}
+	}
+
 	return Plugin_Continue;
 }
 
-public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
+public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
+{
 	g_iActiveCP = 0;
 	g_bIsRoundActive = true;
 	BM_StartProxGrace(g_fProximityGraceSeconds);
@@ -216,12 +382,18 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 	return Plugin_Continue;
 }
 
-public Action Event_RoundEnd(Event event, const char[] name, bool dontBroadcast) {
+public Action Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
+{
 	g_bIsRoundActive = false;
 	return Plugin_Continue;
 }
 
-public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast) {
+// ------------------------------------------------------------
+// Events: player spawn / death
+// ------------------------------------------------------------
+
+public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
+{
 	if (!g_bIsRoundActive)
 		return Plugin_Continue;
 	
@@ -230,12 +402,11 @@ public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadca
 		return Plugin_Continue;
 
 	TeleportBot(client);
-	//ga_iStuckCheckSount[client] = 0;
-	//StartStuckDetection(client);
 	return Plugin_Continue;
 }
 
-public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast) {
+public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast)
+{
 	if (g_iBotLivesRemain < 1)
 		return Plugin_Continue;
 		
@@ -244,30 +415,57 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 	if (victim < 1 || !IsClientInGame(victim) || !IsFakeClient(victim) || GetClientTeam(victim) != TEAM_INSURGENT)
 		return Plugin_Continue;
 	
+	if (ga_bIsBomber[victim])
+	{
+		if (g_iBomberRespawCount >= g_iBomberRespawnsMax)
+			return Plugin_Continue;
+		else
+			g_iBomberRespawCount++;
+	}
+	else if (ga_bIsTank[victim])
+	{
+		if (g_iTankRespawnCount >= g_iTankRespawnsMax)
+			return Plugin_Continue;
+		else
+			g_iTankRespawnCount++;
+	}
+
 	g_iBotLivesRemain--;
 	CreateTimer(0.05, Timer_RespawnBot, userid, TIMER_FLAG_NO_MAPCHANGE);
 	return Plugin_Continue;
 }
 
-public Action Timer_RespawnBot(Handle timer, any userid) {
+public Action Timer_RespawnBot(Handle timer, any userid)
+{
 	int bot = GetClientOfUserId(userid);
-	if (!g_bIsRoundActive || bot < 1 || bot > MaxClients || !IsClientInGame(bot) || !IsFakeClient(bot) || IsPlayerAlive(bot) ||  GetClientTeam(bot) != TEAM_INSURGENT)
+	if (!g_bIsRoundActive || bot < 1 || bot > MaxClients || !IsClientInGame(bot) || !IsFakeClient(bot) || IsPlayerAlive(bot) || GetClientTeam(bot) != TEAM_INSURGENT)
 		return Plugin_Stop;
 
 	SDKCall(g_hForceRespawn, bot);
 	return Plugin_Stop;
 }
 
-public Action Event_ObjDone_NoCopy(Event event, const char[] name, bool dontBroadcast) {
-	if (g_iActiveCP < g_iNumCPs) g_iActiveCP++;
+// ------------------------------------------------------------
+// Events: objectives / counter-attack setup
+// ------------------------------------------------------------`
+
+public Action Event_ObjDone_NoCopy(Event event, const char[] name, bool dontBroadcast)
+{
+	if (g_iActiveCP < g_iNumCPs)
+	{
+		g_iActiveCP++;
+	}
+
 	RequestFrame(Frame_SetBotLives);
 	return Plugin_Continue;
 }
 
-public Action Event_Objectives_Pre(Event event, const char[] name, bool dontBroadcast) {
+public Action Event_Objectives_Pre(Event event, const char[] name, bool dontBroadcast)
+{
 	// When an objective is completed, shut off plugin bot lives
 	// and start proximity grace for the *next* objective.
-	if (g_fProximityGraceSeconds > 0.0) {
+	if (g_fProximityGraceSeconds > 0.0)
+	{
 		g_iBotLivesRemain = 0;
 		BM_StartProxGrace(g_fProximityGraceSeconds + 1.1);
 	}
@@ -282,14 +480,17 @@ public Action Event_Objectives_Pre(Event event, const char[] name, bool dontBroa
 		for (int i = 1; i <= MaxClients; i++)
 		{
 			if (IsClientInGame(i) && IsPlayerAlive(i) && IsFakeClient(i) && GetClientTeam(i) == TEAM_INSURGENT)
+			{
 				ForcePlayerSuicide(i);
+			}
 		}
 
 		SetConVarInt(cv_hCounterAttackDuration, GetRandomInt(g_iMaxCounterAttackDuration, g_iMinCounterAttackDuration), true, false);
 		SetConVarInt(cv_hCounterAttackDisable, 0, true, false);
 		SetConVarInt(cv_hCounterAttackAlways, 1, true, false);
 	}
-	else if (GetRandomFloat(0.0, 1.0) < g_fCounterAttackChance) {
+	else if (GetRandomFloat(0.0, 1.0) < g_fCounterAttackChance)
+	{
 		// Normal mid-round counter-attack
 		bWillCounterAttack = true;
 
@@ -298,27 +499,36 @@ public Action Event_Objectives_Pre(Event event, const char[] name, bool dontBroa
 		SetConVarInt(cv_hCounterAttackAlways, 1, true, false);
 	}
 	else
+	{
 		SetConVarInt(cv_hCounterAttackDisable, 1, true, false);
+	}
 
 	// For non-final counter-attacks: clean up "useless" bots so the
 	// engine + your CA spawns can bring a fresh wave in good positions.
 	if (bWillCounterAttack && !bFinalObj)
+	{
 		BM_CleanUpBotsForCounterAttack();
+	}
 
 	return Plugin_Continue;
 }
 
-void Frame_SetBotLives() {
+void Frame_SetBotLives()
+{
 	SetBotLives();
 	if (IsCounterAttack())
+	{
 		CreateTimer(1.0, TimerR_MonitorCA, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+	}
 }
 
-Action TimerR_MonitorCA(Handle timer) {
+Action TimerR_MonitorCA(Handle timer)
+{
 	if (g_bIsGameEnd || g_bIsMapChanging || !g_bIsRoundActive)
 		return Plugin_Stop;
 
-	if (!IsCounterAttack()) {
+	if (!IsCounterAttack())
+	{
 		BM_StartProxGrace(g_fProximityGraceSeconds);
 		SetBotLives();
 		return Plugin_Stop;
@@ -326,25 +536,214 @@ Action TimerR_MonitorCA(Handle timer) {
 	return Plugin_Continue;
 }
 
-static void BM_StartProxGrace(float seconds) {
+// ------------------------------------------------------------
+// CA countdown integration (ex-ca_countdown.sp)
+// ------------------------------------------------------------
+
+public Action CA_Timer_InitConVars(Handle timer)
+{
+	g_cvCADelay = FindConVar("mp_checkpoint_counterattack_delay");
+	if (!g_cvCADelay)
+	{
+		SetFailState("mp_checkpoint_counterattack_delay not found!");
+	}
+	g_iCADelay = g_cvCADelay.IntValue;
+	g_cvCADelay.AddChangeHook(OnConVarChanged);
+
+	g_cvCADelayFinale = FindConVar("mp_checkpoint_counterattack_delay_finale");
+	if (!g_cvCADelayFinale)
+	{
+		SetFailState("mp_checkpoint_counterattack_delay_finale not found!");
+	}
+	g_iCADelayFinale = g_cvCADelayFinale.IntValue;
+	g_cvCADelayFinale.AddChangeHook(OnConVarChanged);
+
+	return Plugin_Stop;
+}
+
+public Action CA_Event_ControlPointCaptured(Event event, const char[] name, bool dontBroadcast)
+{
+	if (event.GetInt("team") == TEAM_SECURITY && g_hCAProbeTimer == null)
+	{
+		g_hCAProbeTimer = CreateTimer(1.0, CA_Timer_IsCounterAttack, _, TIMER_FLAG_NO_MAPCHANGE);
+	}
+	return Plugin_Continue;
+}
+
+public Action CA_Event_ObjectDestroyed(Event event, const char[] name, bool dontBroadcast)
+{
+	if (event.GetInt("attackerteam") == TEAM_SECURITY && g_hCAProbeTimer == null)
+	{
+		g_hCAProbeTimer = CreateTimer(1.0, CA_Timer_IsCounterAttack, _, TIMER_FLAG_NO_MAPCHANGE);
+	}
+	return Plugin_Continue;
+}
+
+public Action CA_Timer_IsCounterAttack(Handle timer)
+{
+	g_hCAProbeTimer = null;
+
+	if (IsCounterAttack() && g_hCACountdownTimer == null)
+	{
+		CA_StartCountdownForCurrentStage();
+	}
+
+	return Plugin_Stop;
+}
+
+void CA_StartCountdownForCurrentStage()
+{
+	if (g_hCACountdownTimer != null)
+		return;
+
+	if (OR_Cache() <= 0)
+		return;
+
+	int ncp = ObjectiveResource_GetProp("m_iNumControlPoints") - 1;
+	int acp = ObjectiveResource_GetProp("m_nActivePushPointIndex");
+	if (ncp < 0 || acp < 0)
+		return;
+
+	g_bCAFinaleCountdown = (acp == ncp);
+
+	int delay = g_bCAFinaleCountdown ? g_iCADelayFinale : g_iCADelay;
+	if (delay <= 0)
+		return;
+
+	g_iCACountdownLeft = delay;
+
+	// Run countdown + proximity update every 2 seconds
+	g_hCACountdownTimer = CreateTimer(2.0, CA_Timer_CountdownTick, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+}
+
+public Action CA_Timer_CountdownTick(Handle timer)
+{
+	// We step in 2-second chunks to match the timer interval
+	g_iCACountdownLeft -= 2;
+
+	if (g_iCACountdownLeft <= 0)
+	{
+		CA_PlayCountdownSound();
+		CA_ResetCountdownTimer();
+		return Plugin_Stop;
+	}
+
+	CA_UpdateCountdownHUD();
+	return Plugin_Continue;
+}
+
+void CA_PlayCountdownSound()
+{
+	EmitSoundToAll(GetRandomInt(1, 2) == 1 ? g_sCASound1 : g_sCASound2);
+}
+
+void CA_ResetCountdownTimer()
+{
+	if (g_hCACountdownTimer != null)
+	{
+		KillTimer(g_hCACountdownTimer);
+		g_hCACountdownTimer = null;
+	}
+	g_iCACountdownLeft = 0;
+	g_bCAFinaleCountdown = false;
+}
+
+// Which CP's CA spawns are used for the current counter-attack?
+static int BM_GetCurrentCACpIndex()
+{
+	if (g_iNumCPs <= 0)
+		return -1;
+
+	int cpC = ClampCP(g_iActiveCP - 1);
+
+	if (cpC < 0 || cpC >= MAX_CPS)
+		return -1;
+
+	if (g_CASpawns[cpC] == null || g_CASpawns[cpC].Length <= 0)
+		return -1;
+
+	return cpC;
+}
+
+void CA_UpdateCountdownHUD()
+{
+	// Always show the base countdown to everyone in-game (alive, dead, any team).
+	PrintCenterTextAll("Insurgents counter-attacking in %d", g_iCACountdownLeft);
+
+	// If CA warning is disabled or we're not in CA, just keep the generic message.
+	if (!IsCounterAttack() || g_fCAWarnRadius <= 0.0)
+	{
+		return;
+	}
+
+	int cpIndex = BM_GetCurrentCACpIndex();
+	if (cpIndex < 0 || g_CASpawns[cpIndex] == null || g_CASpawns[cpIndex].Length <= 0)
+	{
+		// No valid CA spawns → generic message already printed above.
+		return;
+	}
+
+	float radiusSq = g_fCAWarnRadius * g_fCAWarnRadius;
+	int numSpawns = g_CASpawns[cpIndex].Length;
+
+	float playerPos[3];
+	float spawnPos[3];
+
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		// Only override HUD for alive Security players.
+		if (!IsClientInGame(i) || !IsPlayerAlive(i) || GetClientTeam(i) != TEAM_SECURITY)
+			continue;
+
+		GetClientAbsOrigin(i, playerPos);
+
+		bool bNear = false;
+
+		for (int s = 0; s < numSpawns; s++)
+		{
+			g_CASpawns[cpIndex].GetArray(s, spawnPos, 3);
+
+			float distSq = GetVectorDistance(playerPos, spawnPos, true);
+			if (distSq <= radiusSq)
+			{
+				bNear = true;
+				break;
+			}
+		}
+
+		if (bNear)
+		{
+			// Override the generic center text for this player only.
+			PrintCenterText(i, "Insurgents counter-attacking in %d\nWarning! You are very close to enemy counter-attack spawns!", g_iCACountdownLeft);
+		}
+	}
+}
+
+// ------------------------------------------------------------
+// Proximity grace helpers
+// ------------------------------------------------------------
+
+static void BM_StartProxGrace(float seconds)
+{
 	g_fProxGraceUntil = GetGameTime() + seconds;
 }
 
-static bool BM_InProxGrace() {
+static bool BM_InProxGrace()
+{
 	return GetGameTime() < g_fProxGraceUntil;
 }
+
+// ------------------------------------------------------------
+// Spawn selection helpers
+// ------------------------------------------------------------
 
 static bool BM_FindSafeSpawnForCP(int cpIndex, float humans[32][3], int hcount, float minDistSq, float outVec[3])
 {
 	if (cpIndex < 0 || cpIndex >= MAX_CPS)
-	{
 		return false;
-	}
 
 	if (g_CPSpawns[cpIndex] == null || g_CPSpawns[cpIndex].Length <= 0)
-	{
 		return false;
-	}
 
 	int n = g_CPSpawns[cpIndex].Length;
 	int safeCount = 0;
@@ -381,9 +780,7 @@ static bool BM_FindSafeSpawnForCP(int cpIndex, float humans[32][3], int hcount, 
 	}
 
 	if (!picked)
-	{
 		return false;
-	}
 
 	outVec[0] = pickedPos[0];
 	outVec[1] = pickedPos[1];
@@ -391,11 +788,13 @@ static bool BM_FindSafeSpawnForCP(int cpIndex, float humans[32][3], int hcount, 
 	return true;
 }
 
-static bool BM_IsBotVisibleToAnyHuman(int bot, float maxDistSq) {
+static bool BM_IsBotVisibleToAnyHuman(int bot, float maxDistSq)
+{
 	float botEye[3];
 	GetClientEyePosition(bot, botEye);
 
-	for (int i = 1; i <= MaxClients; i++) {
+	for (int i = 1; i <= MaxClients; i++)
+	{
 		if (!IsClientInGame(i) || IsFakeClient(i) || !IsPlayerAlive(i) || GetClientTeam(i) != TEAM_SECURITY)
 			continue;
 
@@ -410,11 +809,16 @@ static bool BM_IsBotVisibleToAnyHuman(int bot, float maxDistSq) {
 		bool visible = false;
 
 		if (!TR_DidHit(trace))
+		{
 			visible = true;
-		else {
+		}
+		else
+		{
 			int hitEnt = TR_GetEntityIndex(trace);
 			if (hitEnt == bot)
+			{
 				visible = true;
+			}
 		}
 
 		delete trace;
@@ -426,11 +830,10 @@ static bool BM_IsBotVisibleToAnyHuman(int bot, float maxDistSq) {
 	return false;
 }
 
-static void BM_CleanUpBotsForCounterAttack() {
+static void BM_CleanUpBotsForCounterAttack()
+{
 	// 2950 units ≈ 75 m → "relevant" distance for LOS checks
 	const float kMaxVisDistSq = 8702500.0;	// 2950^2
-
-	//int killed = 0;
 
 	for (int bot = 1; bot <= MaxClients; bot++)
 	{
@@ -441,19 +844,20 @@ static void BM_CleanUpBotsForCounterAttack() {
 		if (BM_IsBotVisibleToAnyHuman(bot, kMaxVisDistSq))
 			continue;
 
-		// Slay irrelevant bots. Do NOT touch g_iBotLivesRemain:
-		// we just zeroed it for the counter-attack, so these deaths
-		// should not create extra plugin respawns.
 		ForcePlayerSuicide(bot);
-		//killed++;
 	}
-
-	// Optional debug:
-	//PrintToServer("[bm_botrespawn] CA cleanup: killed %d far/out-of-sight bots.", killed);
 }
 
-void TeleportBot(int client) {
-	float vec[3] = {0.0, 0.0, 0.0};
+// ------------------------------------------------------------
+// Teleport bots to custom spawns
+// ------------------------------------------------------------
+
+void TeleportBot(int client)
+{
+	float vec[3];
+	vec[0] = 0.0;
+	vec[1] = 0.0;
+	vec[2] = 0.0;
 
 	int cp  = ClampCP(g_iActiveCP);
 	int cpN = ClampCP(g_iActiveCP + 1);
@@ -578,10 +982,11 @@ void TeleportBot(int client) {
 	}
 	else
 	{
-		// Counter-attack: unchanged (no proximity filter unless you want it)
+		// Counter-attack: original behaviour (no proximity filter)
 		int cpC = ClampCP(g_iActiveCP - 1);
 		int m = g_CASpawns[cpC].Length;
-		if (m <= 0) return;
+		if (m <= 0)
+			return;
 		g_CASpawns[cpC].GetArray((m > 1) ? GetRandomInt(0, m - 1) : 0, vec, 3);
 	}
 
@@ -598,7 +1003,12 @@ void TeleportBot(int client) {
 	ga_bBotSpawnOriginValid[client] = true;
 }
 
-public Action Timer_CheckSpawnMovedGlobal(Handle timer, any data) {
+// ------------------------------------------------------------
+// Global stuck check timer
+// ------------------------------------------------------------
+
+public Action Timer_CheckSpawnMovedGlobal(Handle timer, any data)
+{
 	// Let the timer keep running; just skip logic when round is not active.
 	if (!g_bIsRoundActive || g_bIsMapChanging || g_bIsGameEnd)
 		return Plugin_Continue;
@@ -613,13 +1023,13 @@ public Action Timer_CheckSpawnMovedGlobal(Handle timer, any data) {
 	const float kSpawnMoveDistSq = 2500.0;
 
 	// Normal spawn-stuck: how many *consecutive* checks they must fail
-	const int kSpawnRequiredNoMoveChecks_Normal = 2;
+	const int kSpawnRequiredNoMoveChecks_Normal = 1;
 
 	// During COUNTER-ATTACK we want this faster:
 	const int kSpawnRequiredNoMoveChecks_CA = 1;
 
 	// Nav-stuck (general idle): how long they must be idle before we care
-	const float kNavIdleMinTime_Normal = 180.0;	// normal: ~3+ minutes
+	const float kNavIdleMinTime_Normal = 120.0;	// normal: ~2+ minutes
 
 	// During COUNTER-ATTACK we shorten this more:
 	const float kNavIdleMinTime_CA = 60.0;		// ~1–1.5 minutes after last movement
@@ -764,25 +1174,35 @@ public Action Timer_CheckSpawnMovedGlobal(Handle timer, any data) {
 	return Plugin_Continue;
 }
 
-static int ClampCP(int cp) {
+// ------------------------------------------------------------
+// Misc helpers
+// ------------------------------------------------------------
+
+static int ClampCP(int cp)
+{
 	if (cp < 0) return 0;
-	if (cp > g_iNumCPs) return g_iNumCPs;	//cp >= g_iNumCPs
+	if (cp > g_iNumCPs) return g_iNumCPs;
 	return cp;
 }
 
-static bool HasAnySpawnsCP(int cp) {
+static bool HasAnySpawnsCP(int cp)
+{
 	cp = ClampCP(cp);
 	return (g_CPSpawns[cp].Length > 0);
 }
 
-void StartStuckDetection(int client) {
+// Old stuck-detection helpers (kept for compatibility / future use)
+
+void StartStuckDetection(int client)
+{
 	ga_iStuckCheckSount[client]++;
 	ga_bIsBotStuck[client] = false;
 	CheckIfBotCanMove(client, 0, 500.0, 0.0, 0.0);
 	ga_bIsBotStuck[client] = CheckIfBotStuck(client);
 }
 
-bool CheckIfBotStuck(int client) {
+bool CheckIfBotStuck(int client)
+{
 	float vecMin[3], vecMax[3], vecOrigin[3];
 	GetClientMins(client, vecMin);
 	GetClientMaxs(client, vecMax);
@@ -791,7 +1211,8 @@ bool CheckIfBotStuck(int client) {
 	return TR_DidHit();
 }
 
-void CheckIfBotCanMove(int client, int testid, float X=0.0, float Y=0.0, float Z=0.0) {
+void CheckIfBotCanMove(int client, int testid, float X=0.0, float Y=0.0, float Z=0.0)
+{
 	float origin[3];
 	GetClientAbsOrigin(client, origin);
 
@@ -812,7 +1233,8 @@ void CheckIfBotCanMove(int client, int testid, float X=0.0, float Y=0.0, float Z
 	TimerDataPack.WriteFloat(origin[2]);
 }
 
-Action TimerWait(Handle timer, DataPack data) {
+Action TimerWait(Handle timer, DataPack data)
+{
 	float origin[3];
 	float NewOrigin[3];
 
@@ -822,9 +1244,11 @@ Action TimerWait(Handle timer, DataPack data) {
 	origin[0] = data.ReadFloat();
 	origin[1] = data.ReadFloat();
 	origin[2] = data.ReadFloat();
-	if (client > 0 && client <= MaxClients && IsClientInGame(client) && IsPlayerAlive(client)) {
+	if (client > 0 && client <= MaxClients && IsClientInGame(client) && IsPlayerAlive(client))
+	{
 		GetClientAbsOrigin(client, NewOrigin);
-		if (GetVectorDistance(origin, NewOrigin, false) < 10.0) {
+		if (GetVectorDistance(origin, NewOrigin, false) < 10.0)
+		{
 			if (testid == 0)
 				CheckIfBotCanMove(client, 1, 0.0, 0.0, -500.0);
 			else if (testid == 1)
@@ -842,10 +1266,13 @@ Action TimerWait(Handle timer, DataPack data) {
 	return Plugin_Stop;
 }
 
-void FixPlayerPosition(int client) {
-	if (ga_bIsBotStuck[client]) {
+void FixPlayerPosition(int client)
+{
+	if (ga_bIsBotStuck[client])
+	{
 		float pos_Z = 0.1;
-		while (pos_Z <= 200.0 && !TryFixPosition(client, 10.0, pos_Z)) {
+		while (pos_Z <= 200.0 && !TryFixPosition(client, 10.0, pos_Z))
+		{
 			pos_Z = -pos_Z;
 			if (pos_Z > 0.0)
 				pos_Z += 20.0;
@@ -853,13 +1280,15 @@ void FixPlayerPosition(int client) {
 		if (!CheckIfBotStuck(client) && ga_iStuckCheckSount[client] < 7)
 			StartStuckDetection(client);
 	}
-	else {
+	else
+	{
 		Handle trace = INVALID_HANDLE;
 		float vecOrigin[3], vecAngle[3];
 		GetClientAbsOrigin(client, vecOrigin);
 		vecAngle[0] = 90.0;
 		trace = TR_TraceRayFilterEx(vecOrigin, vecAngle, MASK_SOLID, RayType_Infinite, TraceEntityFilterSolid);
-		if (!TR_DidHit(trace)) {
+		if (!TR_DidHit(trace))
+		{
 			delete trace;
 			return;
 		}
@@ -869,27 +1298,33 @@ void FixPlayerPosition(int client) {
 		vecOrigin[2] += 10.0;
 		TeleportEntity(client, vecOrigin, NULL_VECTOR, {0.0, 0.0, -300.0});
 
-		if (ga_iStuckCheckSount[client] < 7) {
+		if (ga_iStuckCheckSount[client] < 7)
+		{
 			StartStuckDetection(client);
-		} else {
+		}
+		else
+		{
 			ForcePlayerSuicide(client);
 			g_iBotLivesRemain++;
 		}
 	}
 }
 
-public bool TraceEntityFilterSolid(int entity, int contentsMask, any data) {
+public bool TraceEntityFilterSolid(int entity, int contentsMask, any data)
+{
 	return (entity > MaxClients);
 }
 
-bool TryFixPosition(int client, float rad, float pos_Z) {
+bool TryFixPosition(int client, float rad, float pos_Z)
+{
 	float DegreeAngle, vecPosition[3], vecOrigin[3], vecAngle[3];
 	GetClientAbsOrigin(client, vecOrigin);
 	GetClientEyeAngles(client, vecAngle);
 	vecPosition[2] = vecOrigin[2] + pos_Z;
 
 	DegreeAngle = -180.0;
-	while (DegreeAngle < 180.0) {
+	while (DegreeAngle < 180.0)
+	{
 		vecPosition[0] = vecOrigin[0] + rad * Cosine(DegreeAngle * FLOAT_PI / 180);
 		vecPosition[1] = vecOrigin[1] + rad * Sine(DegreeAngle * FLOAT_PI / 180);
 		
@@ -904,41 +1339,76 @@ bool TryFixPosition(int client, float rad, float pos_Z) {
 	return false;
 }
 
-bool LoadSpawnsForMap(const char[] map, ArrayList[] cpSpawns, ArrayList[] caSpawns, int maxCps) {
+// ------------------------------------------------------------
+// Spawn file load
+// ------------------------------------------------------------
+
+bool LoadSpawnsForMap(const char[] map, ArrayList[] cpSpawns, ArrayList[] caSpawns, int maxCps)
+{
 	char path[PLATFORM_MAX_PATH];
 	Format(path, sizeof path, "addons/sourcemod/data/bm_botspawns/%s.txt", map);
 
 	File f = OpenFile(path, "r");
-	if (f == null) return false;
+	if (f == null)
+		return false;
 
-	for (int i = 0; i < maxCps; i++) {
-		if (cpSpawns[i] == null) cpSpawns[i] = new ArrayList(3);
-		else cpSpawns[i].Clear();
-		if (caSpawns[i] == null) caSpawns[i] = new ArrayList(3);
-		else caSpawns[i].Clear();
+	for (int i = 0; i < maxCps; i++)
+	{
+		if (cpSpawns[i] == null)
+			cpSpawns[i] = new ArrayList(3);
+		else
+			cpSpawns[i].Clear();
+		if (caSpawns[i] == null)
+			caSpawns[i] = new ArrayList(3);
+		else
+			caSpawns[i].Clear();
 	}
 
-	int cp = -1; bool inCA = false;
+	int cp = -1;
+	bool inCA = false;
 	char line[256];
 	while (!f.EndOfFile() && f.ReadLine(line, sizeof line))
 	{
 		TrimString(line);
-		if (line[0] == '\0') continue;
+		if (line[0] == '\0')
+			continue;
 
-		if (line[0] == '"' && line[1] == 'C' && line[2] == 'P') {
-			int i = 3, n = 0; while (line[i] >= '0' && line[i] <= '9') { n = n*10 + (line[i]-'0'); i++; }
-			cp = (n >= 0 && n < maxCps) ? n : -1; inCA = false; continue;
+		if (line[0] == '"' && line[1] == 'C' && line[2] == 'P')
+		{
+			int i = 3;
+			int n = 0;
+			while (line[i] >= '0' && line[i] <= '9')
+			{
+				n = n * 10 + (line[i] - '0');
+				i++;
+			}
+			cp = (n >= 0 && n < maxCps) ? n : -1;
+			inCA = false;
+			continue;
 		}
-		if (StrContains(line, "\"CA\"") == 0) { inCA = true; continue; }
-		if (line[0] == '{' || line[0] == '}') { if (line[0] == '}') inCA = false; continue; }
+		if (StrContains(line, "\"CA\"") == 0)
+		{
+			inCA = true;
+			continue;
+		}
+		if (line[0] == '{' || line[0] == '}')
+		{
+			if (line[0] == '}')
+				inCA = false;
+			continue;
+		}
 
-		if (cp >= 0 && line[0] == '"') {
+		if (cp >= 0 && line[0] == '"')
+		{
 			int len = strlen(line);
-			if (len >= 2 && line[len-1] == '"') line[len-1] = '\0';
-			char vec[256]; strcopy(vec, sizeof vec, line[1]);
+			if (len >= 2 && line[len - 1] == '"')
+				line[len - 1] = '\0';
+			char vec[256];
+			strcopy(vec, sizeof vec, line[1]);
 			TrimString(vec);
 			float v[3];
-			if (BM_ParseVec3(vec, v)) {
+			if (BM_ParseVec3(vec, v))
+			{
 				(inCA ? caSpawns[cp] : cpSpawns[cp]).PushArray(v, 3);
 			}
 		}
@@ -947,78 +1417,144 @@ bool LoadSpawnsForMap(const char[] map, ArrayList[] cpSpawns, ArrayList[] caSpaw
 	return true;
 }
 
-bool BM_ParseVec3(const char[] s, float out[3]) {
+bool BM_ParseVec3(const char[] s, float out[3])
+{
 	char parts[3][32];
 	int n = ExplodeString(s, ",", parts, 3, 32);
-	if (n != 3) return false;
-	TrimString(parts[0]); TrimString(parts[1]); TrimString(parts[2]);
+	if (n != 3)
+		return false;
+	TrimString(parts[0]);
+	TrimString(parts[1]);
+	TrimString(parts[2]);
 	out[0] = StringToFloat(parts[0]);
 	out[1] = StringToFloat(parts[1]);
 	out[2] = StringToFloat(parts[2]);
 	return true;
 }
 
-void SetBotLives() {
-	g_iBotLivesRemain = g_iBotLives > 0 ? SecPlayersInGame() * g_iBotLives : 0;
+// ------------------------------------------------------------
+// Bot lives / counts
+// ------------------------------------------------------------
+
+void SetBotLives()
+{
+	g_iBotLivesRemain = (g_iBotLives > 0 ? SecPlayersInGame() * g_iBotLives : 0);
+	ResetTankBomberRespawnCount();
 }
 
-int SecPlayersInGame() {
+int SecPlayersInGame()
+{
 	int n = 0;
-	for ( int i = 1; i <= MaxClients; i++ ) {
+	for (int i = 1; i <= MaxClients; i++)
+	{
 		if (IsClientInGame(i) && !IsFakeClient(i) && GetClientTeam(i) == TEAM_SECURITY)
-				n++;
+		{
+			n++;
+		}
 	}
 	return n;
 }
 
-public Action ChangeLevelListener(int client, const char[] command, int argc) {
-	if (StrEqual(command, "sm_map", false)) {
+void BM_MaybeBoostBotLives()
+{
+	// If at least 7 Security players and sm_botlives is below 10,
+	// automatically raise it to 10.
+	if (SecPlayersInGame() >= 7 && g_iBotLives < 10)
+	{
+		SetConVarInt(cv_hBotLives, 10, true, false);
+		PrintToChatAll("\x070088cc[BM]\x01 7+ Security players detected - bot reinforcements raised to 10 per player.");
+	}
+}
+
+// ------------------------------------------------------------
+// Map change listener (currently unused helper)
+// ------------------------------------------------------------
+
+public Action ChangeLevelListener(int client, const char[] command, int argc)
+{
+	if (StrEqual(command, "sm_map", false))
+	{
 		if (client > 0 && !CheckCommandAccess(client, "sm_map", ADMFLAG_CHANGEMAP, true))
 			return Plugin_Continue;
 	}
-	else if (StrEqual(command, "map", false) || StrEqual(command, "changelevel", false)) {
+	else if (StrEqual(command, "map", false) || StrEqual(command, "changelevel", false))
+	{
 		if (client > 0)
 			return Plugin_Continue;
 	}
 	else
+	{
 		return Plugin_Continue;
+	}
 
-	if (argc > 0) {
+	if (argc > 0)
+	{
 		char nextMap[PLATFORM_MAX_PATH];
 		GetCmdArg(1, nextMap, sizeof(nextMap));
 		if (IsMapValid(nextMap))
+		{
 			g_bIsMapChanging = true;
+		}
 	}
 	return Plugin_Continue;
 }
 
-int OR_Cache(bool force = false) {
-	if (force || g_iObjResEntity < 1 || !IsValidEntity(g_iObjResEntity)) {
+// ------------------------------------------------------------
+// Objective resource helpers
+// ------------------------------------------------------------
+
+int OR_Cache(bool force = false)
+{
+	if (force || g_iObjResEntity < 1 || !IsValidEntity(g_iObjResEntity))
+	{
 		g_iObjResEntity = FindEntityByClassname(-1, "ins_objective_resource");
-		if (g_iObjResEntity > 0) GetEntityNetClass(g_iObjResEntity, g_sObjResNetClass, sizeof(g_sObjResNetClass));
-		else g_sObjResNetClass[0] = '\0';
-	} else {
+		if (g_iObjResEntity > 0)
+		{
+			GetEntityNetClass(g_iObjResEntity, g_sObjResNetClass, sizeof(g_sObjResNetClass));
+		}
+		else
+		{
+			g_sObjResNetClass[0] = '\0';
+		}
+	}
+	else
+	{
 		char cls[32];
 		GetEntityClassname(g_iObjResEntity, cls, sizeof(cls));
-		if (!StrEqual(cls, "ins_objective_resource", false)) return OR_Cache(true);
+		if (!StrEqual(cls, "ins_objective_resource", false))
+		{
+			return OR_Cache(true);
+		}
 	}
 	return g_iObjResEntity;
 }
 
-int ObjectiveResource_GetProp(const char[] prop, int size = 4, int element = 0) {
-	if (OR_Cache() > 0 && g_sObjResNetClass[0] != '\0') {
+int ObjectiveResource_GetProp(const char[] prop, int size = 4, int element = 0)
+{
+	if (OR_Cache() > 0 && g_sObjResNetClass[0] != '\0')
+	{
 		int offs = FindSendPropInfo(g_sObjResNetClass, prop);
-		if (offs != -1) return GetEntData(g_iObjResEntity, offs + (size * element));
+		if (offs != -1)
+		{
+			return GetEntData(g_iObjResEntity, offs + (size * element));
+		}
 	}
 	return -1;
 }
 
-bool IsCounterAttack() {
+bool IsCounterAttack()
+{
 	return view_as<bool>(GameRules_GetProp("m_bCounterAttack"));
 }
 
-public Action cmd_respawn(int client, int args) {
-	if (args < 1) {
+// ------------------------------------------------------------
+// Admin commands
+// ------------------------------------------------------------
+
+public Action cmd_respawn(int client, int args)
+{
+	if (args < 1)
+	{
 		ReplyToCommand(client, "[SM] Usage: sm_respawn <#userid|name|@all|@bots|@humans|@me>");
 		return Plugin_Handled;
 	}
@@ -1042,21 +1578,24 @@ public Action cmd_respawn(int client, int args) {
 		tn_is_ml
 	);
 
-	if (target_count <= COMMAND_TARGET_NONE) {
+	if (target_count <= COMMAND_TARGET_NONE)
+	{
 		ReplyToTargetError(client, target_count);
 		return Plugin_Handled;
 	}
 
 	int new_target_count = 0;
 
-	for (int i = 0; i < target_count; i++) {
+	for (int i = 0; i < target_count; i++)
+	{
 		int target = target_list[i];
 
 		if (!IsClientInGame(target))
 			continue;
 
 		int team = GetClientTeam(target);
-		if (team == TEAM_SECURITY || team == TEAM_INSURGENT) {
+		if (team == TEAM_SECURITY || team == TEAM_INSURGENT)
+		{
 			if (!ga_bPickSquad[target])
 				continue;
 
@@ -1066,7 +1605,8 @@ public Action cmd_respawn(int client, int args) {
 		}
 	}
 
-	if (new_target_count == 0) {
+	if (new_target_count == 0)
+	{
 		ReplyToCommand(client, "[SM] No valid players to respawn.");
 		return Plugin_Handled;
 	}
@@ -1075,8 +1615,10 @@ public Action cmd_respawn(int client, int args) {
 	return Plugin_Handled;
 }
 
-public Action cmd_bots(int client, int args) {
-	if (!g_bIsRoundActive) {
+public Action cmd_bots(int client, int args)
+{
+	if (!g_bIsRoundActive)
+	{
 		ReplyToCommand(client, "Use it after round start");
 		return Plugin_Handled;
 	}
@@ -1086,40 +1628,67 @@ public Action cmd_bots(int client, int args) {
 	return Plugin_Handled;
 }
 
-int CountAliveInsurgents() {
+int CountAliveInsurgents()
+{
 	int count = 0;
-	for (int i = 1; i <= MaxClients; i++) {
+	for (int i = 1; i <= MaxClients; i++)
+	{
 		if (IsClientInGame(i)
 			&& IsPlayerAlive(i)
-			&& GetClientTeam(i) == TEAM_INSURGENT) {
+			&& GetClientTeam(i) == TEAM_INSURGENT)
+		{
 			count++;
 		}
 	}
 	return count;
 }
 
-Action Timer_Enemies_Remaining(Handle timer) {
+// ------------------------------------------------------------
+// Radio hint about total enemies
+// ------------------------------------------------------------
+
+public Action Timer_Enemies_Remaining(Handle timer)
+{
 	if (g_bIsGameEnd || g_bIsMapChanging || !g_bIsRoundActive)
 		return Plugin_Continue;
 
 	int aliveInsurgents = CountAliveInsurgents();
 	g_iTotalAliveEnemies = aliveInsurgents + g_iBotLivesRemain;
-	for (int client = 1; client <= MaxClients; client++) {
+	for (int client = 1; client <= MaxClients; client++)
+	{
 		if (!IsClientInGame(client) || IsFakeClient(client) || !IsPlayerAlive(client))
 			continue;
 
 		if (GetEntData(client, g_iPlayerEquipGear + (4 * 5)) == g_iRadioGearID)
+		{
 			PrintHintText(client, "Total enemies alive: %d", g_iTotalAliveEnemies);
+		}
 	}
 	return Plugin_Continue;
 }
 
-public void Event_GameEnd(Event event, const char[] name, bool dontBroadcast) {
+// ------------------------------------------------------------
+// Misc
+// ------------------------------------------------------------
+
+void ResetTankBomberRespawnCount()
+{
+	g_iBomberRespawCount = 0;
+	g_iTankRespawnCount = 0;
+}
+
+public void Event_GameEnd(Event event, const char[] name, bool dontBroadcast)
+{
 	g_bIsGameEnd = true;
 	g_bIsRoundActive = false;
 }
 
-void SetupCvars() {
+// ------------------------------------------------------------
+// Cvars
+// ------------------------------------------------------------
+
+void SetupCvars()
+{
 	cv_hBotLives = CreateConVar("sm_botlives", "5.0", "Bot lives per human security player.", _, true, 0.0, true, 1000.0);
 	g_iBotLives = cv_hBotLives.IntValue;
 	cv_hBotLives.AddChangeHook(OnConVarChanged);
@@ -1136,7 +1705,7 @@ void SetupCvars() {
 	g_fCounterAttackChance = cv_hCounterAttackChance.FloatValue;
 	cv_hCounterAttackChance.AddChangeHook(OnConVarChanged);
 
-	cv_hMinSpawnDistHuman = CreateConVar("sm_botspawnmindist", "1300.0", "Minimum distance (in units) from human players for bot custom spawns.", _, true, 0.0, true, 5000.0);
+	cv_hMinSpawnDistHuman = CreateConVar("sm_botspawnmindist", "1150.0", "Minimum distance (in units) from human players for bot custom spawns.", _, true, 0.0, true, 5000.0);
 	g_fMinSpawnDistHuman = cv_hMinSpawnDistHuman.FloatValue;
 	cv_hMinSpawnDistHuman.AddChangeHook(OnConVarChanged);
 
@@ -1144,12 +1713,25 @@ void SetupCvars() {
 	g_fProximityGraceSeconds = cv_hProximityGraceSeconds.FloatValue;
 	cv_hProximityGraceSeconds.AddChangeHook(OnConVarChanged);
 
+	cv_hBomberRespawns = CreateConVar("sm_botbomber_respawns", "1", "Max bomber bot respawns per control point and per counter-attack (0 = none).", _, true, 0.0, true, 10.0);
+	g_iBomberRespawnsMax = cv_hBomberRespawns.IntValue;
+	cv_hBomberRespawns.AddChangeHook(OnConVarChanged);
+
+	cv_hTankRespawns = CreateConVar("sm_bottank_respawns", "1", "Max tank bot respawns per control point and per counter-attack (0 = none).", _, true, 0.0, true, 10.0);
+	g_iTankRespawnsMax = cv_hTankRespawns.IntValue;
+	cv_hTankRespawns.AddChangeHook(OnConVarChanged);
+
+	g_cvCAWarnRadius = CreateConVar("sm_botcawarn_radius", "350.0", "Radius around counter-attack bot spawns to warn Security players in center text (0 = disabled).", _, true, 0.0, true, 5000.0);
+	g_fCAWarnRadius = g_cvCAWarnRadius.FloatValue;
+	g_cvCAWarnRadius.AddChangeHook(OnConVarChanged);
+
 	cv_hCounterAttackDuration = FindConVar("mp_checkpoint_counterattack_duration");
 	cv_hCounterAttackDisable = FindConVar("mp_checkpoint_counterattack_disable");
 	cv_hCounterAttackAlways = FindConVar("mp_checkpoint_counterattack_always");
 }
 
-void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
+public void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
+{
 	if (convar == cv_hBotLives)
 		g_iBotLives = cv_hBotLives.IntValue;
 	else if (convar == cv_hMaxCounterAttackDuration)
@@ -1162,4 +1744,14 @@ void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue
 		g_fMinSpawnDistHuman = cv_hMinSpawnDistHuman.FloatValue;
 	else if (convar == cv_hProximityGraceSeconds)
 		g_fProximityGraceSeconds = cv_hProximityGraceSeconds.FloatValue;
+	else if (convar == cv_hBomberRespawns)
+		g_iBomberRespawnsMax = cv_hBomberRespawns.IntValue;
+	else if (convar == cv_hTankRespawns)
+		g_iTankRespawnsMax = cv_hTankRespawns.IntValue;
+	else if (convar == g_cvCADelay)
+		g_iCADelay = g_cvCADelay.IntValue;
+	else if (convar == g_cvCADelayFinale)
+		g_iCADelayFinale = g_cvCADelayFinale.IntValue;
+	else if (convar == g_cvCAWarnRadius)
+		g_fCAWarnRadius = g_cvCAWarnRadius.FloatValue;
 }
