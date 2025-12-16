@@ -9,3 +9,4 @@ Some plugins need smlib from https://github.com/bcserv/smlib/tree/transitional_s
 - thecannons: https://github.com/thecannons/Insurgency-dy-sourcemod
 - zDestinate: https://github.com/zDestinate/INS_sourcemod
 - Linothorax: https://github.com/Linothorax
+- Lua: https://steamcommunity.com/id/Lua-
