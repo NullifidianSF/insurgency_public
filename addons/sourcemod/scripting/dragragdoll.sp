@@ -7,7 +7,7 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PLUGIN_VERSION		"0.0.15"
+#define PLUGIN_VERSION		"0.0.16"
 #define PLUGIN_DESCRIPTION	"Plugin for pulling prop_ragdoll bodies"
 
 #define MAXENTITIES 2048
@@ -101,6 +101,9 @@ int		ga_iLastStance[MAXPLAYERS + 1] = { 0, ... };	// 0 stand, 1 crouch, 2 prone
 
 float	g_fIgnoreUntil[MAXENTITIES + 1] = { 0.0, ... };
 int		g_iActiveDrags = 0;
+
+// Cached datamap offset (ragdoll teleport safety)
+int		g_iOffsPhysicsObject = -1;
 
 // --- NEW: ultra-light randomized tip pump (only when humans present) ---
 Handle	g_hTipTimer = null;
@@ -471,6 +474,22 @@ static bool IsRagdoll(int ent)
 	return (cls[0] == 'p' && StrEqual(cls, "prop_ragdoll", false));
 }
 
+static bool EntHasPhysicsObject(int ent) {
+	if (ent <= MaxClients || !IsValidEntity(ent))
+		return false;
+
+	if (g_iOffsPhysicsObject == -1) {
+		g_iOffsPhysicsObject = FindDataMapInfo(ent, "m_pPhysicsObject");
+		if (g_iOffsPhysicsObject == -1)
+			g_iOffsPhysicsObject = -2;
+	}
+
+	if (g_iOffsPhysicsObject == -2)
+		return true;
+
+	return (GetEntData(ent, g_iOffsPhysicsObject) != 0);
+}
+
 static int AcquireRagdoll(int client)
 {
 	float now = GetGameTime();
@@ -623,6 +642,9 @@ static void ClampRagToGround(int rag, int client)
 			pos[2] = minZ;
 	}
 
+	if (!EntHasPhysicsObject(rag))
+		return;
+
 	static const float VEC_ZERO[3] = { 0.0, 0.0, 0.0 };
 	TeleportEntity(rag, pos, NULL_VECTOR, VEC_ZERO);
 }
@@ -644,9 +666,11 @@ public Action Timer_SettleClamp(Handle timer, any ragRef)
 		if (pos[2] < wantZ)
 		{
 			pos[2] = wantZ;
-			static const float VEC_ZERO[3] = { 0.0, 0.0, 0.0 };
-			TeleportEntity(rag, pos, NULL_VECTOR, VEC_ZERO);
-			AcceptEntityInput(rag, "Wake");
+			if (EntHasPhysicsObject(rag)) {
+				static const float VEC_ZERO[3] = { 0.0, 0.0, 0.0 };
+				TeleportEntity(rag, pos, NULL_VECTOR, VEC_ZERO);
+				AcceptEntityInput(rag, "Wake");
+			}
 		}
 	}
 
@@ -736,6 +760,9 @@ static void PullRagdollTowardPlayer(int client, int rag)
 	dest[0] = curr[0] + (target[0] - curr[0]) * DRAG_LERP;
 	dest[1] = curr[1] + (target[1] - curr[1]) * DRAG_LERP;
 	dest[2] = curr[2] + (target[2] - curr[2]) * DRAG_LERP;
+
+	if (!EntHasPhysicsObject(rag))
+		return;
 
 	static const float VEC_ZERO[3] = { 0.0, 0.0, 0.0 };
 	TeleportEntity(rag, dest, NULL_VECTOR, VEC_ZERO);

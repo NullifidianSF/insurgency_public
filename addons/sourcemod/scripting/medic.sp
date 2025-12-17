@@ -151,6 +151,15 @@ int		ga_iDeathStance[MAXPLAYERS + 1];
 float	ga_fDeadAngle[MAXPLAYERS + 1][3];
 float	ga_fRagdollPosition[MAXPLAYERS + 1][3];
 
+// Ragdoll teleport safety (avoid TeleportEntity on ragdolls before physics is ready)
+int		g_iOffsPhysicsObject = -1;
+
+int		ga_iPendingRagTeleportRef[MAXPLAYERS + 1];
+int		ga_iPendingRagTeleportTries[MAXPLAYERS + 1];
+float	ga_fPendingRagTeleportPos[MAXPLAYERS + 1][3];
+float	ga_fPendingRagTeleportAng[MAXPLAYERS + 1][3];
+float	ga_fPendingRagTeleportVel[MAXPLAYERS + 1][3];
+
 bool	ga_bBeingRevivedByMedic[MAXPLAYERS + 1];
 bool	ga_bRevivedByMedic[MAXPLAYERS + 1];
 bool	ga_bPlayerSelectNewClass[MAXPLAYERS + 1];
@@ -172,7 +181,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "",
 	description = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & ChatGPT",
-	version = "1.0.1",
+	version = "1.0.2",
 	url = ""
 };
 
@@ -195,6 +204,9 @@ public void OnPluginStart() {
 	g_iColorHealRing[1] = 200;
 	g_iColorHealRing[2] = 0;
 	g_iColorHealRing[3] = 75;
+
+	for (int i = 1; i <= MaxClients; i++)
+		ClearPendingRagTeleport(i);
 
 	if ((m_hMyWeapons = FindSendPropInfo("CBasePlayer", "m_hMyWeapons")) == -1)
 		SetFailState("Fatal Error: Unable to find property offset \"CBasePlayer::m_hMyWeapons\" !");
@@ -295,6 +307,7 @@ public void OnClientPostAdminCheck(int client) {
 		return;
 
 	ga_bHurtFatal[client] = false;
+	ClearPendingRagTeleport(client);
 	ResetMedicStats(client);
 }
 
@@ -333,6 +346,7 @@ public Action Event_Spawn(Event event, const char[] name, bool dontBroadcast) {
 		return Plugin_Continue;
 
 	RemoveRagdoll(client);
+	ClearPendingRagTeleport(client);
 	ga_bHurtFatal[client] = false;
 	ga_bPlayerSelectNewClass[client] = false;
 	ga_bBeingRevivedByMedic[client] = false;
@@ -625,13 +639,21 @@ void Frame_ConvertDeleteRagdoll(int userid) {
 		*/
 						DispatchSpawn(tempRag);
 
+						ActivateEntity(tempRag);
+
 						//must be after DispatchSpawn
 						DispatchKeyValue(tempRag, "CollisionGroup", "17");	//COLLISION_GROUP_PUSHAWAY
 
 						fOrigin[2] += 50.0;
 						VecCopy(fOrigin, ga_fRagdollPosition[client]);
-						TeleportEntity(tempRag, fOrigin, ga_fDeadAngle[client], fVelocity);
 
+						ga_iPendingRagTeleportRef[client] = EntIndexToEntRef(tempRag);
+						ga_iPendingRagTeleportTries[client] = 0;
+						VecCopy(fOrigin, ga_fPendingRagTeleportPos[client]);
+						VecCopy(ga_fDeadAngle[client], ga_fPendingRagTeleportAng[client]);
+						VecCopy(fVelocity, ga_fPendingRagTeleportVel[client]);
+
+						RequestFrame(Frame_TeleportPendingRagdoll, userid);
 						ga_iReviveRemainingTime[client] = ga_iPlayerWoundTime[client];
 						ga_iReviveNonMedicRemainingTime[client] = g_iNonMedicReviveTime;
 					}
@@ -658,8 +680,73 @@ bool hasCorrectWeapon(const char[] sWeapon, bool melee = true) {
 	return false;
 }
 
+static bool EntHasPhysicsObject(int ent) {
+	if (ent <= MaxClients || !IsValidEntity(ent))
+		return false;
+
+	if (g_iOffsPhysicsObject == -1) {
+		g_iOffsPhysicsObject = FindDataMapInfo(ent, "m_pPhysicsObject");
+		if (g_iOffsPhysicsObject == -1)
+			g_iOffsPhysicsObject = -2;
+	}
+
+	if (g_iOffsPhysicsObject == -2)
+		return true;
+
+	return (GetEntData(ent, g_iOffsPhysicsObject) != 0);
+}
+
+static void ClearPendingRagTeleport(int client) {
+	ga_iPendingRagTeleportRef[client] = INVALID_ENT_REFERENCE;
+	ga_iPendingRagTeleportTries[client] = 0;
+
+	ga_fPendingRagTeleportPos[client][0] = 0.0;
+	ga_fPendingRagTeleportPos[client][1] = 0.0;
+	ga_fPendingRagTeleportPos[client][2] = 0.0;
+
+	ga_fPendingRagTeleportAng[client][0] = 0.0;
+	ga_fPendingRagTeleportAng[client][1] = 0.0;
+	ga_fPendingRagTeleportAng[client][2] = 0.0;
+
+	ga_fPendingRagTeleportVel[client][0] = 0.0;
+	ga_fPendingRagTeleportVel[client][1] = 0.0;
+	ga_fPendingRagTeleportVel[client][2] = 0.0;
+}
+
+void Frame_TeleportPendingRagdoll(int userid) {
+	int client = GetClientOfUserId(userid);
+	if (client < 1 || client > MaxClients)
+		return;
+
+	int ref = ga_iPendingRagTeleportRef[client];
+	if (ref == INVALID_ENT_REFERENCE)
+		return;
+
+	int ent = EntRefToEntIndex(ref);
+	if (ent == INVALID_ENT_REFERENCE || ent <= MaxClients || !IsValidEntity(ent)) {
+		ClearPendingRagTeleport(client);
+		return;
+	}
+
+	if (!EntHasPhysicsObject(ent)) {
+		if (++ga_iPendingRagTeleportTries[client] >= 10) {
+			ClearPendingRagTeleport(client);
+			return;
+		}
+
+		RequestFrame(Frame_TeleportPendingRagdoll, userid);
+		return;
+	}
+
+	TeleportEntity(ent, ga_fPendingRagTeleportPos[client], ga_fPendingRagTeleportAng[client], ga_fPendingRagTeleportVel[client]);
+	AcceptEntityInput(ent, "Wake");
+	ClearPendingRagTeleport(client);
+}
+
 void RemoveRagdoll(int client) {
 	if (client < 1 || client > MaxClients) return;
+
+	ClearPendingRagTeleport(client);
 
 	int ref = ga_iClientRagdolls[client];
 	if (ref == INVALID_ENT_REFERENCE) return;
