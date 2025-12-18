@@ -61,8 +61,6 @@ int g_iTankRespawnsMax = 0;
 int g_iBomberRespawCount = 0;
 int g_iTankRespawnCount = 0;
 
-int ga_iStuckCheckSount[MAXPLAYERS + 1] = {0, ...};
-bool ga_bIsBotStuck[MAXPLAYERS + 1] = {false, ...};
 float ga_fBotSpawnOrigin[MAXPLAYERS + 1][3];
 float ga_fBotSpawnTime[MAXPLAYERS + 1] = {0.0, ...};
 int ga_iBotNoMoveChecks[MAXPLAYERS + 1] = {0, ...};
@@ -1191,152 +1189,9 @@ static bool HasAnySpawnsCP(int cp)
 	return (g_CPSpawns[cp].Length > 0);
 }
 
-// Old stuck-detection helpers (kept for compatibility / future use)
-
-void StartStuckDetection(int client)
-{
-	ga_iStuckCheckSount[client]++;
-	ga_bIsBotStuck[client] = false;
-	CheckIfBotCanMove(client, 0, 500.0, 0.0, 0.0);
-	ga_bIsBotStuck[client] = CheckIfBotStuck(client);
-}
-
-bool CheckIfBotStuck(int client)
-{
-	float vecMin[3], vecMax[3], vecOrigin[3];
-	GetClientMins(client, vecMin);
-	GetClientMaxs(client, vecMax);
-	GetClientAbsOrigin(client, vecOrigin);
-	TR_TraceHullFilter(vecOrigin, vecOrigin, vecMin, vecMax, MASK_SOLID, TraceEntityFilterSolid);
-	return TR_DidHit();
-}
-
-void CheckIfBotCanMove(int client, int testid, float X=0.0, float Y=0.0, float Z=0.0)
-{
-	float origin[3];
-	GetClientAbsOrigin(client, origin);
-
-	float vel[3];
-	vel[0] = X;
-	vel[1] = Y;
-	vel[2] = Z;
-	SetEntPropVector(client, Prop_Data, "m_vecBaseVelocity", vel);
-
-	int userid = GetClientUserId(client);
-
-	DataPack TimerDataPack;
-	CreateDataTimer(0.1, TimerWait, TimerDataPack, TIMER_FLAG_NO_MAPCHANGE);
-	TimerDataPack.WriteCell(userid);
-	TimerDataPack.WriteCell(testid);
-	TimerDataPack.WriteFloat(origin[0]);
-	TimerDataPack.WriteFloat(origin[1]);
-	TimerDataPack.WriteFloat(origin[2]);
-}
-
-Action TimerWait(Handle timer, DataPack data)
-{
-	float origin[3];
-	float NewOrigin[3];
-
-	data.Reset();
-	int client = GetClientOfUserId(data.ReadCell());
-	int testid = data.ReadCell();
-	origin[0] = data.ReadFloat();
-	origin[1] = data.ReadFloat();
-	origin[2] = data.ReadFloat();
-	if (client > 0 && client <= MaxClients && IsClientInGame(client) && IsPlayerAlive(client))
-	{
-		GetClientAbsOrigin(client, NewOrigin);
-		if (GetVectorDistance(origin, NewOrigin, false) < 10.0)
-		{
-			if (testid == 0)
-				CheckIfBotCanMove(client, 1, 0.0, 0.0, -500.0);
-			else if (testid == 1)
-				CheckIfBotCanMove(client, 2, -500.0, 0.0, 0.0);
-			else if (testid == 2)
-				CheckIfBotCanMove(client, 3, 0.0, 500.0, 0.0);
-			else if (testid == 3)
-				CheckIfBotCanMove(client, 4, 0.0, -500.0, 0.0);
-			else if (testid == 4)
-				CheckIfBotCanMove(client, 5, 0.0, 0.0, 300.0);
-			else
-				FixPlayerPosition(client);
-		}
-	}
-	return Plugin_Stop;
-}
-
-void FixPlayerPosition(int client)
-{
-	if (ga_bIsBotStuck[client])
-	{
-		float pos_Z = 0.1;
-		while (pos_Z <= 200.0 && !TryFixPosition(client, 10.0, pos_Z))
-		{
-			pos_Z = -pos_Z;
-			if (pos_Z > 0.0)
-				pos_Z += 20.0;
-		}
-		if (!CheckIfBotStuck(client) && ga_iStuckCheckSount[client] < 7)
-			StartStuckDetection(client);
-	}
-	else
-	{
-		Handle trace = INVALID_HANDLE;
-		float vecOrigin[3], vecAngle[3];
-		GetClientAbsOrigin(client, vecOrigin);
-		vecAngle[0] = 90.0;
-		trace = TR_TraceRayFilterEx(vecOrigin, vecAngle, MASK_SOLID, RayType_Infinite, TraceEntityFilterSolid);
-		if (!TR_DidHit(trace))
-		{
-			delete trace;
-			return;
-		}
-		
-		TR_GetEndPosition(vecOrigin, trace);
-		delete trace;
-		vecOrigin[2] += 10.0;
-		TeleportEntity(client, vecOrigin, NULL_VECTOR, {0.0, 0.0, -300.0});
-
-		if (ga_iStuckCheckSount[client] < 7)
-		{
-			StartStuckDetection(client);
-		}
-		else
-		{
-			ForcePlayerSuicide(client);
-			g_iBotLivesRemain++;
-		}
-	}
-}
-
 public bool TraceEntityFilterSolid(int entity, int contentsMask, any data)
 {
 	return (entity > MaxClients);
-}
-
-bool TryFixPosition(int client, float rad, float pos_Z)
-{
-	float DegreeAngle, vecPosition[3], vecOrigin[3], vecAngle[3];
-	GetClientAbsOrigin(client, vecOrigin);
-	GetClientEyeAngles(client, vecAngle);
-	vecPosition[2] = vecOrigin[2] + pos_Z;
-
-	DegreeAngle = -180.0;
-	while (DegreeAngle < 180.0)
-	{
-		vecPosition[0] = vecOrigin[0] + rad * Cosine(DegreeAngle * FLOAT_PI / 180);
-		vecPosition[1] = vecOrigin[1] + rad * Sine(DegreeAngle * FLOAT_PI / 180);
-		
-		TeleportEntity(client, vecPosition, vecAngle, {0.0, 0.0, -300.0});
-		if (!CheckIfBotStuck(client))
-			return true;
-		DegreeAngle += 10.0;
-	}
-	TeleportEntity(client, vecOrigin, vecAngle, {0.0, 0.0, -300.0});
-	if (rad <= 200.0)
-		return TryFixPosition(client, rad + 20.0, pos_Z);
-	return false;
 }
 
 // ------------------------------------------------------------
