@@ -3,7 +3,6 @@
 #include <sourcemod>
 #include <sdktools>
 #include <sdkhooks>
-#include <smlib>
 
 native bool Drag_IsEntityDragged(int entity);
 native void Drag_ForceDrop(int entity);
@@ -1750,10 +1749,10 @@ stock bool Ins_ObjectiveResource_GetPropVector(const char[] prop, float vec[3], 
 	return false;
 }
 
-stock int Ins_ObjectiveResource_GetPropString(const char[] prop, char[] buffer, int maxlen) {
-	buffer[0] = '\0';
-	return 0;
-}
+// stock int Ins_ObjectiveResource_GetPropString(const char[] prop, char[] buffer, int maxlen) {
+// 	buffer[0] = '\0';
+// 	return 0;
+// }
 
 stock bool Ins_InCounterAttack() {
 	return (GameRules_GetProp("m_bCounterAttack") != 0);
