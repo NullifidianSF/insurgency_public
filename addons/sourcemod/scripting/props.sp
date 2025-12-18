@@ -5,7 +5,7 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PL_VERSION		"2.21"
+#define PL_VERSION		"2.24"
 
 #define MAXENTITIES		2048
 
@@ -36,6 +36,7 @@
 #define BTN_STANCE_TOGGLE   (1 << 29)
 
 #define PF_DEPLOY_BIPOD	(1 << 1)
+#define PF_BUYZONE	(1 << 7)
 
 #define DAMAGE_NO					0
 #define DAMAGE_EVENTS_ONLY			1
@@ -63,6 +64,10 @@
 #define SND_BUYBUILDPOINTS		"ui/menu_click.wav"
 #define SND_CANTBUY				"ui/vote_no.wav"
 
+#define TEAM_SPECTATOR	1
+#define TEAM_SECURITY	2
+#define TEAM_INSURGENT	3
+
 static const char JC_Sounds[][] = {
 	"soundscape/emitters/oneshot/mil_radio_01.ogg",
 	"soundscape/emitters/oneshot/mil_radio_02.ogg",
@@ -80,6 +85,8 @@ static const char JC_Sounds[][] = {
 
 static const float JC_MinDelay = 15.0;
 static const float JC_MaxDelay = 25.0;
+
+static const float MATTRESS_FALL_WINDOW = 4.0;
 
 ArrayList	g_hJammers = null;
 Handle		g_hJammerTimer = INVALID_HANDLE;
@@ -144,7 +151,7 @@ static const PropDef g_PropDefs[] = {
 #define PROP_COUNT (sizeof(g_PropDefs))
 PropId ga_iModelIndex[MAXPLAYERS + 1] = {Prop_BarbWire, ...};
 
-char ga_sLastInflictorModel[MAXPLAYERS + 1][PLATFORM_MAX_PATH];
+char	ga_sLastInflictorModel[MAXPLAYERS + 1][PLATFORM_MAX_PATH];
 
 int		ga_iPropHolding[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
 int		ga_iLastButtons[MAXPLAYERS + 1];
@@ -154,6 +161,11 @@ int		ga_iPlayerBuildPoints[MAXPLAYERS + 1] = {STARTBUILDPOINTS, ...};
 int		ga_iPropOwner[MAXPLAYERS + 1] = {0, ...};
 int		ga_iTokensSpent[MAXPLAYERS + 1] = {0, ...};
 int		g_iAllFree;
+
+int		ga_iLastMattressOwner[MAXPLAYERS + 1];
+float	ga_fLastMattressLaunchTime[MAXPLAYERS + 1];
+bool	ga_bMattressDeath[MAXPLAYERS + 1];
+int		ga_iMattressKiller[MAXPLAYERS + 1];
 
 bool	ga_bHelpMenuOpen[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bPropRotateMenuOpen[MAXPLAYERS + 1] = {false, ...};
@@ -177,9 +189,32 @@ float	ga_fPropMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
 float	ga_fShopMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
 float	ga_fWireSoundCooldown[MAXENTITIES + 1] = {0.0, ...};
 
+float	g_fAmmoResupplyRange;
+int		g_iAmmoAmount;
+int		g_iResupplyDelay;
+bool	g_bAmmoOnce;
+
+int		ga_iResupplyCounter[MAXPLAYERS + 1];
+int		ga_iResupplyCooldown[MAXPLAYERS + 1];
+int		ga_iAmmoAmount[MAXENTITIES + 1];
+int		ga_iPlayerUsedAmmoBagRef[MAXPLAYERS + 1][MAXENTITIES + 1];
+bool	ga_bAmmoBagResupply[MAXPLAYERS + 1] = {false, ...};
+
+int		g_iDefaultResupplyDelayBase;
+int		g_iDefaultResupplyDelayMax;
+int		g_iDefaultResupplyDelayPenalty;
+int		g_iDefaultResupplyGrace;
+int		g_iDefaultResupplyGraceInitial;
+int		g_iDefaultResupplyPenaltyReset;
+
+ConVar	g_cvAmmoResupplyRange = null;
+ConVar	g_cvAmmoAmount = null;
+ConVar	g_cvResupplyDelay = null;
+ConVar	g_cvAmmoOnce = null;
+
 public Plugin myinfo = {
 	name = "props",
-	author = "Nullifidian",
+	author = "Nullifidian, ChatGPT & Owned|Myself",
 	description = "Spawn props",
 	version = PL_VERSION,
 	url = ""
@@ -190,38 +225,61 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 	return APLRes_Success;
 }
 
-public void OnPluginStart() {
+public void OnPluginStart()
+{
 	int enumCount  = view_as<int>(Prop_Count);
 	int arrayCount = PROP_COUNT;
 
-	if (enumCount != arrayCount) {
+	if (enumCount != arrayCount)
+	{
 		SetFailState("PropId count (%d) != g_PropDefs count (%d). Update the enum or the array order.", enumCount, arrayCount);
 		return;
 	}
 
-	SetupConVars();
+	SetupConVars();          // your existing props convars
+	SetupAmmoConVars();      // NEW: ammo cache convars
 
-	HookEvent("player_death", Event_PlayerDeath_Pre, EventHookMode_Pre);
-	HookEvent("round_start", Event_RoundStart);
+	HookEvent("player_death",      Event_PlayerDeath_Pre, EventHookMode_Pre);
+	HookEvent("round_start",       Event_RoundStart);
+	HookEvent("player_spawn",      Event_PlayerSpawn);     // NEW: resupply counter init
 	HookEvent("player_pick_squad", Event_PlayerPickSquad);
-	HookEvent("object_destroyed", Event_ObjectiveDone, EventHookMode_PostNoCopy);
+	HookEvent("object_destroyed",  Event_ObjectiveDone, EventHookMode_PostNoCopy);
 	HookEvent("controlpoint_captured", Event_ObjectiveDone, EventHookMode_PostNoCopy);
 
-	RegConsoleCmd("prophelp", cmd_prophelp, "Open help menu.");
+	RegConsoleCmd("prophelp",           cmd_prophelp, "Open help menu.");
+	RegConsoleCmd("inventory_resupply", cmd_inventory_resupply); // NEW
 
-	if (g_bLateLoad) {
-		for (int i = 1; i <= MaxClients; i++) {
+	if (g_bLateLoad)
+	{
+		for (int i = 1; i <= MaxClients; i++)
+		{
 			if (!IsClientInGame(i))
 				continue;
 
-			if (IsFakeClient(i)) {
+			ga_iLastMattressOwner[i]      = 0;
+			ga_fLastMattressLaunchTime[i] = 0.0;
+			ga_bMattressDeath[i]          = false;
+			ga_iMattressKiller[i]         = 0;
+
+			ga_bAmmoBagResupply[i]       = false;              // NEW
+			ga_iResupplyCounter[i]       = g_iResupplyDelay;   // NEW
+			ga_iResupplyCooldown[i]      = 0;                  // NEW
+			for (int ent = MaxClients + 1; ent <= MAXENTITIES; ent++) // NEW
+				ga_iPlayerUsedAmmoBagRef[i][ent] = INVALID_ENT_REFERENCE;
+
+			if (IsFakeClient(i))
+			{
 				SDKHook(i, SDKHook_OnTakeDamage, BotOnTakeDamage);
 				continue;
 			}
 
 			SDKHook(i, SDKHook_OnTakeDamage, PlayerOnTakeDamage);
 
+			if (ga_hPropPlaced[i] != null)
+				delete ga_hPropPlaced[i];
+
 			ga_hPropPlaced[i] = new ArrayList();
+
 			if (ga_hPropPlaced[i] == null)
 				LogError("Failed to create array for client %d", i);
 
@@ -234,10 +292,15 @@ public void OnPluginStart() {
 	}
 }
 
-public void OnMapStart() {
+public void OnMapStart()
+{
 	PrecacheFiles();
+
 	for (int i = 0; i <= MAXENTITIES; i++)
+	{
 		ga_fWireSoundCooldown[i] = 0.0;
+		ga_iAmmoAmount[i]        = 0;    // NEW
+	}
 
 	if (g_hJammers != null)
 		delete g_hJammers;
@@ -245,9 +308,23 @@ public void OnMapStart() {
 	g_hJammers = new ArrayList();
 
 	JC_ScheduleNext(15.0);
+
+	FindAndSetResupplyConvars();                                     // NEW
+	CreateTimer(1.0, Timer_AmmoResupply, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE); // NEW
+
+	for (int client = 1; client <= MaxClients; client++)             // NEW
+	{
+		ga_bAmmoBagResupply[client] = false;
+		ga_iResupplyCounter[client] = g_iResupplyDelay;
+		ga_iResupplyCooldown[client] = 0;
+
+		for (int ent = MaxClients + 1; ent <= MAXENTITIES; ent++)
+			ga_iPlayerUsedAmmoBagRef[client][ent] = INVALID_ENT_REFERENCE;
+	}
 }
 
-public void OnClientPostAdminCheck(int client) {
+public void OnClientPostAdminCheck(int client)
+{
 	if (client < 1 || client > MaxClients || !IsClientInGame(client))
 		return;
 
@@ -257,13 +334,30 @@ public void OnClientPostAdminCheck(int client) {
 	ga_fPressedJumpTime[client]  = 0.0;
 	ga_bPlacingNow[client]       = false;
 	ga_fLastPlaceTime[client]    = 0.0;
-	ga_bJustPlaced[client] = false;
+	ga_bJustPlaced[client]       = false;
 
-	if (!IsFakeClient(client)) {
+	ga_iLastMattressOwner[client]      = 0;
+	ga_fLastMattressLaunchTime[client] = 0.0;
+	ga_bMattressDeath[client]          = false;
+	ga_iMattressKiller[client]         = 0;
+
+	// NEW: ammo cache state
+	ga_bAmmoBagResupply[client] = false;
+	ga_iResupplyCounter[client] = g_iResupplyDelay;
+	ga_iResupplyCooldown[client] = 0;
+	for (int ent = MaxClients + 1; ent <= MAXENTITIES; ent++)
+		ga_iPlayerUsedAmmoBagRef[client][ent] = INVALID_ENT_REFERENCE;
+
+	if (!IsFakeClient(client))
+	{
 		SDKHook(client, SDKHook_WeaponSwitchPost, Hook_WeaponSwitch);
 		SDKHook(client, SDKHook_OnTakeDamage, PlayerOnTakeDamage);
 
+		if (ga_hPropPlaced[client] != null)
+			delete ga_hPropPlaced[client];
+
 		ga_hPropPlaced[client] = new ArrayList();
+
 		if (ga_hPropPlaced[client] == null)
 			LogError("Failed to create array for client %d", client);
 
@@ -271,13 +365,25 @@ public void OnClientPostAdminCheck(int client) {
 		ga_bFirstTimeJoinedSquad[client] = true;
 	}
 	else
+	{
 		SDKHook(client, SDKHook_OnTakeDamage, BotOnTakeDamage);
+	}
 }
 
 public void OnClientDisconnect(int client) {
-	if (IsFakeClient(client)) return;
+	if (client < 1 || client > MaxClients)
+		return;
 
 	ga_iLastButtons[client] = 0;
+
+	ga_iLastMattressOwner[client]      = 0;
+	ga_fLastMattressLaunchTime[client] = 0.0;
+	ga_bMattressDeath[client]          = false;
+	ga_iMattressKiller[client]         = 0;
+
+	if (IsFakeClient(client))
+		return;
+
 	StopHolding(client);
 
 	ArrayList list = ga_hPropPlaced[client];
@@ -333,14 +439,38 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 	return Plugin_Continue;
 }
 
+public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
+{
+	int client = GetClientOfUserId(event.GetInt("userid"));
+	if (client < 1 || client > MaxClients || !IsClientInGame(client))
+		return Plugin_Continue;
+
+	ga_iResupplyCounter[client] = g_iResupplyDelay;
+	return Plugin_Continue;
+}
+
 public Action Event_PlayerDeath_Pre(Event event, const char[] name, bool dontBroadcast) {
 	int victim = GetClientOfUserId(event.GetInt("userid"));
 	if (victim < 1 || !IsClientInGame(victim))
 		return Plugin_Continue;
 
 	if (IsFakeClient(victim)) {
-		int inflictor = EntRefToEntIndex(ga_iLastInflictor[victim]);
+		if (ga_bMattressDeath[victim] && ga_iMattressKiller[victim] > 0) {
+			int killer = ga_iMattressKiller[victim];
 
+			if (IsClientInGame(killer) && GetClientTeam(killer) != GetClientTeam(victim))
+				event.SetInt("attacker", GetClientUserId(killer));
+
+			event.SetString("weapon", "Mattress");
+
+			ga_bMattressDeath[victim] = false;
+			ga_iMattressKiller[victim] = 0;
+
+			return Plugin_Changed;
+		}
+
+		int inflictor = EntRefToEntIndex(ga_iLastInflictor[victim]);
+		
 		if (inflictor != INVALID_ENT_REFERENCE && IsValidEntity(inflictor)) {
 			char inflictorClassname[64];
 			GetEntityClassname(inflictor, inflictorClassname, sizeof(inflictorClassname));
@@ -755,8 +885,10 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 			DispatchKeyValue(prop, "targetname", PropName);
 			SDKHook(prop, SDKHook_OnTakeDamage, PropOnTakeDamage);
 
-			if (ga_bPropRotateMenuOpen[client])
+			if (ga_bPropRotateMenuOpen[client]) {
 				ClientCommand(client, "slot9");
+				ga_bPropRotateMenuOpen[client] = false;
+			}
 		}
 		else {
 			DispatchKeyValue(prop, "solid", "0");
@@ -793,14 +925,18 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 }
 
 void ClearOldestPropIfLimitReached(int client) {
-	while (ga_hPropPlaced[client] != null && ga_hPropPlaced[client].Length >= PROP_LIMIT && PROP_LIMIT > 1) {
-		int ref = ga_hPropPlaced[client].Get(0);
+	ArrayList list = ga_hPropPlaced[client];
+	if (list == null)
+		return;
+
+	while (list.Length >= PROP_LIMIT) {
+		int ref = list.Get(0);
 		int ent = EntRefToEntIndex(ref);
 		if (ent > MaxClients && IsValidEntity(ent)) {
 			DispatchKeyValue(ent, "targetname", "bmprop_deleted");
 			SafeKillRef(ref);
 		}
-		ga_hPropPlaced[client].Erase(0);
+		list.Erase(0);
 	}
 }
 
@@ -819,7 +955,7 @@ public Action SHook_OnTouchPropTakeDamage(int entity, int touch) {
 	if (touch < 1 || touch > MaxClients)
 		return Plugin_Continue;
 
-	if (!IsClientInGame(touch) || !IsPlayerAlive(touch) || GetClientTeam(touch) != 3)
+	if (!IsClientInGame(touch) || !IsPlayerAlive(touch) || GetClientTeam(touch) != TEAM_INSURGENT)
 		return Plugin_Continue;
 
 	float GameTime = GetGameTime();
@@ -859,6 +995,16 @@ public Action SHook_OnTouchMattress(int entity, int touch) {
 			PlayWireSound(entity);
 			DoDamageToEnt(entity, touch);
 		}
+
+		int propOwner = GetPropOwner(entity);
+		if (propOwner > 0 && IsClientInGame(propOwner)) {
+			ga_iLastMattressOwner[touch] = propOwner;
+			ga_fLastMattressLaunchTime[touch] = GameTime;
+		}
+		else {
+			ga_iLastMattressOwner[touch] = 0;
+			ga_fLastMattressLaunchTime[touch] = 0.0;
+		}
 	}
 
 	ga_fLastTouchTime[touch] = GameTime + PROP_TOUCH_COOLDOWN;
@@ -869,7 +1015,7 @@ public Action SHook_OnTouchWire(int entity, int touch) {
 	if (touch < 1 || touch > MaxClients)
 		return Plugin_Continue;
 
-	if (!IsClientInGame(touch) || !IsPlayerAlive(touch) || GetClientTeam(touch) != 3)
+	if (!IsClientInGame(touch) || !IsPlayerAlive(touch) || GetClientTeam(touch) != TEAM_INSURGENT)
 		return Plugin_Continue;
 
 	float GameTime = GetGameTime();
@@ -937,6 +1083,23 @@ public Action PropOnTakeDamage(int entity, int &attacker, int &inflictor, float 
 
 public Action BotOnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype) {
 	ga_iLastInflictor[victim] = EntIndexToEntRef(inflictor);
+	ga_bMattressDeath[victim] = false;
+	ga_iMattressKiller[victim] = 0;
+
+	if (damagetype & DMG_FALL) {
+		int owner = ga_iLastMattressOwner[victim];
+
+		if (owner > 0 && IsClientInGame(owner)) {
+			float now = GetGameTime();
+
+			if (GetClientTeam(victim) == TEAM_INSURGENT && GetClientTeam(owner) != GetClientTeam(victim) && (now - ga_fLastMattressLaunchTime[victim] <= MATTRESS_FALL_WINDOW)) {
+				ga_bMattressDeath[victim] = true;
+				ga_iMattressKiller[victim] = owner;
+				attacker = owner;
+				inflictor = 0;
+			}
+		}
+	}
 	return Plugin_Continue;
 }
 
@@ -1112,6 +1275,222 @@ public Action Timer_ForceDeployBipod(Handle timer, DataPack hDatapack) {
 	ga_iEntIdBipodDeployedOn[client] = sandbag;
 
 	return Plugin_Stop;
+}
+
+public Action Timer_AmmoResupply(Handle timer)
+{
+	int		ActiveWeapon;
+	int		validAmmoCache;
+	int		iBagIused;
+	char	sWeapon[32];
+
+	for (int client = 1; client <= MaxClients; client++)
+	{
+		if (!IsClientInGame(client)
+			|| !IsPlayerAlive(client)
+			|| GetClientTeam(client) != TEAM_SECURITY)
+		{
+			continue;
+		}
+
+		ActiveWeapon = GetEntPropEnt(client, Prop_Data, "m_hActiveWeapon");
+		if (ActiveWeapon < 0)
+			continue;
+
+		GetEdictClassname(ActiveWeapon, sWeapon, sizeof(sWeapon));
+
+		// Hold reload with knife/defib/etc out
+		if (GetClientButtons(client) & BTN_RELOAD && hasCorrectWeapon(sWeapon))
+		{
+			validAmmoCache = FindValidProp_InDistance(client);
+			if (validAmmoCache == -1)
+				continue;
+
+			if (g_bAmmoOnce)
+			{
+				int ref = ga_iPlayerUsedAmmoBagRef[client][validAmmoCache];
+				if (ref != INVALID_ENT_REFERENCE)
+				{
+					iBagIused = EntRefToEntIndex(ref);
+					if (iBagIused == validAmmoCache && IsValidEntity(iBagIused))
+					{
+						PrintHintText(client, "You are not allowed to resupply from the same ammo cache more than once!");
+						continue;
+					}
+				}
+			}
+
+			ga_iResupplyCounter[client]--;
+
+			if (ga_iAmmoAmount[validAmmoCache] <= 0)
+				ga_iAmmoAmount[validAmmoCache] = g_iAmmoAmount;
+
+			PrintHintText(client, "Resupplying ammo in %d seconds | Supply left: %d",
+				ga_iResupplyCounter[client], ga_iAmmoAmount[validAmmoCache]);
+
+			if (ga_iResupplyCounter[client] <= 0)
+			{
+				ga_iResupplyCounter[client] = g_iResupplyDelay;
+
+				AmmoResupply_Player(client);
+
+				ga_iAmmoAmount[validAmmoCache]--;
+				if (ga_iAmmoAmount[validAmmoCache] <= 0 && validAmmoCache != -1)
+				{
+					for (int i = 1; i <= MaxClients; i++)
+						ga_iPlayerUsedAmmoBagRef[i][validAmmoCache] = INVALID_ENT_REFERENCE;
+
+					SafeKillIdx(validAmmoCache);
+				}
+				else
+				{
+					ga_iPlayerUsedAmmoBagRef[client][validAmmoCache] = EntIndexToEntRef(validAmmoCache);
+				}
+
+				PrintHintText(client, "Rearmed! Ammo Supply left: %d", ga_iAmmoAmount[validAmmoCache]);
+				PrintToChat(client, "\x01Rearmed! Ammo Supply left: \x070088cc%d", ga_iAmmoAmount[validAmmoCache]);
+			}
+		}
+	}
+	return Plugin_Continue;
+}
+
+void AmmoResupply_Player(int client)
+{
+	ga_bAmmoBagResupply[client] = true;
+
+	if (GetEntProp(client, Prop_Send, "m_iPlayerFlags") & PF_BUYZONE)
+	{
+		FakeClientCommandEx(client, "inventory_resupply");
+		return;
+	}
+
+	char sClassName[64];
+	for (int i = 0; i < GetMaxEntities(); i++)
+	{
+		if (!IsValidEntity(i))
+			continue;
+
+		GetEntityClassname(i, sClassName, sizeof(sClassName));
+		if (strcmp(sClassName, "ins_spawnzone", false) != 0)
+			continue;
+
+		if (GetEntProp(i, Prop_Send, "m_bDisabled"))
+			continue;
+
+		CallStartTouch(i, client);
+		SetEntProp(client, Prop_Send, "m_iPlayerFlags", GetEntProp(client, Prop_Send, "m_iPlayerFlags") | PF_BUYZONE);
+		FakeClientCommandEx(client, "inventory_resupply");
+		CallEndTouch(i, client);
+		break;
+	}
+}
+
+// Simulate touching the resupply trigger
+public void CallStartTouch(int trigger, int client)
+{
+	AcceptEntityInput(trigger, "StartTouch", client, client, 0);
+}
+
+public void CallEndTouch(int trigger, int client)
+{
+	AcceptEntityInput(trigger, "EndTouch", client, client, 0);
+}
+
+// Find nearest ammo cache prop placed by any player, within g_fAmmoResupplyRange.
+// Returns entity index or -1 if none found.
+int FindValidProp_InDistance(int client)
+{
+	if (!IsClientInGame(client))
+		return -1;
+
+	float eye[3];
+	GetClientEyePosition(client, eye);
+
+	float maxDist = g_fAmmoResupplyRange;
+	float maxDistSqr = maxDist * maxDist;
+	float bestDistSqr = maxDistSqr + 1.0;
+
+	int bestEnt = -1;
+	int ent, ref;
+	float pos[3];
+	char model[128];
+
+	ArrayList list;
+
+	for (int owner = 1; owner <= MaxClients; owner++)
+	{
+		if (!IsClientInGame(owner))
+			continue;
+
+		list = ga_hPropPlaced[owner];
+		if (list == null)
+			continue;
+
+		int count = list.Length;
+		if (count == 0)
+			continue;
+
+		for (int i = 0; i < count; i++)
+		{
+			// ent ref stored in the ArrayList
+			ref = list.Get(i);
+			if (ref == INVALID_ENT_REFERENCE)
+				continue;
+
+			ent = EntRefToEntIndex(ref);
+			if (ent <= MaxClients || !IsValidEntity(ent))
+				continue;
+
+			// Check model is the small ammo cache only
+			GetEntPropString(ent, Prop_Data, "m_ModelName", model, sizeof(model));
+			if (strcmp(model, "models/sernix/ammo_cache/ammo_cache_small.mdl", false) != 0)
+				continue;
+
+			// Distance check
+			GetEntPropVector(ent, Prop_Send, "m_vecOrigin", pos);
+			float distSqr = GetVectorDistance(eye, pos, true);
+			if (distSqr > maxDistSqr)
+				continue;
+
+			if (distSqr < bestDistSqr)
+			{
+				bestDistSqr = distSqr;
+				bestEnt = ent;
+			}
+		}
+	}
+
+	return bestEnt;
+}
+
+public Action cmd_inventory_resupply(int client, int args)
+{
+	if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
+		return Plugin_Continue;
+
+	// Ammo-cache-triggered resupply: allow, but clear flag
+	if (ga_bAmmoBagResupply[client])
+	{
+		ga_bAmmoBagResupply[client] = false;
+		return Plugin_Continue;
+	}
+
+	// Normal spawn resupply, we enforce cooldown
+	if ((GetEntProp(client, Prop_Send, "m_iPlayerFlags") & PF_BUYZONE) == 0)
+		return Plugin_Handled;
+
+	int now = GetTime();
+	int left = ga_iResupplyCooldown[client] - now;
+
+	if (left > 0)
+	{
+		PrintToChat(client, "You may resupply in %d second%s.", left, (left == 1) ? "" : "s");
+		return Plugin_Handled;
+	}
+
+	ga_iResupplyCooldown[client] = now + g_iDefaultResupplyDelayMax;
+	return Plugin_Continue;
 }
 
 public Action Hook_WeaponSwitch(int client, int entity) {
@@ -1301,12 +1680,15 @@ bool AnyPropMenuFlagOpen(int client) {
 }
 
 void CloseAllPropMenus(int client, bool sendSlot9IfNeeded = true) {
-	bool hadSmMenu = (GetClientMenu(client) != MenuSource_None);
-	if (hadSmMenu)
+	if (client < 1 || client > MaxClients || !IsClientInGame(client))
+		return;
+
+	bool bOurMenuOpen = AnyPropMenuFlagOpen(client);
+
+	if (bOurMenuOpen && GetClientMenu(client) != MenuSource_None)
 		CancelClientMenu(client);
 
-	bool hadOurFlags = AnyPropMenuFlagOpen(client);
-	if (sendSlot9IfNeeded && (hadSmMenu || hadOurFlags))
+	if (sendSlot9IfNeeded && bOurMenuOpen)
 		ClientCommand(client, "slot9");
 
 	ga_bHelpMenuOpen[client] = false;
@@ -1320,8 +1702,10 @@ void DeconstructAllProps(int client) {
 	if (list == null) return;
 
 	for (int i = list.Length - 1; i >= 0; i--) {
-		SafeKillRef( list.Get(i));
+		SafeKillRef(list.Get(i));
 	}
+
+	list.Clear();
 }
 
 void RestoreBuildPoints(int client) {
@@ -1667,6 +2051,16 @@ public Action JC_Timer_Play(Handle timer) {
 	return Plugin_Stop;
 }
 
+bool hasCorrectWeapon(const char[] sWeapon)
+{
+	if (StrContains(sWeapon, "weapon_defib", false) != -1
+		|| StrContains(sWeapon, "weapon_knife", false) != -1
+		|| StrContains(sWeapon, "weapon_kabar", false) != -1
+		|| StrContains(sWeapon, "weapon_katana", false) != -1)
+		return true;
+	return false;
+}
+
 public void OnMapEnd() {
 	JC_Stop();
 	if (g_hJammers != null) {
@@ -1695,6 +2089,13 @@ public void OnPluginEnd() {
 		delete g_hJammers;
 		g_hJammers = null;
 	}
+
+	ServerCommand("mp_player_resupply_coop_delay_base %d", g_iDefaultResupplyDelayBase);
+	ServerCommand("mp_player_resupply_coop_delay_max %d", g_iDefaultResupplyDelayMax);
+	ServerCommand("mp_player_resupply_coop_delay_penalty %d", g_iDefaultResupplyDelayPenalty);
+	ServerCommand("mp_player_resupply_coop_grace %d", g_iDefaultResupplyGrace);
+	ServerCommand("mp_player_resupply_coop_grace_initial %d", g_iDefaultResupplyGraceInitial);
+	ServerCommand("mp_player_resupply_coop_penalty_reset %d", g_iDefaultResupplyPenaltyReset);
 }
 
 void SetupConVars() {
@@ -1706,6 +2107,70 @@ void SetupConVars() {
 void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
 	if (convar == g_cvAllFree)
 		g_iAllFree = g_cvAllFree.IntValue;
+}
+
+void SetupAmmoConVars()
+{
+	g_cvAmmoResupplyRange = CreateConVar("sm_ammo_resupply_range", "80",
+		"Range to resupply near ammo cache");
+	g_fAmmoResupplyRange = g_cvAmmoResupplyRange.FloatValue;
+	g_cvAmmoResupplyRange.AddChangeHook(OnAmmoConVarChanged);
+
+	g_cvAmmoAmount = CreateConVar("sm_ammo_resupply_amount", "4",
+		"How many resupplies an ammo cache holds");
+	g_iAmmoAmount = g_cvAmmoAmount.IntValue;
+	g_cvAmmoAmount.AddChangeHook(OnAmmoConVarChanged);
+
+	g_cvResupplyDelay = CreateConVar("sm_resupply_delay", "8",
+		"Delay (seconds) while holding reload to resupply");
+	g_iResupplyDelay = g_cvResupplyDelay.IntValue;
+	g_cvResupplyDelay.AddChangeHook(OnAmmoConVarChanged);
+
+	g_cvAmmoOnce = CreateConVar("sm_ammo_resupply_once", "1",
+		"If 1, players may only resupply once per ammo cache");
+	g_bAmmoOnce = g_cvAmmoOnce.BoolValue;
+	g_cvAmmoOnce.AddChangeHook(OnAmmoConVarChanged);
+}
+
+public void OnAmmoConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
+{
+	if (convar == g_cvAmmoResupplyRange)
+	{
+		g_fAmmoResupplyRange = g_cvAmmoResupplyRange.FloatValue;
+	}
+	else if (convar == g_cvAmmoAmount)
+	{
+		g_iAmmoAmount = g_cvAmmoAmount.IntValue;
+	}
+	else if (convar == g_cvResupplyDelay)
+	{
+		g_iResupplyDelay = g_cvResupplyDelay.IntValue;
+	}
+	else if (convar == g_cvAmmoOnce)
+	{
+		g_bAmmoOnce = g_cvAmmoOnce.BoolValue;
+	}
+}
+
+void FindAndSetResupplyConvars()
+{
+	g_iDefaultResupplyDelayBase = GetConVarInt(FindConVar("mp_player_resupply_coop_delay_base"));
+	ServerCommand("mp_player_resupply_coop_delay_base 0");
+
+	g_iDefaultResupplyDelayMax = GetConVarInt(FindConVar("mp_player_resupply_coop_delay_max"));
+	ServerCommand("mp_player_resupply_coop_delay_max 0");
+
+	g_iDefaultResupplyDelayPenalty = GetConVarInt(FindConVar("mp_player_resupply_coop_delay_penalty"));
+	ServerCommand("mp_player_resupply_coop_delay_penalty 0");
+
+	g_iDefaultResupplyGrace = GetConVarInt(FindConVar("mp_player_resupply_coop_grace"));
+	ServerCommand("mp_player_resupply_coop_grace 0");
+
+	g_iDefaultResupplyGraceInitial = GetConVarInt(FindConVar("mp_player_resupply_coop_grace_initial"));
+	ServerCommand("mp_player_resupply_coop_grace_initial 0");
+
+	g_iDefaultResupplyPenaltyReset = GetConVarInt(FindConVar("mp_player_resupply_coop_penalty_reset"));
+	ServerCommand("mp_player_resupply_coop_penalty_reset 0");
 }
 
 stock void SafeKillIdx(int ent) {
