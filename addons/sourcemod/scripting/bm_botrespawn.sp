@@ -5,7 +5,7 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PL_VERSION		"1.1.1"
+#define PL_VERSION		"1.1.2"
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
@@ -460,53 +460,20 @@ public Action Event_ObjDone_NoCopy(Event event, const char[] name, bool dontBroa
 
 public Action Event_Objectives_Pre(Event event, const char[] name, bool dontBroadcast)
 {
-	// When an objective is completed, shut off plugin bot lives
-	// and start proximity grace for the *next* objective.
+	g_iBotLivesRemain = 0;
+	
 	if (g_fProximityGraceSeconds > 0.0)
-	{
-		g_iBotLivesRemain = 0;
 		BM_StartProxGrace(g_fProximityGraceSeconds + 1.1);
-	}
 
-	bool bFinalObj = (g_iActiveCP + 1 == g_iNumCPs);
-	bool bWillCounterAttack = false;
-
-	if (bFinalObj)
+	if (g_iActiveCP + 1 == g_iNumCPs || GetRandomFloat(0.0, 1.0) < g_fCounterAttackChance)
 	{
-		g_iBotLivesRemain = 0;
-
-		for (int i = 1; i <= MaxClients; i++)
-		{
-			if (IsClientInGame(i) && IsPlayerAlive(i) && IsFakeClient(i) && GetClientTeam(i) == TEAM_INSURGENT)
-			{
-				ForcePlayerSuicide(i);
-			}
-		}
-
-		SetConVarInt(cv_hCounterAttackDuration, GetRandomInt(g_iMaxCounterAttackDuration, g_iMinCounterAttackDuration), true, false);
-		SetConVarInt(cv_hCounterAttackDisable, 0, true, false);
-		SetConVarInt(cv_hCounterAttackAlways, 1, true, false);
-	}
-	else if (GetRandomFloat(0.0, 1.0) < g_fCounterAttackChance)
-	{
-		// Normal mid-round counter-attack
-		bWillCounterAttack = true;
-
-		SetConVarInt(cv_hCounterAttackDuration, GetRandomInt(g_iMaxCounterAttackDuration, g_iMinCounterAttackDuration), true, false);
+		BM_CleanUpBotsForCounterAttack();
+		SetConVarInt(cv_hCounterAttackDuration, GetRandomInt(g_iMinCounterAttackDuration, g_iMaxCounterAttackDuration), true, false);
 		SetConVarInt(cv_hCounterAttackDisable, 0, true, false);
 		SetConVarInt(cv_hCounterAttackAlways, 1, true, false);
 	}
 	else
-	{
 		SetConVarInt(cv_hCounterAttackDisable, 1, true, false);
-	}
-
-	// For non-final counter-attacks: clean up "useless" bots so the
-	// engine + your CA spawns can bring a fresh wave in good positions.
-	if (bWillCounterAttack && !bFinalObj)
-	{
-		BM_CleanUpBotsForCounterAttack();
-	}
 
 	return Plugin_Continue;
 }
