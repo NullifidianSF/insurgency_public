@@ -5,7 +5,7 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PL_VERSION		"1.1.3"
+#define PL_VERSION		"1.1.4"
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
@@ -205,11 +205,11 @@ public void OnMapStart() {
 
 	LoadSpawnsForMap(map);
 
-	if (!g_bLateLoad) {
+	if (!g_bLateLoad)
 		g_bIsRoundActive = false;
-		g_bLateLoad = false;
-	}
-
+		
+	g_bLateLoad = false;
+	
 	g_bIsMapChanging = false;
 	g_bIsGameEnd = false;
 
@@ -1002,8 +1002,11 @@ public Action Timer_CheckSpawnMovedGlobal(Handle timer, any data) {
 // ------------------------------------------------------------
 
 static int ClampCP(int cp) {
+	int max = g_iNumCPs - 1;
+	if (max < 0) max = 0;
+	if (max >= MAX_CPS) max = MAX_CPS - 1;
 	if (cp < 0) return 0;
-	if (cp > g_iNumCPs) return g_iNumCPs;
+	if (cp > max) return max;
 	return cp;
 }
 
