@@ -4,13 +4,13 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PL_VERSION		"1.5"
+#define PL_VERSION		"1.6"
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
 #define TEAM_INSURGENT	3
 
-static const float gc_fTimeBeforeMoveToSpec 		= 180.0;	// def = 180.0
+static const float gc_fTimeBeforeMoveToSpec 		= 240.0;	// def = 240.0
 static const float gc_fTimeBeforeKick				= 600.0;	// def = 600.0
 static const float gc_fTimeBeforeActionWarn			= 60.0;		// def = 60.0
 static const float gc_fTimerInterval				= 0.25;		// def = 0.25
@@ -24,18 +24,18 @@ static const bool gc_bIsAdminsImmuneToKick			= true;		// def = true
 static const bool gc_bIsActionsAnnouncedToAll		= true;		// def = true
 
 stock const char COL_RESET[]	= "\x01";
-stock const char COL_TEAM[]		= "\x03";
-stock const char COL_GREEN[]	= "\x04";
+//stock const char COL_TEAM[]		= "\x03";
+//stock const char COL_GREEN[]	= "\x04";
 stock const char COL_RED[]		= "\x07FF0000";
 stock const char COL_ORANGE[]	= "\x07FFA500";
-stock const char COL_LIME[]		= "\x0732CD32";
-stock const char COL_CYAN[]		= "\x0700FFFF";
-stock const char COL_BLUE[]		= "\x071E90FF";
-stock const char COL_PURPLE[]	= "\x07BA55D3";
-stock const char COL_PINK[]		= "\x07FF69B4";
-stock const char COL_WHITE[]	= "\x07FFFFFF";
-stock const char COL_SILVER[]	= "\x07C0C0C0";
-stock const char COL_GREY[]		= "\x07BEBEBE";
+//stock const char COL_LIME[]		= "\x0732CD32";
+//stock const char COL_CYAN[]		= "\x0700FFFF";
+//stock const char COL_BLUE[]		= "\x071E90FF";
+//stock const char COL_PURPLE[]	= "\x07BA55D3";
+//stock const char COL_PINK[]		= "\x07FF69B4";
+//stock const char COL_WHITE[]	= "\x07FFFFFF";
+//stock const char COL_SILVER[]	= "\x07C0C0C0";
+//stock const char COL_GREY[]		= "\x07BEBEBE";
 stock const char COL_GOLD[]		= "\x07FFD700";
 
 int g_iNumberHumanPlayersInGame					= 0;
@@ -54,7 +54,10 @@ bool g_bIsGameEnd								= false;
 bool g_bRecountQueued							= false;
 bool g_bNowTimerRunning							= false;
 
+char g_sLogDir[PLATFORM_MAX_PATH];
 char g_sLogFile[PLATFORM_MAX_PATH];
+char g_sLogDate[16];
+bool g_bLogDedicatedDir = false;
 
 public Plugin myinfo = {
 	name		= "ins_afkmanager",
@@ -351,48 +354,81 @@ void ResetPlayerGlobalsLate(int client, int pr, bool hasSquadProp, float now) {
 }
 
 void BuildLogFilePath() {
-	char date[32];
-	FormatTime(date, sizeof(date), "%d%m%Y", GetTime());
-	BuildPath(Path_SM, g_sLogFile, sizeof(g_sLogFile), "logs/ins_afkmanager_%s.log", date);
+	char date[16];
+	FormatTime(date, sizeof(date), "%Y-%m-%d", GetTime());
+	strcopy(g_sLogDate, sizeof(g_sLogDate), date);
+
+	BuildPath(Path_SM, g_sLogDir, sizeof(g_sLogDir), "logs/ins_afkmanager");
+	bool ok = DirExists(g_sLogDir) || CreateDirectory(g_sLogDir, 511);
+	g_bLogDedicatedDir = ok;
+
+	if (ok)
+		BuildPath(Path_SM, g_sLogFile, sizeof(g_sLogFile), "logs/ins_afkmanager/%s.log", date);
+	else
+	{
+		BuildPath(Path_SM, g_sLogDir, sizeof(g_sLogDir), "logs");
+		BuildPath(Path_SM, g_sLogFile, sizeof(g_sLogFile), "logs/ins_afkmanager_%s.log", date);
+	}
 }
+
 
 void PurgeOldLogs() {
 	if (gc_iNumberOfDaysToKeepLogs < 1)
 		return;
 
-	char logDir[PLATFORM_MAX_PATH];
-	BuildPath(Path_SM, logDir, sizeof(logDir), "logs");
-	if (!DirExists(logDir))
+	if (g_sLogDir[0] == '\0')
+		BuildLogFilePath();
+
+	if (!DirExists(g_sLogDir))
 		return;
 
-	Handle dir = OpenDirectory(logDir);
+	Handle dir = OpenDirectory(g_sLogDir);
 	if (dir == null)
 		return;
 
 	int cutoff = GetTime() - (gc_iNumberOfDaysToKeepLogs * 86400);
 	char name[PLATFORM_MAX_PATH];
 	FileType type;
+
 	while (ReadDirEntry(dir, name, sizeof(name), type)) {
 		if (type != FileType_File)
 			continue;
 
-		if (StrContains(name, "ins_afkmanager_", false) == -1)
+		int slen = strlen(name);
+		if (slen < 4 || StrContains(name, ".log", false) != slen - 4)
+			continue;
+
+		if (!g_bLogDedicatedDir && StrContains(name, "ins_afkmanager_", false) != 0)
 			continue;
 
 		char full[PLATFORM_MAX_PATH];
-		Format(full, sizeof(full), "%s/%s", logDir, name);
+		if (g_bLogDedicatedDir)
+			BuildPath(Path_SM, full, sizeof(full), "logs/ins_afkmanager/%s", name);
+		else
+			BuildPath(Path_SM, full, sizeof(full), "logs/%s", name);
 
 		if (GetFileTime(full, FileTime_LastChange) < cutoff)
 			DeleteFile(full);
 	}
+
 	CloseHandle(dir);
 }
 
+
+
 void LogAFK(const char[] fmt, any ...) {
+	char date[16];
+	FormatTime(date, sizeof(date), "%Y-%m-%d", GetTime());
+	if (g_sLogFile[0] == '\0' || !StrEqual(date, g_sLogDate, false)) {
+		BuildLogFilePath();
+		PurgeOldLogs();
+	}
+
 	char buf[512];
 	VFormat(buf, sizeof(buf), fmt, 2);
-	LogToFile(g_sLogFile, "%s", buf);
+	LogToFileEx(g_sLogFile, "%s", buf);
 }
+
 
 public Action cmd_spec(int client, int args) {
 	if (args < 1) {
