@@ -262,12 +262,12 @@
 
 	"VB_VoteWonSplit_Chat"
 	{
-		"en"	"Split vote: %i/%i voted (need %i = %i%%). Top: %i bots/player (%i votes)."
+		"en"	"Split vote: %i/%i voted (need %i = %i%%). Most votes: %i bots/player (%i votes)."
 		"ru"	"Голоса разделились: %i/%i проголосовали (нужно %i = %i%%). Лидер: %i ботов/игрок (%i голосов)."
 		"pl"	"Podział głosów: zagłosowało %i/%i (potrzeba %i = %i%%). Najwięcej: %i botów/gracza (%i głosów)."
 		"de"	"Geteilte Stimmen: %i/%i haben abgestimmt (benötigt %i = %i%%). Top: %i Bots/Spieler (%i Stimmen)."
 		"fr"	"Vote partagé : %i/%i ont voté (il faut %i = %i%%). En tête : %i bots/joueur (%i votes)."
-		"es"	"Voto dividido: %i/%i votaron (se necesitan %i = %i%%). Ganador: %i bots/jugador (%i votos)."
+		"es"	"Voto dividido: %i/%i votaron (se necesitan %i = %i%%). Más votos: %i bots/jugador (%i votos)."
 		"pt"	"Voto dividido: %i/%i votaram (precisa de %i = %i%%). Topo: %i bots/jogador (%i votos)."
 		"pt-BR"	"Voto dividido: %i/%i votaram (precisa de %i = %i%%). Topo: %i bots/jogador (%i votos)."
 		"tr"	"Oylar bölündü: %i/%i oy verdi (gerekli %i = %i%%). En çok: oyuncu başına %i bot (%i oy)."
@@ -282,12 +282,12 @@
 
 	"VB_VoteWonSplit_Hint"
 	{
-		"en"	"[!vb] Split vote: %i/%i voted (need %i = %i%%). Top: %i bots/player (%i votes)."
+		"en"	"[!vb] Split vote: %i/%i voted (need %i = %i%%). Most votes: %i bots/player (%i votes)."
 		"ru"	"[!vb] Голоса разделились: %i/%i проголосовали (нужно %i = %i%%). Лидер: %i ботов/игрок (%i голосов)."
 		"pl"	"[!vb] Podział głosów: zagłosowało %i/%i (potrzeba %i = %i%%). Najwięcej: %i botów/gracza (%i głosów)."
 		"de"	"[!vb] Geteilte Stimmen: %i/%i haben abgestimmt (benötigt %i = %i%%). Top: %i Bots/Spieler (%i Stimmen)."
 		"fr"	"[!vb] Vote partagé : %i/%i ont voté (il faut %i = %i%%). En tête : %i bots/joueur (%i votes)."
-		"es"	"[!vb] Voto dividido: %i/%i votaron (se necesitan %i = %i%%). Ganador: %i bots/jugador (%i votos)."
+		"es"	"[!vb] Voto dividido: %i/%i votaron (se necesitan %i = %i%%). Más votos: %i bots/jugador (%i votos)."
 		"pt"	"[!vb] Voto dividido: %i/%i votaram (precisa de %i = %i%%). Topo: %i bots/jogador (%i votos)."
 		"pt-BR"	"[!vb] Voto dividido: %i/%i votaram (precisa de %i = %i%%). Topo: %i bots/jogador (%i votos)."
 		"tr"	"[!vb] Oylar bölündü: %i/%i oy verdi (gerekli %i = %i%%). En çok: oyuncu başına %i bot (%i oy)."
