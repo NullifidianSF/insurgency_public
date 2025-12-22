@@ -6,6 +6,7 @@
 
 native bool Drag_IsEntityDragged(int entity);
 native void Drag_ForceDrop(int entity);
+Handle	g_hFwdRagdollReady = null;
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
@@ -180,7 +181,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "",
 	description = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & ChatGPT",
-	version = "1.0.2",
+	version = "1.0.3",
 	url = ""
 };
 
@@ -188,11 +189,29 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 	g_bLateLoad = late;
 	MarkNativeAsOptional("Drag_IsEntityDragged");
 	MarkNativeAsOptional("Drag_ForceDrop");
+
+	CreateNative("Medic_GetClientRagdollRef", Native_Medic_GetClientRagdollRef);
+
 	return APLRes_Success;
+}
+
+public any Native_Medic_GetClientRagdollRef(Handle plugin, int numParams)
+{
+	int client = GetNativeCell(1);
+	if (client < 1 || client > MaxClients)
+		return INVALID_ENT_REFERENCE;
+
+	return ga_iClientRagdolls[client];
 }
 
 // Start plugin
 public void OnPluginStart() {
+	RegPluginLibrary("bm_medic");
+
+	if (g_hFwdRagdollReady == null)
+		g_hFwdRagdollReady = CreateGlobalForward("Medic_OnRagdollReady", ET_Ignore, Param_Cell, Param_Cell);
+
+	
 	// Shared colors
 	g_iColorReviveRing[0] = 255;
 	g_iColorReviveRing[1] = 0;
@@ -739,6 +758,14 @@ void Frame_TeleportPendingRagdoll(int userid) {
 
 	TeleportEntity(ent, ga_fPendingRagTeleportPos[client], ga_fPendingRagTeleportAng[client], ga_fPendingRagTeleportVel[client]);
 	AcceptEntityInput(ent, "Wake");
+	
+	if (g_hFwdRagdollReady != null) {
+		Call_StartForward(g_hFwdRagdollReady);
+		Call_PushCell(client);
+		Call_PushCell(EntIndexToEntRef(ent));
+		Call_Finish();
+	}
+
 	ClearPendingRagTeleport(client);
 }
 
@@ -894,6 +921,21 @@ Action Timer_ReviveMonitor(Handle timer) {
 				Check_NearbyMedicsRevive(alivePlayer, deadPlayer);
 				ga_bRevivedByMedic[deadPlayer] = false;
 				RespawnPlayerRevive(deadPlayer);
+
+				int iAmmoType = GetEntProp(ActiveWeapon, Prop_Data, "m_iPrimaryAmmoType");
+				int iAmmo = GetEntProp(alivePlayer, Prop_Data, "m_iAmmo", _, iAmmoType);
+
+				if (iAmmo > 0)
+					SetEntProp(alivePlayer, Prop_Send, "m_iAmmo", iAmmo-1, _, iAmmoType);
+
+				if (iAmmo == 1) {
+					//RemovePlayerItem(alivePlayer, ActiveWeapon);
+					//ChangePlayerWeaponSlot(alivePlayer, 2);
+					if (GetPlayerWeaponSlot(alivePlayer, 0) > 0)
+						ClientCommand(alivePlayer, "slot1");
+					else if (GetPlayerWeaponSlot(alivePlayer, 1) > 0)
+						ClientCommand(alivePlayer, "slot2");
+				}
 			}
 		}
 	}
