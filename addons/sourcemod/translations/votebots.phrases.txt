@@ -259,4 +259,45 @@
 		"cs"	"[!vb] Hlasy %i/%i: počet botů změněn na %i na hráče."
 		"ro"	"[!vb] Voturi %i/%i: numărul de boți a fost schimbat la %i per jucător."
 	}
+
+	"VB_VoteWonSplit_Chat"
+	{
+		"en"	"Split vote: %i/%i voted (need %i = %i%%). Top: %i bots/player (%i votes)."
+		"ru"	"Голоса разделились: %i/%i проголосовали (нужно %i = %i%%). Лидер: %i ботов/игрок (%i голосов)."
+		"pl"	"Podział głosów: zagłosowało %i/%i (potrzeba %i = %i%%). Najwięcej: %i botów/gracza (%i głosów)."
+		"de"	"Geteilte Stimmen: %i/%i haben abgestimmt (benötigt %i = %i%%). Top: %i Bots/Spieler (%i Stimmen)."
+		"fr"	"Vote partagé : %i/%i ont voté (il faut %i = %i%%). En tête : %i bots/joueur (%i votes)."
+		"es"	"Voto dividido: %i/%i votaron (se necesitan %i = %i%%). Ganador: %i bots/jugador (%i votos)."
+		"pt"	"Voto dividido: %i/%i votaram (precisa de %i = %i%%). Topo: %i bots/jogador (%i votos)."
+		"pt-BR"	"Voto dividido: %i/%i votaram (precisa de %i = %i%%). Topo: %i bots/jogador (%i votos)."
+		"tr"	"Oylar bölündü: %i/%i oy verdi (gerekli %i = %i%%). En çok: oyuncu başına %i bot (%i oy)."
+		"zh-CN"	"投票分裂：%i/%i 已投票（需要 %i = %i%%）。领先：每名玩家 %i 个机器人（%i 票）。"
+		"zh-TW"	"投票分裂：%i/%i 已投票（需要 %i = %i%%）。領先：每名玩家 %i 個機器人（%i 票）。"
+		"ja"	"票が割れました: %i/%i が投票（必要 %i = %i%%）。最多: 1人あたり %i BOT（%i 票）。"
+		"ko"	"표가 갈렸습니다: %i/%i명이 투표함 (필요 %i = %i%%). 최다: 플레이어당 %i 봇 (%i표)."
+		"it"	"Voto diviso: hanno votato %i/%i (ne servono %i = %i%%). In testa: %i bot/giocatore (%i voti)."
+		"cs"	"Rozdělené hlasování: hlasovalo %i/%i (potřeba %i = %i%%). Nejvíc: %i botů/na hráče (%i hlasů)."
+		"ro"	"Vot împărțit: au votat %i/%i (necesar %i = %i%%). În frunte: %i boți/jucător (%i voturi)."
+	}
+
+	"VB_VoteWonSplit_Hint"
+	{
+		"en"	"[!vb] Split vote: %i/%i voted (need %i = %i%%). Top: %i bots/player (%i votes)."
+		"ru"	"[!vb] Голоса разделились: %i/%i проголосовали (нужно %i = %i%%). Лидер: %i ботов/игрок (%i голосов)."
+		"pl"	"[!vb] Podział głosów: zagłosowało %i/%i (potrzeba %i = %i%%). Najwięcej: %i botów/gracza (%i głosów)."
+		"de"	"[!vb] Geteilte Stimmen: %i/%i haben abgestimmt (benötigt %i = %i%%). Top: %i Bots/Spieler (%i Stimmen)."
+		"fr"	"[!vb] Vote partagé : %i/%i ont voté (il faut %i = %i%%). En tête : %i bots/joueur (%i votes)."
+		"es"	"[!vb] Voto dividido: %i/%i votaron (se necesitan %i = %i%%). Ganador: %i bots/jugador (%i votos)."
+		"pt"	"[!vb] Voto dividido: %i/%i votaram (precisa de %i = %i%%). Topo: %i bots/jogador (%i votos)."
+		"pt-BR"	"[!vb] Voto dividido: %i/%i votaram (precisa de %i = %i%%). Topo: %i bots/jogador (%i votos)."
+		"tr"	"[!vb] Oylar bölündü: %i/%i oy verdi (gerekli %i = %i%%). En çok: oyuncu başına %i bot (%i oy)."
+		"zh-CN"	"[!vb] 投票分裂：%i/%i 已投票（需要 %i = %i%%）。领先：每名玩家 %i 个机器人（%i 票）。"
+		"zh-TW"	"[!vb] 投票分裂：%i/%i 已投票（需要 %i = %i%%）。領先：每名玩家 %i 個機器人（%i 票）。"
+		"ja"	"[!vb] 票が割れました: %i/%i が投票（必要 %i = %i%%）。最多: 1人あたり %i BOT（%i 票）。"
+		"ko"	"[!vb] 표가 갈렸습니다: %i/%i명이 투표함 (필요 %i = %i%%). 최다: 플레이어당 %i 봇 (%i표)."
+		"it"	"[!vb] Voto diviso: hanno votato %i/%i (ne servono %i = %i%%). In testa: %i bot/giocatore (%i voti)."
+		"cs"	"[!vb] Rozdělené hlasování: hlasovalo %i/%i (potřeba %i = %i%%). Nejvíc: %i botů/na hráče (%i hlasů)."
+		"ro"	"[!vb] Vot împărțit: au votat %i/%i (necesar %i = %i%%). În frunte: %i boți/jucător (%i voturi)."
+	}
+
 }
