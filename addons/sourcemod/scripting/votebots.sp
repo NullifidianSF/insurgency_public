@@ -9,7 +9,7 @@ public Plugin myinfo =
 	name = "votebots",
 	author = "Nullifidian + ChatGPT",
 	description = "vote menu to change bot count",
-	version = "2.10"
+	version = "2.12.1"
 };
 
 #define VB_PREFIX "\x070088cc[!vb]\x01"
@@ -133,7 +133,7 @@ int GetBotsForOption(int optionIndex)
 		{
 			if (optionIndex == i)
 			{
-                // This option is the "default" value
+				// This option is the "default" value
 				return g_iLivesMultiDef;
 			}
 
@@ -571,9 +571,7 @@ void CheckAllVotedFallback()
 		}
 	}
 
-	// For the message, show it as "votes / voters"
-	g_iNeedVotes = voters;
-	VoteWon(iChosenBots, iHighestVotes);
+	VoteWonSplit(iChosenBots, iHighestVotes, voters, g_iSecPlayers, g_iNeedVotes);
 }
 
 void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
@@ -650,11 +648,27 @@ Action Timer_CountVotes(Handle timer)
 	return Plugin_Stop;
 }
 
-void VoteWon(int bots, int vote)
+void ApplyBotLives(int bots)
 {
 	ServerCommand("sm_botlives %i", bots);
-
 	EmitSoundToAll(g_sVoteSound, _, SNDCHAN_AUTO, _, _, 0.70);
+}
+
+void ClearAllVotes()
+{
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (IsClientInGame(i) && !IsFakeClient(i) && ga_bPlayerVoted[i])
+		{
+			ResetPlayerVote(i, true);
+			ga_bPlayerVoted[i] = false;
+		}
+	}
+}
+
+void VoteWon(int bots, int vote)
+{
+	ApplyBotLives(bots);
 
 	for (int i = 1; i <= MaxClients; i++)
 	{
@@ -665,16 +679,28 @@ void VoteWon(int bots, int vote)
 		}
 	}
 
-	// Clear all votes
+	ClearAllVotes();
+}
+
+void VoteWonSplit(int bots, int topVotes, int voters, int secPlayers, int needWin)
+{
+	ApplyBotLives(bots);
+
+	int pct = RoundToNearest(g_fVotePercent * 100.0);
+
 	for (int i = 1; i <= MaxClients; i++)
 	{
-		if (IsClientInGame(i) && !IsFakeClient(i) && ga_bPlayerVoted[i])
+		if (IsClientInGame(i) && !IsFakeClient(i))
 		{
-			ResetPlayerVote(i, true);
-			ga_bPlayerVoted[i] = false;
+			PrintToChat(i, "%s %T", VB_PREFIX, "VB_VoteWonSplit_Chat", i, voters, secPlayers, needWin, pct, bots, topVotes);
+			PrintHintText(i, "%T", "VB_VoteWonSplit_Hint", i, voters, secPlayers, needWin, pct, bots, topVotes);
 		}
 	}
+
+	ClearAllVotes();
 }
+
+
 
 public Action cmdListener(int client, const char[] cmd, int argc)
 {
