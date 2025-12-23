@@ -181,7 +181,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "",
 	description = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & ChatGPT",
-	version = "1.0.3",
+	version = "1.0.4",
 	url = ""
 };
 
@@ -1100,8 +1100,7 @@ Action Timer_NearestBody(Handle timer) {
 			flAlivePlayerAngle[3],
 			flLastPlayerDistance,
 			fTempDistance,
-			flShortestDistanceToPlayer,
-			beamPosition[3];
+			flShortestDistanceToPlayer;
 
 	int		closestDeadPlayer,
 			closestDeadPlayerWithoutMedic,
@@ -1168,13 +1167,6 @@ Action Timer_NearestBody(Handle timer) {
 				GetDistanceString(flShortestDistanceToPlayer, sDistance, sizeof(sDistance));
 				GetHeightString(flAlivePlayerPosition, ga_fRagdollPosition[closestDeadPlayerWithoutMedic], sHeight, sizeof(sHeight));
 				PrintCenterText(alivePlayer, "Nearest dead[%d]: %N ( %s | %s | %s )", amountOfHurtPlayers, closestDeadPlayerWithoutMedic, sDistance, sDirection, sHeight);
-
-				VecCopy(ga_fRagdollPosition[closestDeadPlayerWithoutMedic], beamPosition);
-				beamPosition[2] += 0.3;
-				if (flShortestDistanceToPlayer >= 140.0) {
-					TE_SetupBeamRingPoint(beamPosition, 1.0, Revive_Indicator_Radius, g_iBeaconBeam, g_iBeaconHalo, 0, 15, 5.0, 3.0, 5.0, g_iColorReviveRing, 1, FBEAM_FADEIN | FBEAM_FADEOUT);
-					TE_SendToClient(alivePlayer);
-				}
 			}
 
 		} else {
