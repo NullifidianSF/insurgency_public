@@ -24,18 +24,8 @@ static const bool gc_bIsAdminsImmuneToKick			= true;		// def = true
 static const bool gc_bIsActionsAnnouncedToAll		= true;		// def = true
 
 stock const char COL_RESET[]	= "\x01";
-//stock const char COL_TEAM[]		= "\x03";
-//stock const char COL_GREEN[]	= "\x04";
 stock const char COL_RED[]		= "\x07FF0000";
 stock const char COL_ORANGE[]	= "\x07FFA500";
-//stock const char COL_LIME[]		= "\x0732CD32";
-//stock const char COL_CYAN[]		= "\x0700FFFF";
-//stock const char COL_BLUE[]		= "\x071E90FF";
-//stock const char COL_PURPLE[]	= "\x07BA55D3";
-//stock const char COL_PINK[]		= "\x07FF69B4";
-//stock const char COL_WHITE[]	= "\x07FFFFFF";
-//stock const char COL_SILVER[]	= "\x07C0C0C0";
-//stock const char COL_GREY[]		= "\x07BEBEBE";
 stock const char COL_GOLD[]		= "\x07FFD700";
 
 int g_iNumberHumanPlayersInGame					= 0;
@@ -354,23 +344,18 @@ void ResetPlayerGlobalsLate(int client, int pr, bool hasSquadProp, float now) {
 }
 
 void BuildLogFilePath() {
-	char date[16];
-	FormatTime(date, sizeof(date), "%Y-%m-%d", GetTime());
-	strcopy(g_sLogDate, sizeof(g_sLogDate), date);
+	FormatTime(g_sLogDate, sizeof(g_sLogDate), "%Y-%m-%d", GetTime());
 
 	BuildPath(Path_SM, g_sLogDir, sizeof(g_sLogDir), "logs/ins_afkmanager");
-	bool ok = DirExists(g_sLogDir) || CreateDirectory(g_sLogDir, 511);
-	g_bLogDedicatedDir = ok;
+	g_bLogDedicatedDir = DirExists(g_sLogDir) || CreateDirectory(g_sLogDir, 448);
 
-	if (ok)
-		BuildPath(Path_SM, g_sLogFile, sizeof(g_sLogFile), "logs/ins_afkmanager/%s.log", date);
-	else
-	{
+	if (g_bLogDedicatedDir)
+		BuildPath(Path_SM, g_sLogFile, sizeof(g_sLogFile), "logs/ins_afkmanager/%s.log", g_sLogDate);
+	else {
 		BuildPath(Path_SM, g_sLogDir, sizeof(g_sLogDir), "logs");
-		BuildPath(Path_SM, g_sLogFile, sizeof(g_sLogFile), "logs/ins_afkmanager_%s.log", date);
+		BuildPath(Path_SM, g_sLogFile, sizeof(g_sLogFile), "logs/ins_afkmanager_%s.log", g_sLogDate);
 	}
 }
-
 
 void PurgeOldLogs() {
 	if (gc_iNumberOfDaysToKeepLogs < 1)
@@ -414,8 +399,6 @@ void PurgeOldLogs() {
 	CloseHandle(dir);
 }
 
-
-
 void LogAFK(const char[] fmt, any ...) {
 	char date[16];
 	FormatTime(date, sizeof(date), "%Y-%m-%d", GetTime());
@@ -428,7 +411,6 @@ void LogAFK(const char[] fmt, any ...) {
 	VFormat(buf, sizeof(buf), fmt, 2);
 	LogToFileEx(g_sLogFile, "%s", buf);
 }
-
 
 public Action cmd_spec(int client, int args) {
 	if (args < 1) {
