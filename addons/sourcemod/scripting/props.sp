@@ -5,7 +5,7 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PL_VERSION		"2.24"
+#define PL_VERSION		"2.25"
 
 #define MAXENTITIES		2048
 
@@ -116,6 +116,7 @@ enum struct PropDef {
 	char model[PLATFORM_MAX_PATH];
 	int  cost;
 	bool blocksExplosive;
+	int  health;
 }
 
 enum PropId {
@@ -136,16 +137,16 @@ enum PropId {
 #define MID(%1) (view_as<int>(%1))
 
 static const PropDef g_PropDefs[] = {
-	{ "models/fortifications/barbed_wire_02b.mdl",			2, false },
-	{ "models/static_fortifications/sandbagwall01.mdl",		1, true },
-	{ "models/iraq/ir_twall_01.mdl",						3, true },
-	{ "models/iraq/ir_hesco_basket_01_row.mdl",				4, true },
-	{ "models/static_afghan/prop_panj_stairs.mdl",			1, false },
-	{ "models/static_afghan/prop_interior_mattress_a.mdl",	2, false },
-	{ "models/static_props/container_01_open2.mdl",			5, true },
-	{ "models/embassy/embassy_center_02.mdl",				6, true },
-	{ "models/sernix/ied_jammer/ied_jammer.mdl",			5, false },
-	{ "models/sernix/ammo_cache/ammo_cache_small.mdl",		8, false }
+	{ "models/fortifications/barbed_wire_02b.mdl",			3, false, 3500 },
+	{ "models/static_fortifications/sandbagwall01.mdl",		1, true, 4500 },
+	{ "models/iraq/ir_twall_01.mdl",						3, true, PROP_HEALTH },
+	{ "models/iraq/ir_hesco_basket_01_row.mdl",				4, true, 7000 },
+	{ "models/static_afghan/prop_panj_stairs.mdl",			1, false, 2000 },
+	{ "models/static_afghan/prop_interior_mattress_a.mdl",	3, false, 2000 },
+	{ "models/static_props/container_01_open2.mdl",			6, true, PROP_HEALTH },
+	{ "models/embassy/embassy_center_02.mdl",				8, true, 8000 },
+	{ "models/sernix/ied_jammer/ied_jammer.mdl",			5, false, 1000 },
+	{ "models/sernix/ammo_cache/ammo_cache_small.mdl",		8, false, 1000 }
 };
 
 #define PROP_COUNT (sizeof(g_PropDefs))
@@ -154,6 +155,8 @@ PropId ga_iModelIndex[MAXPLAYERS + 1] = {Prop_BarbWire, ...};
 char	ga_sLastInflictorModel[MAXPLAYERS + 1][PLATFORM_MAX_PATH];
 
 int		ga_iPropHolding[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
+int		ga_iHoldHp[MAXPLAYERS + 1];
+int		ga_iHoldMaxHp[MAXPLAYERS + 1];
 int		ga_iLastButtons[MAXPLAYERS + 1];
 int		ga_iLastInflictor[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
 int		ga_iEntIdBipodDeployedOn[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
@@ -552,6 +555,8 @@ void StopHolding(int client, bool now = false) {
 		return;
 
 	ga_iPropHolding[client] = INVALID_ENT_REFERENCE;
+	ga_iHoldHp[client] = 0;
+	ga_iHoldMaxHp[client] = 0;
 
 	if (now)
 		KillNowRef(ref);
@@ -899,8 +904,23 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 			ga_iPropHolding[client] = EntIndexToEntRef(prop);
 
 			if (ga_iPropOwner[client] > 0 && IsClientInGame(ga_iPropOwner[client])) {
+				char modelName[64];
+				GetModelName(g_PropDefs[mid].model, modelName, sizeof(modelName));
+
+				int maxHealth = g_PropDefs[mid].health;
+			if (maxHealth < 1)
+				maxHealth = PROP_HEALTH;
+
+				int hp = (oldhealth > 0) ? oldhealth : maxHealth;
+				if (hp > maxHealth)
+					hp = maxHealth;
+				else if (hp < 0)
+					hp = 0;
+				ga_iHoldHp[client] = hp;
+				ga_iHoldMaxHp[client] = maxHealth;
+
 				TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
-				PrintCenterText(client, "Built by: %N", ga_iPropOwner[client]);
+				PrintCenterText(client, "%s built by: %N\nHealth: %d/%d", modelName, ga_iPropOwner[client], hp, maxHealth);
 				OpenRotationMenu(client);
 			}
 			else
@@ -911,14 +931,26 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 		SetEntityMoveType(prop, MOVETYPE_NONE);
 		SetEntProp(prop, Prop_Data, "m_takedamage", DAMAGE_YES);
 
+		int maxHealth = g_PropDefs[mid].health;
+		if (maxHealth < 1)
+			maxHealth = PROP_HEALTH;
+
+		SetEntProp(prop, Prop_Data, "m_iMaxHealth", maxHealth);
+
 		if (oldhealth > 0) {
+			if (oldhealth > maxHealth)
+				oldhealth = maxHealth;
+
 			SetEntProp(prop, Prop_Data, "m_iHealth", oldhealth);
 			GlowLowHp(prop, oldhealth);
 		}
 		else
-			SetEntProp(prop, Prop_Data, "m_iHealth", PROP_HEALTH);
+			SetEntProp(prop, Prop_Data, "m_iHealth", maxHealth);
 
-		SetEntProp(prop, Prop_Data, "m_iMaxHealth", PROP_HEALTH);
+		if (!solid && ga_iPropHolding[client] != INVALID_ENT_REFERENCE && EntRefToEntIndex(ga_iPropHolding[client]) == prop) {
+			ga_iHoldHp[client] = GetEntProp(prop, Prop_Data, "m_iHealth");
+			ga_iHoldMaxHp[client] = maxHealth;
+		}
 	}
 	else
 		PrintCenterText(client, "Failed to create prop.");
@@ -1155,7 +1187,11 @@ bool ModelBlocksExplosion(const char[] sModelName) {
 }
 
 bool GlowLowHp(int entity, int health) {
-	float healthPercentage = float(health) / float(PROP_HEALTH);
+	int maxHealth = GetEntProp(entity, Prop_Data, "m_iMaxHealth");
+	if (maxHealth <= 0)
+		maxHealth = PROP_HEALTH;
+
+	float healthPercentage = float(health) / float(maxHealth);
 	if (healthPercentage <= PROP_GLOWHP_PERCENT) {
 		SetEntityRenderColor(entity, 255, 0, 0, PROP_ALPHA);
 		return true;
@@ -1812,7 +1848,11 @@ public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, in
 
 			char modelName[64];
 			GetModelName(g_PropDefs[selectedIndex].model, modelName, sizeof(modelName));
-			PrintCenterText(client, "Selected prop: %s (Cost: %d)", modelName, g_PropDefs[selectedIndex].cost);
+			int maxHealth = g_PropDefs[selectedIndex].health;
+			if (maxHealth < 1)
+				maxHealth = PROP_HEALTH;
+
+			PrintCenterText(client, "Selected prop: %s (Cost: %d)\nHealth: %d/%d", modelName, g_PropDefs[selectedIndex].cost, maxHealth, maxHealth);
 
 			int ent = EntRefToEntIndex(ga_iPropHolding[client]);
 			if (ent <= MaxClients || !IsValidEntity(ent)) {
@@ -1904,7 +1944,21 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 			{ vRot[0] = 0.0; vRot[1] = 0.0; vRot[2] = 0.0; }
 
 		SetEntPropVector(ent, Prop_Send, "m_angRotation", vRot);
-		PrintCenterText(client, "Rotation: Yaw: %.1f°, Pitch: %.1f°, Roll: %.1f°", vRot[1], vRot[0], vRot[2]);
+
+		int hp = ga_iHoldHp[client];
+		int maxHealth = ga_iHoldMaxHp[client];
+		if (maxHealth <= 0) {
+			hp = GetEntProp(ent, Prop_Data, "m_iHealth");
+			maxHealth = GetEntProp(ent, Prop_Data, "m_iMaxHealth");
+			if (maxHealth <= 0)
+				maxHealth = PROP_HEALTH;
+			if (hp < 0)
+				hp = 0;
+
+			ga_iHoldHp[client] = hp;
+			ga_iHoldMaxHp[client] = maxHealth;
+		}
+		PrintCenterText(client, "Rotation: Yaw: %.1f°, Pitch: %.1f°, Roll: %.1f°\nHealth: %d/%d", vRot[1], vRot[0], vRot[2], hp, maxHealth);
 
 		int mid = MID(ga_iModelIndex[client]);
 		ga_fPropRotations[client][mid][0] = vRot[0];
