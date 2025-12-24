@@ -25,20 +25,27 @@ enum {
 	ins_mountain_escape_v1_3,
 	karkand_redux_p2,
 	pipeline_coop,
-	ins_coastdawn_a3
+	ins_coastdawn_a3,
+	ins_prison_2020_new,
+	siege_coop
 };
 
 public Plugin myinfo = {
 	name = "map_entities",
 	author = "Nullifidian + ChatGPT",
 	description = "remove or modify entities for some maps",
-	version = "2.8"
+	version = "3.0"
 };
 
 public void OnPluginStart() {
 	RegAdminCmd("sm_totalent", cmd_totalent, ADMFLAG_RCON, "Print total entities");
 	RegAdminCmd("sm_entstats", cmd_entstats, ADMFLAG_RCON, "List entity counts by classname.");
 	RegAdminCmd("sm_entdelete", cmd_entdelete, ADMFLAG_RCON, "Delete ents by classname with optional name/model filters");
+}
+
+public void OnPluginEnd() {
+	if (g_bEventHooked)
+		HookRoundStartEvent(false);
 }
 
 public void OnMapStart() {
@@ -111,6 +118,12 @@ public void OnMapStart() {
 		g_iMapId = ins_coastdawn_a3;
 		RemoveEntities("env_sprite");
 	}
+	else if (strcmp(sMapName, "ins_prison_2020_new", false) == 0) {
+		g_iMapId = ins_prison_2020_new;
+	}
+	else if (strcmp(sMapName, "siege_coop", false) == 0) {
+		g_iMapId = siege_coop;
+	}
 	else if (g_bEventHooked) {
 		HookRoundStartEvent(false);
 		return;
@@ -122,7 +135,16 @@ public void OnMapStart() {
 }
 
 public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
-	switch (g_iMapId) {
+	RequestFrame(NF_ApplyRoundStartEdits, g_iMapId);
+	return Plugin_Continue;
+}
+
+static void NF_ApplyRoundStartEdits(any mapIdAny) {
+	int mapId = mapIdAny;
+	if (mapId != g_iMapId)
+		return;
+
+	switch (mapId) {
 		case embassy_coop, congress_coop, congress_open_coop: {
 			RemoveEntities("prop_sprinkler");
 		}
@@ -200,17 +222,25 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 			RemoveEntities("prop_dynamic", "road_semi_truck");
 			RemoveEntities("prop_dynamic", "road_model_truck");
 		}
+		case ins_prison_2020_new: {
+			RemoveEntities("func_door_rotating");
+		}
+		case siege_coop: {
+			RemoveEntities("func_door");
+		}
 	}
-	return Plugin_Continue;
 }
 
-void RemoveEntities(char[] sClass, char[] sName = "") {
+void RemoveEntities(const char[] sClass, const char[] sName = "") {
 	int	iCount = 0,
 		iEnt = -1;
 
-	if (strlen(sName) > 0) {
+	if (sName[0]) {
 		char sTempName[64];
 		while ((iEnt = FindEntityByClassname(iEnt, sClass)) != -1) {
+			if (!HasEntProp(iEnt, Prop_Data, "m_iName"))
+				continue;
+
 			GetEntPropString(iEnt, Prop_Data, "m_iName", sTempName, sizeof(sTempName));
 			if (strcmp(sTempName, sName, false) == 0) {
 				SafeKillIdx(iEnt);
@@ -225,18 +255,16 @@ void RemoveEntities(char[] sClass, char[] sName = "") {
 	}
 
 	if (iCount > 0) {
-		if (strlen(sName) > 0) {
+		if (sName[0]) {
 			PrintToServer("[map_entities] Removed: \"%s\" named \"%s\" x %d", sClass, sName, iCount);
 		} else {
 			PrintToServer("[map_entities] Removed: \"%s\" x %d", sClass, iCount);
 		}
 	} else {
-		if (strlen(sName) > 0) {
+		if (sName[0]) {
 			PrintToServer("[map_entities] Didn't find: \"%s\" named \"%s\"", sClass, sName);
-			LogError("Didn't find: \"%s\" named \"%s\"", sClass, sName);
 		} else {
 			PrintToServer("[map_entities] Didn't find: \"%s\"", sClass);
-			LogError("Didn't find: \"%s\"", sClass);
 		}
 	}
 }
@@ -410,13 +438,21 @@ static int RemoveEntitiesByCmd(const char[] sClass, const char[] sNameFilter = "
 		bool match = true;
 
 		if (sModelFilter[0]) {
-			GetEntPropString(ent, Prop_Data, "m_ModelName", tempModel, sizeof(tempModel));
+			if (!HasEntProp(ent, Prop_Data, "m_ModelName"))
+				match = false;
+			else {
+				GetEntPropString(ent, Prop_Data, "m_ModelName", tempModel, sizeof(tempModel));
 			if (!tempModel[0] || StrContains(tempModel, sModelFilter, false) == -1)
 				match = false;
+			}
 		}
 
 		if (match && sNameFilter[0]) {
-			GetEntPropString(ent, Prop_Data, "m_iName", tempName, sizeof(tempName));
+			if (!HasEntProp(ent, Prop_Data, "m_iName"))
+				match = false;
+			else
+				GetEntPropString(ent, Prop_Data, "m_iName", tempName, sizeof(tempName));
+
 			if (contains) {
 				if (StrContains(tempName, sNameFilter, false) == -1)
 					match = false;
