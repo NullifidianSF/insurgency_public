@@ -11,7 +11,7 @@ public Plugin myinfo = {
 	name		= "molotov",
 	author		= "Nullifidian",
 	description	= "Molotovs lying on the ground can explode from damage",
-	version		= "1.5",
+	version		= "1.6",
 	url			= ""
 };
 
@@ -76,7 +76,7 @@ public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float
 
 	SDKUnhook(victim, SDKHook_OnTakeDamage, Hook_OnTakeDamage);
 
-	const float fTime = 2.0;
+	float fTime = GetRandomFloat(2.5, 3.5);
 
 	DataPack pack;
 	CreateDataTimer(fTime, Timer_Boom, pack);
@@ -148,7 +148,7 @@ void GoBoom(int victim, int attacker) {
 
 	SafeKillIdx(victim);
 
-	SetEntPropEnt(molly, Prop_Data, "m_hOwnerEntity", (owner > 0) ? owner : -1);
+	SetEntPropEnt(molly, Prop_Data, "m_hOwnerEntity", (owner > 0) ? owner : 0);
 	SetEntProp(molly,   Prop_Data, "m_takedamage", 2);
 	SetEntProp(molly,   Prop_Data, "m_iHealth", 1);
 	SetEntProp(molly,   Prop_Data, "m_usSolidFlags", 0);
@@ -162,21 +162,7 @@ void GoBoom(int victim, int attacker) {
 
 	ActivateEntity(molly);
 
-	int hurt = CreateEntityByName("point_hurt");
-	if (!IsValidEntity(hurt))
-		return;
-
-	DispatchKeyValue(molly, "targetname", "hurtme");
-	DispatchKeyValue(hurt, "DamageTarget", "hurtme");
-	DispatchKeyValue(hurt, "Damage", "100");
-	DispatchKeyValue(hurt, "DamageType", "64"); // DMG_BLAST
-
-	DispatchSpawn(hurt);
-
-	AcceptEntityInput(hurt, "Hurt", (owner > 0) ? owner : -1);
-
-	DispatchKeyValue(molly, "targetname", "donthurtme");
-	SafeKillIdx(hurt);
+	SDKHooks_TakeDamage(molly, molly, (owner > 0) ? owner : 0, 100.0, DMG_BLAST);
 }
 
 stock void SafeKillIdx(int ent) {
