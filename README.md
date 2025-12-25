@@ -10,3 +10,4 @@ Some plugins need smlib from https://github.com/Rushaway/smlib/tree/transitional
 - zDestinate: https://github.com/zDestinate/INS_sourcemod
 - Linothorax: https://github.com/Linothorax
 - Lua: https://steamcommunity.com/id/Lua-
+- pericles: https://forums.alliedmods.net/showthread.php?t=312223
