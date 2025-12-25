@@ -181,7 +181,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "",
 	description = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & ChatGPT",
-	version = "1.0.4",
+	version = "1.0.5",
 	url = ""
 };
 
@@ -191,6 +191,7 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 	MarkNativeAsOptional("Drag_ForceDrop");
 
 	CreateNative("Medic_GetClientRagdollRef", Native_Medic_GetClientRagdollRef);
+	CreateNative("Medic_IsClientMedic", Native_Medic_IsClientMedic);
 
 	return APLRes_Success;
 }
@@ -204,7 +205,15 @@ public any Native_Medic_GetClientRagdollRef(Handle plugin, int numParams)
 	return ga_iClientRagdolls[client];
 }
 
-// Start plugin
+public any Native_Medic_IsClientMedic(Handle plugin, int numParams)
+{
+	int client = GetNativeCell(1);
+	if (client < 1 || client > MaxClients)
+		return false;
+
+	return (StrContains(ga_sClientLastClassString[client], "medic", false) != -1);
+}
+
 public void OnPluginStart() {
 	RegPluginLibrary("bm_medic");
 
