@@ -181,7 +181,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "",
 	description = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & ChatGPT",
-	version = "1.0.5",
+	version = "1.0.6",
 	url = ""
 };
 
@@ -470,44 +470,42 @@ public Action Event_PlayerPickSquad_Post(Event event, const char[] name, bool do
 
 public Action Event_PlayerHurt_Pre(Event event, const char[] name, bool dontBroadcast) {
 	int victim = GetClientOfUserId(event.GetInt("userid"));
-
 	if (!IsClientInGame(victim) || IsFakeClient(victim))
 		return Plugin_Continue;
 
-	int	attacker = GetClientOfUserId(event.GetInt("attacker")),
-		victimHealth = event.GetInt("health"),
-		dmg_taken = event.GetInt("dmg_health");
-
-	if (dmg_taken < victimHealth)
+	if (event.GetInt("health") > 0)
 		return Plugin_Continue;
 
+	int attacker = GetClientOfUserId(event.GetInt("attacker"));
+	int dmg_taken = event.GetInt("dmg_health");
+
 	ga_iDeathStance[victim] = GetEntProp(victim, Prop_Send, "m_iCurrentStance");
+	ga_iClientDamageDone[victim] = dmg_taken;
+
+	// Default to non-fatal unless chance marks it fatal.
+	ga_bHurtFatal[victim] = false;
 
 	if (g_fFatalChance > 0.0) {
 		int hitgroup = event.GetInt("hitgroup");
-		ga_iClientDamageDone[victim] = dmg_taken;	// Update last damage (related to 'hurt_fatal')
+
 		char weapon[32];
 		event.GetString("weapon", weapon, sizeof(weapon));
-		float fRandom = GetRandomFloat(0.0, 1.0);	// Get fatal chance
-		//PrintToChatAll("victim %d | victimHealth %d | dmg_taken %d | hitgroup %d | attacker %d | weapon %s",victim,victimHealth,dmg_taken,hitgroup,attacker, weapon);
+
+		float fRandom = GetRandomFloat(0.0, 1.0);
+
 		switch (hitgroup) {
 			case 0: {
-				if (!attacker) {	//fatal chance from anyhting that doesn't broadcast attacker = entityflame(burn plugin) & death from fall
+				if (!attacker) {
 					if (fRandom <= 0.25)
 						ga_bHurtFatal[victim] = true;
-				}
-				//fire
-				else if ((strcmp(weapon, "grenade_anm14", false) == 0)
+				} else if ((strcmp(weapon, "grenade_anm14", false) == 0)
 				|| (strcmp(weapon, "grenade_molotov", false) == 0)
 				|| (strcmp(weapon, "grenade_m203_incid", false) == 0)
 				|| (strcmp(weapon, "grenade_gp25_incid", false) == 0)
 				|| (strcmp(weapon, "grenade_m79_incen", false) == 0)) {
-					if (dmg_taken >= g_iFatalBurnDmg && (fRandom <= g_fFatalChance)) {
-						ga_bHurtFatal[victim] = true;	// Hurt fatally
-					}
-				}
-				//explosive
-				else if ((strcmp(weapon, "grenade_m67", false) == 0)
+					if (dmg_taken >= g_iFatalBurnDmg && fRandom <= g_fFatalChance)
+						ga_bHurtFatal[victim] = true;
+				} else if ((strcmp(weapon, "grenade_m67", false) == 0)
 				|| (strcmp(weapon, "grenade_f1", false) == 0)
 				|| (strcmp(weapon, "grenade_ied", false) == 0)
 				|| (strcmp(weapon, "grenade_c4", false) == 0)
@@ -522,62 +520,58 @@ public Action Event_PlayerHurt_Pre(Event event, const char[] name, bool dontBroa
 				|| (strcmp(weapon, "grenade_ied_fire", false) == 0)
 				|| (strcmp(weapon, "grenade_ied_fire_bomber", false) == 0)
 				|| (strcmp(weapon, "grenade_m79", false) == 0)) {
-					if (dmg_taken >= g_iFatalExplosiveDmg && (fRandom <= g_fFatalChance)) {
-						ga_bHurtFatal[victim] = true;	// Hurt fatally
-					}
+					if (dmg_taken >= g_iFatalExplosiveDmg && fRandom <= g_fFatalChance)
+						ga_bHurtFatal[victim] = true;
 				}
 			}
-			case 1: {	// Headshot
+			case 1: {
 				if (dmg_taken >= g_iFatalHeadDmg
 				&& fRandom <= g_fFatalHeadChance
 				&& attacker > 0
 				&& IsClientInGame(attacker)
-				&& GetClientTeam(attacker) != TEAM_SECURITY) {
-					ga_bHurtFatal[victim] = true;	// Hurt fatally
-				}
+				&& GetClientTeam(attacker) != TEAM_SECURITY)
+					ga_bHurtFatal[victim] = true;
 			}
-			case 2, 3: {	//Chest
-				if (dmg_taken >= g_iFatalChestStomach && (fRandom <= g_fFatalChance)) {
-					ga_bHurtFatal[victim] = true;	// Hurt fatally
-				}
+			case 2, 3: {
+				if (dmg_taken >= g_iFatalChestStomach && fRandom <= g_fFatalChance)
+					ga_bHurtFatal[victim] = true;
 			}
-			case 4, 5, 6, 7: {	// Limbs
-				if (dmg_taken >= g_iFatalLimbDmg && (fRandom <= g_fFatalChance)) {
-					ga_bHurtFatal[victim] = true;	// Hurt fatally
-				}
+			case 4, 5, 6, 7: {
+				if (dmg_taken >= g_iFatalLimbDmg && fRandom <= g_fFatalChance)
+					ga_bHurtFatal[victim] = true;
 			}
-		}
-
-		if (!ga_bHurtFatal[victim])	{	//Track wound type (minor, moderate, critical)
-			if (dmg_taken <= g_iMinorWoundDmg) {
-				ga_iPlayerWoundTime[victim] = g_iMinorReviveTime;
-				ga_iPlayerWoundType[victim] = 0;
-			}
-			else if (dmg_taken > g_iMinorWoundDmg && dmg_taken <= g_iModerateWoundDmg) {
-				ga_iPlayerWoundTime[victim] = g_iModerateReviveTime;
-				ga_iPlayerWoundType[victim] = 1;
-			}
-			else if (dmg_taken > g_iModerateWoundDmg) {
-				ga_iPlayerWoundTime[victim] = g_iCriticalReviveTime;
-				ga_iPlayerWoundType[victim] = 2;
-			}
-		}
-		else {
-			ga_iPlayerWoundTime[victim] = -1;
-			ga_iPlayerWoundType[victim] = -1;
 		}
 	}
+
+	if (ga_bHurtFatal[victim]) {
+		ga_iPlayerWoundTime[victim] = -1;
+		ga_iPlayerWoundType[victim] = -1;
+	} else {
+		if (dmg_taken <= g_iMinorWoundDmg) {
+			ga_iPlayerWoundTime[victim] = g_iMinorReviveTime;
+			ga_iPlayerWoundType[victim] = 0;
+		} else if (dmg_taken <= g_iModerateWoundDmg) {
+			ga_iPlayerWoundTime[victim] = g_iModerateReviveTime;
+			ga_iPlayerWoundType[victim] = 1;
+		} else {
+			ga_iPlayerWoundTime[victim] = g_iCriticalReviveTime;
+			ga_iPlayerWoundType[victim] = 2;
+		}
+	}
+
 	return Plugin_Continue;
 }
 
+
 public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast) {
 	int victim = GetClientOfUserId(event.GetInt("userid"));
-	if (victim < 1 || !IsClientInGame(victim)) return Plugin_Continue;
+	if (victim < 1 || !IsClientInGame(victim))
+		return Plugin_Continue;
 
 	int team = GetClientTeam(victim);
 
-	int dmg_taken = event.GetInt("damagebits");
-	if (dmg_taken <= 0) {
+	// Fallback: some deaths don't go through our player_hurt logic, so ensure a non-zero revive time.
+	if (!ga_bHurtFatal[victim] && ga_iPlayerWoundTime[victim] <= 0) {
 		ga_iPlayerWoundTime[victim] = g_iMinorReviveTime;
 		ga_iPlayerWoundType[victim] = 0;
 	}
@@ -592,10 +586,11 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 			iWeapon = GetEntDataEnt2(victim, m_hMyWeapons + offset);
 			if (iWeapon < 0)
 				continue;
+
 			char sWeapon[32];
 			GetEdictClassname(iWeapon, sWeapon, sizeof(sWeapon));
-			if (StrContains(sWeapon, "weapon_healthkit", false) != -1
-			&& IsValidEntity(iWeapon)) {
+
+			if (StrContains(sWeapon, "weapon_healthkit", false) != -1 && IsValidEntity(iWeapon)) {
 				RemovePlayerItem(victim, iWeapon);
 				SafeKillIdx(iWeapon);
 			}
@@ -606,6 +601,7 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 			GetClientAbsAngles(victim, ga_fDeadAngle[victim]);	// Get current angles
 			if (ga_iDeathStance[victim] == 2)
 				ga_fDeadAngle[victim][0] += -90.0;
+
 			RequestFrame(Frame_ConvertDeleteRagdoll, GetClientUserId(victim));
 		}
 	}
@@ -624,8 +620,10 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 		PrintHintText(victim, "You're %s for %i damage, call a medic for revive!", woundType, ga_iClientDamageDone[victim]);
 		PrintToChat(victim, "\x01You're \x070088cc%s\x01 for \x070088cc%i\x01 damage, call a medic for revive!", woundType, ga_iClientDamageDone[victim]);
 	}
+
 	return Plugin_Continue;
 }
+
 
 // Convert dead body to new ragdoll
 void Frame_ConvertDeleteRagdoll(int userid) {
@@ -839,14 +837,18 @@ Action Timer_ReviveMonitor(Handle timer) {
 	if (!g_bRoundActive)
 		return Plugin_Continue;
 
+	// Prevent multiple players decrementing the same revive timer in the same second
+	static int s_iLastMedicDec[MAXPLAYERS + 1];
+	static int s_iLastNonMedicDec[MAXPLAYERS + 1];
+
 	float	flalivePlayerPosition[3],
-			fDistance,
-			fReviveDistance = 80.0;
+			fDistance;
+
+	const float fReviveDistance = 95.0;
 
 	int		deadPlayer,
 			deadPlayerRagdoll,
-			ActiveWeapon,
-			CurrentTime;
+			ActiveWeapon;
 
 	char	sWeapon[32],
 			woundType[20];
@@ -856,16 +858,19 @@ Action Timer_ReviveMonitor(Handle timer) {
 			continue;
 
 		deadPlayer = ga_iNearestBody[alivePlayer];
-		if (deadPlayer <= 0 || !IsClientInGame(deadPlayer) || IsPlayerAlive(deadPlayer) || ga_bHurtFatal[deadPlayer] || deadPlayer == alivePlayer || GetClientTeam(alivePlayer) != GetClientTeam(deadPlayer))
+		if (deadPlayer <= 0
+			|| !IsClientInGame(deadPlayer)
+			|| IsPlayerAlive(deadPlayer)
+			|| ga_bHurtFatal[deadPlayer]
+			|| deadPlayer == alivePlayer
+			|| GetClientTeam(alivePlayer) != GetClientTeam(deadPlayer))
 			continue;
 
 		ActiveWeapon = GetEntPropEnt(alivePlayer, Prop_Data, "m_hActiveWeapon");
 		if (ActiveWeapon < 0)
 			continue;
 
-		deadPlayerRagdoll = INVALID_ENT_REFERENCE;
 		deadPlayerRagdoll = EntRefToEntIndex(ga_iClientRagdolls[deadPlayer]);
-
 		if (deadPlayerRagdoll == INVALID_ENT_REFERENCE || !IsValidEntity(deadPlayerRagdoll))
 			continue;
 
@@ -873,7 +878,6 @@ Action Timer_ReviveMonitor(Handle timer) {
 		GetEntPropVector(deadPlayerRagdoll, Prop_Data, "m_vecAbsOrigin", ga_fRagdollPosition[deadPlayer]);
 
 		fDistance = GetVectorDistance(ga_fRagdollPosition[deadPlayer], flalivePlayerPosition);
-
 		if (fDistance > fReviveDistance || !ClientCanSeeVector(alivePlayer, ga_fRagdollPosition[deadPlayer], fReviveDistance))
 			continue;
 
@@ -884,32 +888,42 @@ Action Timer_ReviveMonitor(Handle timer) {
 
 		GetEdictClassname(ActiveWeapon, sWeapon, sizeof(sWeapon));
 
+		int now = GetTime();
+
 		if (StrContains(ga_sClientLastClassString[alivePlayer], "medic", false) != -1) {
 			/* I'm a medic */
 
 			if (!hasCorrectWeapon(sWeapon))
 				continue;
 
+			ga_bBeingRevivedByMedic[deadPlayer] = true;
+			ga_iTimeReviveCheck[deadPlayer] = now;
+
 			if (ga_iReviveRemainingTime[deadPlayer] > 0) {
 				PrintHintText(alivePlayer, "Reviving %N in: %i seconds (%s)", deadPlayer, ga_iReviveRemainingTime[deadPlayer], woundType);
 				PrintHintText(deadPlayer, "%N is reviving you in: %i seconds (%s)", alivePlayer, ga_iReviveRemainingTime[deadPlayer], woundType);
-				ga_iReviveRemainingTime[deadPlayer]--;
-				ga_bBeingRevivedByMedic[deadPlayer] = true;
-				CurrentTime = GetTime();
-				ga_iTimeReviveCheck[deadPlayer] = CurrentTime;
-			} else {
-				PrintHintText(alivePlayer, "You revived %N from a %s", deadPlayer, woundType);
-				PrintHintText(deadPlayer, "%N revived you from a %s", alivePlayer, woundType);
 
-				PlayVictimReviveSound(deadPlayer);
-				EmitSoundToAll("weapons/defibrillator/defibrillator_revive.wav", alivePlayer, SNDCHAN_AUTO, _, _, 0.3);
-
-				ga_iStatRevives[alivePlayer]++;
-
-				Check_NearbyMedicsRevive(alivePlayer, deadPlayer);
-				ga_bRevivedByMedic[deadPlayer] = true;
-				RespawnPlayerRevive(deadPlayer);
+				if (s_iLastMedicDec[deadPlayer] != now) {
+					s_iLastMedicDec[deadPlayer] = now;
+					ga_iReviveRemainingTime[deadPlayer]--;
+				}
+				continue;
 			}
+
+			PrintHintText(alivePlayer, "You revived %N from a %s", deadPlayer, woundType);
+			PrintHintText(deadPlayer, "%N revived you from a %s", alivePlayer, woundType);
+
+			PlayVictimReviveSound(deadPlayer);
+			EmitSoundToAll("weapons/defibrillator/defibrillator_revive.wav", alivePlayer, SNDCHAN_AUTO, _, _, 0.3);
+
+			ga_iStatRevives[alivePlayer]++;
+
+			Check_NearbyMedicsRevive(alivePlayer, deadPlayer);
+			ga_bRevivedByMedic[deadPlayer] = true;
+			ga_bBeingRevivedByMedic[deadPlayer] = false;
+			s_iLastMedicDec[deadPlayer] = 0;
+
+			RespawnPlayerRevive(deadPlayer);
 		} else {
 			/* I'm not a medic */
 
@@ -919,47 +933,61 @@ Action Timer_ReviveMonitor(Handle timer) {
 			if (ga_iReviveNonMedicRemainingTime[deadPlayer] > 0) {
 				PrintHintText(alivePlayer, "Reviving %N in: %i seconds (%s)", deadPlayer, ga_iReviveNonMedicRemainingTime[deadPlayer], woundType);
 				PrintHintText(deadPlayer, "%N is reviving you in: %i seconds (%s)", alivePlayer, ga_iReviveNonMedicRemainingTime[deadPlayer], woundType);
-				ga_iReviveNonMedicRemainingTime[deadPlayer]--;
-			} else {
-				PrintHintText(alivePlayer, "You revived %N from a %s", deadPlayer, woundType);
-				PrintHintText(deadPlayer, "%N revived you from a %s", alivePlayer, woundType);
 
-				PlayVictimReviveSound(deadPlayer);
-				ga_iStatRevives[alivePlayer]++;
-
-				Check_NearbyMedicsRevive(alivePlayer, deadPlayer);
-				ga_bRevivedByMedic[deadPlayer] = false;
-				RespawnPlayerRevive(deadPlayer);
-
-				int iAmmoType = GetEntProp(ActiveWeapon, Prop_Data, "m_iPrimaryAmmoType");
-				int iAmmo = GetEntProp(alivePlayer, Prop_Data, "m_iAmmo", _, iAmmoType);
-
-				if (iAmmo > 0)
-					SetEntProp(alivePlayer, Prop_Send, "m_iAmmo", iAmmo-1, _, iAmmoType);
-
-				if (iAmmo == 1) {
-					//RemovePlayerItem(alivePlayer, ActiveWeapon);
-					//ChangePlayerWeaponSlot(alivePlayer, 2);
-					if (GetPlayerWeaponSlot(alivePlayer, 0) > 0)
-						ClientCommand(alivePlayer, "slot1");
-					else if (GetPlayerWeaponSlot(alivePlayer, 1) > 0)
-						ClientCommand(alivePlayer, "slot2");
+				if (s_iLastNonMedicDec[deadPlayer] != now) {
+					s_iLastNonMedicDec[deadPlayer] = now;
+					ga_iReviveNonMedicRemainingTime[deadPlayer]--;
 				}
+				continue;
+			}
+
+			PrintHintText(alivePlayer, "You revived %N from a %s", deadPlayer, woundType);
+			PrintHintText(deadPlayer, "%N revived you from a %s", alivePlayer, woundType);
+
+			PlayVictimReviveSound(deadPlayer);
+			ga_iStatRevives[alivePlayer]++;
+
+			Check_NearbyMedicsRevive(alivePlayer, deadPlayer);
+			ga_bRevivedByMedic[deadPlayer] = false;
+			s_iLastNonMedicDec[deadPlayer] = 0;
+
+			RespawnPlayerRevive(deadPlayer);
+
+			int iAmmoType = GetEntProp(ActiveWeapon, Prop_Data, "m_iPrimaryAmmoType");
+			int iAmmo = GetEntProp(alivePlayer, Prop_Data, "m_iAmmo", _, iAmmoType);
+
+			if (iAmmo > 0)
+				SetEntProp(alivePlayer, Prop_Send, "m_iAmmo", iAmmo - 1, _, iAmmoType);
+
+			if (iAmmo == 1) {
+				if (GetPlayerWeaponSlot(alivePlayer, 0) > 0)
+					ClientCommand(alivePlayer, "slot1");
+				else if (GetPlayerWeaponSlot(alivePlayer, 1) > 0)
+					ClientCommand(alivePlayer, "slot2");
 			}
 		}
 	}
+
 	return Plugin_Continue;
 }
+
 
 // Handles medic functions (Inspecting health, healing)
 Action Timer_MedicMonitor(Handle timer) {
 	if (!g_bRoundActive)
 		return Plugin_Continue;
 
+	// Throttle healer HintText to avoid “ghosting” from rapid refresh.
+	// (Insurgency 2014 doesn't support SyncHud.)
+	static char sLastHint[MAXPLAYERS + 1][256];
+	static float fNextHintAt[MAXPLAYERS + 1];
+
+	float now = GetGameTime();
+
 	bool	bCanHealPaddle = false,
 			bCanHealMedpack = false;
 
-	float	fReviveDistance = 80.0,
+	float	fReviveDistance = 95.0,
 			vecOriginatingPlayer[3],
 			vecTargetPlayer[3],
 			tDistance;
@@ -971,12 +999,21 @@ Action Timer_MedicMonitor(Handle timer) {
 	char	sWeapon[32];
 
 	for (int originatingPlayer = 1; originatingPlayer <= MaxClients; originatingPlayer++) {
-		if (!IsClientInGame(originatingPlayer) || !IsPlayerAlive(originatingPlayer) || GetClientTeam(originatingPlayer) != TEAM_SECURITY)
+		char sNewHint[256];
+		sNewHint[0] = '\0';
+
+		if (!IsClientInGame(originatingPlayer) || !IsPlayerAlive(originatingPlayer) || GetClientTeam(originatingPlayer) != TEAM_SECURITY) {
+			sLastHint[originatingPlayer][0] = '\0';
+			fNextHintAt[originatingPlayer] = 0.0;
 			continue;
+		}
 
 		ActiveWeapon = GetEntPropEnt(originatingPlayer, Prop_Data, "m_hActiveWeapon");
-		if (ActiveWeapon < 0)
+		if (ActiveWeapon < 0) {
+			sLastHint[originatingPlayer][0] = '\0';
+			fNextHintAt[originatingPlayer] = 0.0;
 			continue;
+		}
 
 		bCanHealPaddle = false;
 		bCanHealMedpack = false;
@@ -992,34 +1029,33 @@ Action Timer_MedicMonitor(Handle timer) {
 			bCanHealMedpack = true;
 		}
 
-		if (!bCanHealPaddle && !bCanHealMedpack)
+		if (!bCanHealPaddle && !bCanHealMedpack) {
+			sLastHint[originatingPlayer][0] = '\0';
+			fNextHintAt[originatingPlayer] = 0.0;
 			continue;
+		}
 
 		if (StrContains(ga_sClientLastClassString[originatingPlayer], "medic", false) != -1) {
 			/* I'm a medic */
 
 			targetPlayer = TraceClientViewEntity(originatingPlayer);
 			if (targetPlayer > 0 && targetPlayer <= MaxClients && IsClientInGame(targetPlayer) && IsPlayerAlive(targetPlayer) && GetClientTeam(targetPlayer) == TEAM_SECURITY) {
-
 				GetClientAbsOrigin(originatingPlayer, vecOriginatingPlayer);
 				GetClientAbsOrigin(targetPlayer, vecTargetPlayer);
-				tDistance = GetVectorDistance(vecOriginatingPlayer,vecTargetPlayer);
+				tDistance = GetVectorDistance(vecOriginatingPlayer, vecTargetPlayer);
 
 				iHealth = GetClientHealth(targetPlayer);
-				if (tDistance < 750.0)
-					PrintHintText(originatingPlayer, "%N\nHP: %i", targetPlayer, iHealth);
 
-				if (tDistance > fReviveDistance
-					|| !ClientCanSeeVector(originatingPlayer, vecTargetPlayer, fReviveDistance))
-					continue;
+				bool bInHealRange = (tDistance <= fReviveDistance && ClientCanSeeVector(originatingPlayer, vecTargetPlayer, fReviveDistance));
 
-				if (iHealth < 100) {
-					iHealth += bCanHealPaddle && !bCanHealMedpack ? g_iHealAmountPaddles : g_iHealAmountMedpack;
-					ga_iTotalHP[originatingPlayer] += bCanHealPaddle && !bCanHealMedpack ? g_iHealAmountPaddles : g_iHealAmountMedpack;
+				if (bInHealRange && iHealth < 100) {
+					int iAmount = bCanHealPaddle && !bCanHealMedpack ? g_iHealAmountPaddles : g_iHealAmountMedpack;
+
+					iHealth += iAmount;
+					ga_iTotalHP[originatingPlayer] += iAmount;
 
 					if (iHealth >= 100) {
 						ga_iTotalHP[originatingPlayer] -= (iHealth - 100);
-
 						ga_iStatHeals[originatingPlayer]++;
 
 						iHealth = 100;
@@ -1028,76 +1064,95 @@ Action Timer_MedicMonitor(Handle timer) {
 						PrintToChat(originatingPlayer, "\x01You fully healed \x070088cc%N", targetPlayer);
 					} else
 						PrintHintText(targetPlayer, "DON'T MOVE! %N is healing you.(HP: %i)", originatingPlayer, iHealth);
+
 					SetEntityHealth(targetPlayer, iHealth);
-					PrintHintText(originatingPlayer, "%N\nHP: %i\n\nHealing with %s for: %i", targetPlayer, iHealth, bCanHealPaddle && !bCanHealMedpack ? "paddle" : "medpack", bCanHealPaddle && !bCanHealMedpack ? g_iHealAmountPaddles : g_iHealAmountMedpack);
-				}
+
+					Format(sNewHint, sizeof(sNewHint),
+						"%N  HP: %i\nHealing: %s +%i",
+						targetPlayer, iHealth,
+						(bCanHealPaddle && !bCanHealMedpack) ? "paddle" : "medpack",
+						iAmount
+					);
+				} else if (tDistance < 750.0)
+					Format(sNewHint, sizeof(sNewHint), "%N\nHP: %i", targetPlayer, iHealth);
 			} else {
 				iHealth = GetClientHealth(originatingPlayer);
 				if (iHealth < g_iMedicHealSelfMax) {
-					iHealth += bCanHealPaddle && !bCanHealMedpack ? g_iHealAmountPaddles : g_iHealAmountMedpack;
+					int iAmount = bCanHealPaddle && !bCanHealMedpack ? g_iHealAmountPaddles : g_iHealAmountMedpack;
 
-					if (iHealth >= g_iMedicHealSelfMax) {
+					iHealth += iAmount;
+					if (iHealth > g_iMedicHealSelfMax)
 						iHealth = g_iMedicHealSelfMax;
-						PrintHintText(originatingPlayer, "You healed yourself (HP: %i) | MAX: %i", iHealth, g_iMedicHealSelfMax);
-					} else
-						PrintHintText(originatingPlayer, "Healing Self (HP: %i) | MAX: %i", iHealth, g_iMedicHealSelfMax);
+
 					SetEntityHealth(originatingPlayer, iHealth);
+					Format(sNewHint, sizeof(sNewHint), "Healing Self (HP: %i) | MAX: %i", iHealth, g_iMedicHealSelfMax);
 				}
 			}
 		} else {
 			/* I'm not a medic */
 
-			if (!bCanHealMedpack)
+			if (!bCanHealMedpack) {
+				sLastHint[originatingPlayer][0] = '\0';
+				fNextHintAt[originatingPlayer] = 0.0;
 				continue;
+			}
 
 			targetPlayer = TraceClientViewEntity(originatingPlayer);
 			if (targetPlayer > 0 && targetPlayer <= MaxClients && IsClientInGame(targetPlayer) && IsPlayerAlive(targetPlayer) && GetClientTeam(targetPlayer) == TEAM_SECURITY) {
 				GetClientAbsOrigin(originatingPlayer, vecOriginatingPlayer);
 				GetClientAbsOrigin(targetPlayer, vecTargetPlayer);
-				tDistance = GetVectorDistance(vecOriginatingPlayer,vecTargetPlayer);
+				tDistance = GetVectorDistance(vecOriginatingPlayer, vecTargetPlayer);
 
-				if (tDistance > fReviveDistance || !ClientCanSeeVector(originatingPlayer, vecTargetPlayer, fReviveDistance))
-					continue;
+				if (tDistance <= fReviveDistance && ClientCanSeeVector(originatingPlayer, vecTargetPlayer, fReviveDistance)) {
+					iHealth = GetClientHealth(targetPlayer);
 
-				iHealth = GetClientHealth(targetPlayer);
-				if (tDistance < 750.0)
-					PrintHintText(originatingPlayer, "%N\nHP: %i", targetPlayer, iHealth);
+					if (iHealth < g_iNonMedicMaxHealOther) {
+						int iAmount = g_iNonMedicHealAmt;
 
-				if (iHealth < g_iNonMedicMaxHealOther) {
-					iHealth += g_iNonMedicHealAmt;
-					ga_iTotalHP[originatingPlayer] += g_iNonMedicHealAmt;
+						iHealth += iAmount;
+						ga_iTotalHP[originatingPlayer] += iAmount;
 
-					if (iHealth >= g_iNonMedicMaxHealOther) {
-						ga_iTotalHP[originatingPlayer] -= (iHealth - g_iNonMedicMaxHealOther);
-						ga_iStatHeals[originatingPlayer]++;
-						iHealth = g_iNonMedicMaxHealOther;
-						PrintHintText(targetPlayer, "Non-Medic %N can only heal you to %i HP!", originatingPlayer, iHealth);
-						PrintHintText(originatingPlayer, "You max healed %N", targetPlayer);
-						PrintToChat(originatingPlayer, "\x01You max healed \x070088cc%N", targetPlayer);
+						if (iHealth >= g_iNonMedicMaxHealOther) {
+							ga_iTotalHP[originatingPlayer] -= (iHealth - g_iNonMedicMaxHealOther);
+							ga_iStatHeals[originatingPlayer]++;
+
+							iHealth = g_iNonMedicMaxHealOther;
+							PrintHintText(targetPlayer, "Non-Medic %N can only heal you to %i HP!", originatingPlayer, iHealth);
+							PrintHintText(originatingPlayer, "You max healed %N", targetPlayer);
+							PrintToChat(originatingPlayer, "\x01You max healed \x070088cc%N", targetPlayer);
+						} else
+							PrintHintText(targetPlayer, "DON'T MOVE! %N is healing you.(HP: %i)", originatingPlayer, iHealth);
+
+						SetEntityHealth(targetPlayer, iHealth);
+						Format(sNewHint, sizeof(sNewHint), "%N\nHP: %i\nHealing.", targetPlayer, iHealth);
 					} else
-						PrintHintText(targetPlayer, "DON'T MOVE! %N is healing you.(HP: %i)", originatingPlayer, iHealth);
-					SetEntityHealth(targetPlayer, iHealth);
-					PrintHintText(originatingPlayer, "%N\nHP: %i\n\nHealing.", targetPlayer, iHealth);
-				} else {
-					if (iHealth < g_iNonMedicMaxHealOther)
-						PrintHintText(originatingPlayer, "%N\nHP: %i", targetPlayer, iHealth);
-					else if (iHealth >= g_iNonMedicMaxHealOther)
-						PrintHintText(originatingPlayer, "%N\nHP: %i (MAX YOU CAN HEAL)", targetPlayer, iHealth);
+						Format(sNewHint, sizeof(sNewHint), "%N\nHP: %i (MAX YOU CAN HEAL)", targetPlayer, iHealth);
 				}
 			} else {
 				iHealth = GetClientHealth(originatingPlayer);
 				if (iHealth < g_iNonMedicHealSelfMax) {
 					iHealth += g_iNonMedicHealAmt;
-					if (iHealth >= g_iNonMedicHealSelfMax) {
+					if (iHealth > g_iNonMedicHealSelfMax)
 						iHealth = g_iNonMedicHealSelfMax;
-						PrintHintText(originatingPlayer, "You healed yourself (HP: %i) | MAX: %i", iHealth, g_iNonMedicHealSelfMax);
-					} else
-						PrintHintText(originatingPlayer, "Healing Self (HP: %i) | MAX: %i", iHealth, g_iNonMedicHealSelfMax);
+
 					SetEntityHealth(originatingPlayer, iHealth);
+					Format(sNewHint, sizeof(sNewHint), "Healing Self (HP: %i) | MAX: %i", iHealth, g_iNonMedicHealSelfMax);
 				}
 			}
 		}
+
+		if (sNewHint[0]) {
+			if (now >= fNextHintAt[originatingPlayer] || !StrEqual(sNewHint, sLastHint[originatingPlayer])) {
+				PrintHintText(originatingPlayer, "%s", sNewHint);
+				strcopy(sLastHint[originatingPlayer], sizeof(sLastHint[]), sNewHint);
+				fNextHintAt[originatingPlayer] = now + 0.75;
+			}
+		} else {
+			sLastHint[originatingPlayer][0] = '\0';
+			fNextHintAt[originatingPlayer] = 0.0;
+		}
 	}
+
 	return Plugin_Continue;
 }
 
@@ -1959,7 +2014,7 @@ void SetupConVars() {
 	g_iNonMedicReviveTime = g_cvNonMedicReviveTime.IntValue;
 	g_cvNonMedicReviveTime.AddChangeHook(OnConVarChanged);
 
-	g_cvMedpackHealthAmount = CreateConVar("sm_medpack_health_amount", "500", "Amount of health a deployed healthpack has");
+	g_cvMedpackHealthAmount = CreateConVar("sm_medpack_health_amount", "300", "Amount of health a deployed healthpack has");
 	g_iMedpackHealthAmount = g_cvMedpackHealthAmount.IntValue;
 	g_cvMedpackHealthAmount.AddChangeHook(OnConVarChanged);
 }
