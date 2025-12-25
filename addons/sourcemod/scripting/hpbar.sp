@@ -9,17 +9,23 @@ native bool Medic_IsClientMedic(int client);
 
 public Plugin myinfo =
 {
-	name		= "HPbar2 (Medic Healthkit Team Bars)",
+	name		= "hpbar",
 	author		= "Pericles (updated by ChatGPT)",
-	description	= "Shows health bars over injured teammates (Security only), visible only to medics while holding the healthkit.",
-	version		= "1.0",
+	description	= "Shows health bars over injured teammates (Security only), visible only to medics while holding the healthkit or defib.",
+	version		= "1.0.2",
 	url			= "https://forums.alliedmods.net/showthread.php?t=312223"
 };
 
 static const int	TEAM_SECURITY	= 2;
-static const int	HP_FULL			= 100;	// Insurgency players are effectively 100hp in normal play
-static const float	BAR_Z_OFF		= 10.0;
-static const float	UPDATERATE		= 0.50;	// Update interval (seconds) for teammate HP bars.
+static const int	HP_FULL			= 100;	// Insurgency players are effectively 100hp in normal play.
+
+// Attachment-local offsets (parented to "eyes").
+// Tip: to push the bar back so it's not in front of the eyes, set BAR_X_OFF to a small negative (e.g. -6.0).
+static const float	BAR_X_OFF		= -5.0;	// negative = further back
+static const float	BAR_Y_OFF		= 0.0;	// left/right
+static const float	BAR_Z_OFF		= 10.0;	// up/down
+
+static const float	UPDATERATE		= 0.50;	// seconds
 
 Handle	g_hUpdateTimer = INVALID_HANDLE;
 
@@ -28,13 +34,14 @@ int		g_iBarMmcRef[MAXPLAYERS + 1];
 bool	g_bTargetInjured[MAXPLAYERS + 1];
 int		g_iLastFrame[MAXPLAYERS + 1];
 
-bool	g_bHasMedicNative = false;
-
-float	g_fViewerNextCheck[MAXPLAYERS + 1];
+bool	g_bHasMedicNative;
 bool	g_bViewerHoldingKit[MAXPLAYERS + 1];
+
+bool	g_bLateLoad;
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
 {
+	g_bLateLoad = late;
 	MarkNativeAsOptional("Medic_IsClientMedic");
 	return APLRes_Success;
 }
@@ -57,12 +64,20 @@ public void OnLibraryRemoved(const char[] name)
 		g_bHasMedicNative = false;
 }
 
+static void RefreshMedicNative()
+{
+	g_bHasMedicNative = (GetFeatureStatus(FeatureType_Native, "Medic_IsClientMedic") == FeatureStatus_Available);
+}
+
 public void OnPluginStart()
 {
 	HookEvent("player_team", Event_PlayerTeam, EventHookMode_PostNoCopy);
 	HookEvent("player_spawn", Event_PlayerSpawn, EventHookMode_PostNoCopy);
 	HookEvent("player_death", Event_PlayerDeath, EventHookMode_PostNoCopy);
 	HookEvent("player_hurt", Event_PlayerHurt, EventHookMode_PostNoCopy);
+	HookEvent("weapon_deploy", Event_WeaponDeploy, EventHookMode_Post);
+
+	RefreshMedicNative();
 
 	for (int i = 1; i <= MaxClients; i++)
 	{
@@ -70,9 +85,11 @@ public void OnPluginStart()
 		g_iBarMmcRef[i] = INVALID_ENT_REFERENCE;
 		g_bTargetInjured[i] = false;
 		g_iLastFrame[i] = 0;
-
-		ResetViewerCache(i);
+		g_bViewerHoldingKit[i] = false;
 	}
+
+	if (g_bLateLoad)
+		RequestFrame(Frame_LateLoadSync);
 }
 
 public void OnPluginEnd()
@@ -83,7 +100,6 @@ public void OnPluginEnd()
 
 public void OnMapStart()
 {
-	// https://steamcommunity.com/sharedfiles/filedetails/?id=3630807362
 	PrecacheModel("materials/animated/hpbar5s.vmt", true);
 	StartUpdateTimer();
 }
@@ -94,23 +110,28 @@ public void OnMapEnd()
 	KillAllBars();
 }
 
-public void OnClientPutInServer(int client)
-{
-	g_iBarSpriteRef[client] = INVALID_ENT_REFERENCE;
-	g_iBarMmcRef[client] = INVALID_ENT_REFERENCE;
-	g_bTargetInjured[client] = false;
-	g_iLastFrame[client] = 0;
-
-	ResetViewerCache(client);
-}
-
 public void OnClientDisconnect(int client)
 {
 	KillBar(client);
 	g_bTargetInjured[client] = false;
 	g_iLastFrame[client] = 0;
+	g_bViewerHoldingKit[client] = false;
+}
 
-	ResetViewerCache(client);
+public void Frame_LateLoadSync(any data)
+{
+	RefreshMedicNative();
+
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (!IsClientInGame(i) || IsFakeClient(i))
+			continue;
+
+		UpdateViewerHoldingKitNow(i);
+
+		if (IsPlayerAlive(i) && GetClientTeam(i) == TEAM_SECURITY && GetClientHealth(i) < 100)
+			g_bTargetInjured[i] = true;
+	}
 }
 
 public void Event_PlayerTeam(Event event, const char[] name, bool dontBroadcast)
@@ -122,6 +143,7 @@ public void Event_PlayerTeam(Event event, const char[] name, bool dontBroadcast)
 	KillBar(client);
 	g_bTargetInjured[client] = false;
 	g_iLastFrame[client] = 0;
+	g_bViewerHoldingKit[client] = false;
 }
 
 public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
@@ -133,8 +155,19 @@ public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast
 	KillBar(client);
 	g_bTargetInjured[client] = false;
 	g_iLastFrame[client] = 0;
+	g_bViewerHoldingKit[client] = false;
 
-	ResetViewerCache(client);
+	if (!IsFakeClient(client))
+		RequestFrame(Frame_SpawnSync, event.GetInt("userid"));
+}
+
+public void Frame_SpawnSync(any userid)
+{
+	int client = GetClientOfUserId(userid);
+	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
+		return;
+
+	UpdateViewerHoldingKitNow(client);
 }
 
 public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast)
@@ -146,6 +179,7 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
 	KillBar(client);
 	g_bTargetInjured[client] = false;
 	g_iLastFrame[client] = 0;
+	g_bViewerHoldingKit[client] = false;
 }
 
 public void Event_PlayerHurt(Event event, const char[] name, bool dontBroadcast)
@@ -154,11 +188,40 @@ public void Event_PlayerHurt(Event event, const char[] name, bool dontBroadcast)
 	if (client < 1 || client > MaxClients || !IsClientInGame(client))
 		return;
 
-	// PvE optimization: we only ever care about Security players.
 	if (GetClientTeam(client) != TEAM_SECURITY)
 		return;
 
 	UpdateTargetBar(client);
+}
+
+public void Event_WeaponDeploy(Event event, const char[] name, bool dontBroadcast)
+{
+	int client = GetClientOfUserId(event.GetInt("userid"));
+	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
+		return;
+
+	UpdateViewerHoldingKitNow(client);
+}
+
+static void UpdateViewerHoldingKitNow(int client)
+{
+	g_bViewerHoldingKit[client] = false;
+
+	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client) || !IsPlayerAlive(client))
+		return;
+
+	if (!IsClientMedic(client))
+		return;
+
+	int wep = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+	if (wep <= MaxClients || !IsValidEntity(wep))
+		return;
+
+	char cls[64];
+	GetEdictClassname(wep, cls, sizeof(cls));
+
+	if (StrContains(cls, "weapon_healthkit", false) != -1 || StrContains(cls, "weapon_defib", false) != -1)
+		g_bViewerHoldingKit[client] = true;
 }
 
 static void StartUpdateTimer()
@@ -178,8 +241,7 @@ static void StopUpdateTimer()
 
 public Action Timer_UpdateAll(Handle timer, any data)
 {
-	// If no medic is actively holding a healthkit, remove all bars so SetTransmit doesn't cost anything.
-	if (!AnyMedicHoldingHealthkit())
+	if (!AnyMedicHoldingKit())
 	{
 		KillAllBars();
 		return Plugin_Continue;
@@ -190,10 +252,9 @@ public Action Timer_UpdateAll(Handle timer, any data)
 		if (!IsClientInGame(i))
 			continue;
 
-		// PvE optimization: only attach/update bars for Security players.
 		if (GetClientTeam(i) != TEAM_SECURITY)
 		{
-			if (EntRefToEntIndex(g_iBarSpriteRef[i]) != -1 || EntRefToEntIndex(g_iBarMmcRef[i]) != -1)
+			if (EntRefToEntIndex(g_iBarSpriteRef[i]) != -1)
 				KillBar(i);
 
 			g_bTargetInjured[i] = false;
@@ -219,20 +280,16 @@ public Action Bar_SetTransmit(int entity, int client)
 	if (target < 1 || target > MaxClients || !IsClientInGame(target))
 		return Plugin_Stop;
 
-	// Security-only (PvE optimization)
 	if (GetClientTeam(target) != TEAM_SECURITY || GetClientTeam(client) != TEAM_SECURITY)
 		return Plugin_Stop;
 
-	// Must be injured (otherwise no point sending it)
 	if (!g_bTargetInjured[target])
 		return Plugin_Stop;
 
-	// Only medics, only while holding healthkit
-	if (!IsClientMedic(client) || !ViewerHoldingHealthkit(client))
+	if (!IsClientMedic(client) || !g_bViewerHoldingKit[client])
 		return Plugin_Stop;
 
-	// Same team only, and not for self
-	if (client == target || GetClientTeam(client) != GetClientTeam(target))
+	if (client == target)
 		return Plugin_Stop;
 
 	return Plugin_Continue;
@@ -241,12 +298,6 @@ public Action Bar_SetTransmit(int entity, int client)
 // ----------------------------------------------------------------------
 // Viewer checks
 // ----------------------------------------------------------------------
-
-static void ResetViewerCache(int client)
-{
-	g_fViewerNextCheck[client] = 0.0;
-	g_bViewerHoldingKit[client] = false;
-}
 
 static bool IsClientMedic(int client)
 {
@@ -259,49 +310,23 @@ static bool IsClientMedic(int client)
 	if (g_bHasMedicNative)
 		return Medic_IsClientMedic(client);
 
-	// Strict mode: if bm_medic isn't running, treat as non-medic.
 	return false;
 }
 
-static bool ViewerHoldingHealthkit(int client)
-{
-	float now = GetGameTime();
-	if (now < g_fViewerNextCheck[client])
-		return g_bViewerHoldingKit[client];
-
-	g_fViewerNextCheck[client] = now + 0.10;
-
-	if (!IsClientInGame(client) || !IsPlayerAlive(client))
-	{
-		g_bViewerHoldingKit[client] = false;
-		return false;
-	}
-
-	int wep = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-	if (wep <= MaxClients || !IsValidEntity(wep))
-	{
-		g_bViewerHoldingKit[client] = false;
-		return false;
-	}
-
-	char cls[64];
-	GetEdictClassname(wep, cls, sizeof(cls));
-	g_bViewerHoldingKit[client] = (StrContains(cls, "weapon_healthkit", false) != -1);
-
-	return g_bViewerHoldingKit[client];
-}
-
-static bool AnyMedicHoldingHealthkit()
+static bool AnyMedicHoldingKit()
 {
 	for (int i = 1; i <= MaxClients; i++)
 	{
 		if (!IsClientInGame(i) || !IsPlayerAlive(i))
 			continue;
 
+		if (GetClientTeam(i) != TEAM_SECURITY)
+			continue;
+
 		if (!IsClientMedic(i))
 			continue;
 
-		if (ViewerHoldingHealthkit(i))
+		if (g_bViewerHoldingKit[i])
 			return true;
 	}
 
@@ -370,7 +395,6 @@ static void EnsureBar(int target)
 	SetEntPropEnt(spr, Prop_Send, "m_hOwnerEntity", target);
 
 	// Parent to a stance-following attachment.
-	// Use "eyes" (usually centered). "head" can be offset on some Ins models.
 	SetVariantString("!activator");
 	AcceptEntityInput(spr, "SetParent", target, spr, 0);
 
@@ -381,9 +405,8 @@ static void EnsureBar(int target)
 		AcceptEntityInput(spr, "SetParentAttachment", target, spr, 0);
 	}
 
-	// Local offset from the attachment. BAR_Z_OFF
-	char local[32];
-	FormatEx(local, sizeof(local), "-5.0 0 %.1f", BAR_Z_OFF);
+	char local[48];
+	FormatEx(local, sizeof(local), "%.1f %.1f %.1f", BAR_X_OFF, BAR_Y_OFF, BAR_Z_OFF);
 	SetVariantString(local);
 	AcceptEntityInput(spr, "SetLocalOrigin");
 
@@ -455,19 +478,9 @@ static void UpdateTargetBar(int target)
 	if (target < 1 || target > MaxClients || !IsClientInGame(target))
 		return;
 
-	// PvE optimization: only Security teammates get bars.
-	if (GetClientTeam(target) != TEAM_SECURITY)
+	if (GetClientTeam(target) != TEAM_SECURITY || !IsPlayerAlive(target))
 	{
-		if (EntRefToEntIndex(g_iBarSpriteRef[target]) != -1 || EntRefToEntIndex(g_iBarMmcRef[target]) != -1)
-			KillBar(target);
-
-		g_bTargetInjured[target] = false;
-		return;
-	}
-
-	if (!IsPlayerAlive(target))
-	{
-		if (EntRefToEntIndex(g_iBarSpriteRef[target]) != -1 || EntRefToEntIndex(g_iBarMmcRef[target]) != -1)
+		if (EntRefToEntIndex(g_iBarSpriteRef[target]) != -1)
 			KillBar(target);
 
 		g_bTargetInjured[target] = false;
@@ -475,11 +488,9 @@ static void UpdateTargetBar(int target)
 	}
 
 	int hp = GetClientHealth(target);
-
-	// Only show bars for teammates who are NOT full HP
 	if (hp >= HP_FULL)
 	{
-		if (EntRefToEntIndex(g_iBarSpriteRef[target]) != -1 || EntRefToEntIndex(g_iBarMmcRef[target]) != -1)
+		if (EntRefToEntIndex(g_iBarSpriteRef[target]) != -1)
 			KillBar(target);
 
 		g_bTargetInjured[target] = false;
