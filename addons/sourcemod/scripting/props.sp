@@ -5,7 +5,7 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PL_VERSION		"2.25"
+#define PL_VERSION		"2.26"
 
 #define MAXENTITIES		2048
 
@@ -54,6 +54,7 @@
 #define PROP_HOLD_DISTANCE			120.0
 #define PROP_LIMIT					10		// Prop limit per player
 #define PROP_PLAYER_DISTANCE		50.0
+#define PROP_PICKUP_DISTANCE		150.0
 
 #define BOT_BLEED_WIREDAMAGE		10.0	// Amount of bleed damage bot takes from a barbed wire
 
@@ -136,9 +137,10 @@ enum PropId {
 
 #define MID(%1) (view_as<int>(%1))
 
+// model, cost, blocks explosive damage?, HP
 static const PropDef g_PropDefs[] = {
-	{ "models/fortifications/barbed_wire_02b.mdl",			3, false, 3500 },
-	{ "models/static_fortifications/sandbagwall01.mdl",		1, true, 4500 },
+	{ "models/fortifications/barbed_wire_02b.mdl",			3, false, 4000 },
+	{ "models/static_fortifications/sandbagwall01.mdl",		1, true, 5000 },
 	{ "models/iraq/ir_twall_01.mdl",						3, true, PROP_HEALTH },
 	{ "models/iraq/ir_hesco_basket_01_row.mdl",				4, true, 7000 },
 	{ "models/static_afghan/prop_panj_stairs.mdl",			1, false, 2000 },
@@ -715,6 +717,14 @@ void OnButtonPress(int client, int button, float vel[3]) {
 				float vPos[3], vAng[3];
 				GetEntPropVector(target, Prop_Send, "m_vecOrigin", vPos);
 				GetEntPropVector(target, Prop_Send, "m_angRotation", vAng);
+
+				float vEye[3];
+				GetClientEyePosition(client, vEye);
+				
+				if (GetVectorDistance(vEye, vPos, true) > (PROP_PICKUP_DISTANCE * PROP_PICKUP_DISTANCE)) {
+					PrintCenterText(client, "Too far away to pick up that prop.");
+					return;
+				}
 
 				int propOwner = GetNumber(sName, "_c#");
 				int iArraySize = (ga_hPropPlaced[propOwner] != null) ? ga_hPropPlaced[propOwner].Length : 0;
@@ -2163,8 +2173,7 @@ void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue
 		g_iAllFree = g_cvAllFree.IntValue;
 }
 
-void SetupAmmoConVars()
-{
+void SetupAmmoConVars() {
 	g_cvAmmoResupplyRange = CreateConVar("sm_ammo_resupply_range", "80",
 		"Range to resupply near ammo cache");
 	g_fAmmoResupplyRange = g_cvAmmoResupplyRange.FloatValue;
@@ -2206,8 +2215,7 @@ public void OnAmmoConVarChanged(ConVar convar, const char[] oldValue, const char
 	}
 }
 
-void FindAndSetResupplyConvars()
-{
+void FindAndSetResupplyConvars() {
 	g_iDefaultResupplyDelayBase = GetConVarInt(FindConVar("mp_player_resupply_coop_delay_base"));
 	ServerCommand("mp_player_resupply_coop_delay_base 0");
 
