@@ -1,13 +1,12 @@
-// (C) 2014 Jared Ballou <sourcemod@jballou.com>
-// Released under GPLv3
-
 #pragma semicolon 1
 #pragma newdecls required
 
 #include <sourcemod>
 #include <sdktools>
 
-#define PLUGIN_VERSION		"0.0.16"
+native bool Medic_IsClientMedic(int client);
+
+#define PLUGIN_VERSION		"0.0.18"
 #define PLUGIN_DESCRIPTION	"Plugin for pulling prop_ragdoll bodies"
 
 #define MAXENTITIES 2048
@@ -89,6 +88,9 @@
 #define DRAG_IGNORE_MAX_SEC 	2.0		// Hard cap on “ignore this rag” cooldown (protects against cross-map time drift).
 										// If ignore exceeds this, it’s cleared immediately.
 
+
+#define DRAG_MEDIC_SPEED_MUL	1.5		// Medics move this much faster while dragging (multiplies current speed). Set to 1.0 to disable.
+
 // ----------------------
 // state
 // ----------------------
@@ -99,11 +101,17 @@ int		ga_iLastButtons[MAXPLAYERS + 1] = { 0, ... };
 float	ga_fNextTraceTime[MAXPLAYERS + 1] = { 0.0, ... };
 int		ga_iLastStance[MAXPLAYERS + 1] = { 0, ... };	// 0 stand, 1 crouch, 2 prone
 
+bool	ga_bMedicDragSpeed[MAXPLAYERS + 1];
+float	ga_fMedicDragSpeedBase[MAXPLAYERS + 1];
+float	ga_fMedicDragSpeedApplied[MAXPLAYERS + 1];
+
 float	g_fIgnoreUntil[MAXENTITIES + 1] = { 0.0, ... };
 int		g_iActiveDrags = 0;
 
 // Cached datamap offset (ragdoll teleport safety)
 int		g_iOffsPhysicsObject = -1;
+int		g_iOffsLaggedMovement = -1;	// CBasePlayer::m_flLaggedMovementValue (speed scaling)
+
 
 // --- NEW: ultra-light randomized tip pump (only when humans present) ---
 Handle	g_hTipTimer = null;
@@ -120,6 +128,7 @@ public Plugin myinfo = {
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
 {
+	MarkNativeAsOptional("Medic_IsClientMedic");
 	CreateNative("Drag_IsEntityDragged", Native_IsEntityDragged);
 	CreateNative("Drag_ForceDrop",       Native_ForceDrop);
 	return APLRes_Success;
@@ -168,6 +177,10 @@ public void OnPluginStart()
 	HookEvent("round_end",    Event_RoundEnd,    EventHookMode_PostNoCopy);
 	HookEvent("round_start",  Event_RoundStart,  EventHookMode_PostNoCopy);
 
+	g_iOffsLaggedMovement = FindSendPropInfo("CBasePlayer", "m_flLaggedMovementValue");
+	if (g_iOffsLaggedMovement == -1)
+		LogMessage("[PullRag] Warning: offset m_flLaggedMovementValue not found; medic drag speed boost disabled.");
+
 	// Try to start the tip pump if humans are already around on late load
 	EnsureTipTimer();
 }
@@ -188,6 +201,10 @@ public void OnClientDisconnect(int client)
 	ga_iLastButtons[client] = 0;
 	ga_iLastStance[client] = 0;
 	ga_fNextTraceTime[client] = 0.0;
+	ga_bMedicDragSpeed[client] = false;
+	ga_fMedicDragSpeedBase[client] = 0.0;
+	ga_fMedicDragSpeedApplied[client] = 0.0;
+
 
 	// If the server is now empty, kill the tip pump so it does nothing while empty
 	if (!HasAnyHumans())
@@ -346,6 +363,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 			}
 			else
 			{
+				DragSpeed_Maintain(client);
 				int rag = EntRefToEntIndex(ga_iDragRagRef[client]);
 				if (rag == INVALID_ENT_REFERENCE || !IsValidEntity(rag))
 				{
@@ -384,6 +402,135 @@ public Action cmd_drag(int client, int args)
 // ----------------------
 // helpers
 // ----------------------
+
+static bool IsClientMedic(int client)
+{
+	if (GetFeatureStatus(FeatureType_Native, "Medic_IsClientMedic") != FeatureStatus_Available)
+		return false;
+
+	return Medic_IsClientMedic(client);
+}
+
+static void DragSpeed_Enable(int client)
+{
+	if (DRAG_MEDIC_SPEED_MUL <= 1.0 || g_iOffsLaggedMovement == -1)
+		return;
+	if (!IsClientMedic(client))
+		return;
+
+	float cur = GetEntDataFloat(client, g_iOffsLaggedMovement);
+	ga_fMedicDragSpeedBase[client] = cur;
+	ga_fMedicDragSpeedApplied[client] = cur * DRAG_MEDIC_SPEED_MUL;
+	ga_bMedicDragSpeed[client] = true;
+
+	SetEntDataFloat(client, g_iOffsLaggedMovement, ga_fMedicDragSpeedApplied[client]);
+}
+
+static void DragSpeed_Maintain(int client)
+{
+	if (!ga_bMedicDragSpeed[client] || g_iOffsLaggedMovement == -1)
+		return;
+
+	float cur = GetEntDataFloat(client, g_iOffsLaggedMovement);
+	if (FloatAbs(cur - ga_fMedicDragSpeedApplied[client]) < 0.001)
+		return;
+
+	// Someone else changed speed; treat current as the new base and re-apply our multiplier.
+	ga_fMedicDragSpeedBase[client] = cur;
+	ga_fMedicDragSpeedApplied[client] = cur * DRAG_MEDIC_SPEED_MUL;
+	SetEntDataFloat(client, g_iOffsLaggedMovement, ga_fMedicDragSpeedApplied[client]);
+}
+
+static void DragSpeed_Disable(int client)
+{
+	if (!ga_bMedicDragSpeed[client] || g_iOffsLaggedMovement == -1)
+	{
+		ga_bMedicDragSpeed[client] = false;
+		return;
+	}
+
+	float cur = GetEntDataFloat(client, g_iOffsLaggedMovement);
+	if (FloatAbs(cur - ga_fMedicDragSpeedApplied[client]) < 0.001)
+		SetEntDataFloat(client, g_iOffsLaggedMovement, ga_fMedicDragSpeedBase[client]);
+
+	ga_bMedicDragSpeed[client] = false;
+	ga_fMedicDragSpeedBase[client] = 0.0;
+	ga_fMedicDragSpeedApplied[client] = 0.0;
+}
+
+
+static int FindDraggerForRag(int rag)
+{
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (ga_bDragging[i] && EntRefToEntIndex(ga_iDragRagRef[i]) == rag)
+			return i;
+	}
+	return 0;
+}
+
+static bool TakeoverRagIfNeeded(int client, int rag)
+{
+	int dragger = FindDraggerForRag(rag);
+	if (dragger == 0)
+		return true;
+
+	// Only medics can take over, and only from non-medics
+	if (!IsClientMedic(client))
+		return false;
+	if (IsClientMedic(dragger))
+		return false;
+
+	StopDragging(dragger);
+	return true;
+}
+
+static int FindClosestRagdollNearPoint_Aim(int client, const float p[3], float radius, float now)
+{
+	bool canSteal = IsClientMedic(client);
+
+	int best = -1;
+	float bestDistSqr = radius * radius;
+
+	int ent = -1;
+	while ((ent = FindEntityByClassname(ent, "prop_ragdoll")) != -1)
+	{
+		if (!IsValidEntity(ent))
+			continue;
+
+		// Skip recently forced-dropped rags (compatible with your native)
+		if (ent > 0 && ent < MAXENTITIES && g_fIgnoreUntil[ent] > now)
+			continue;
+
+		if (IsRagAlreadyDragged(ent))
+		{
+			if (!canSteal)
+				continue;
+
+			int dragger = FindDraggerForRag(ent);
+			if (dragger == 0)
+				continue;
+			if (IsClientMedic(dragger))
+				continue;
+		}
+
+		float pos[3];
+		GetEntPropVector(ent, Prop_Send, "m_vecOrigin", pos);
+
+		float dx = pos[0] - p[0];
+		float dy = pos[1] - p[1];
+		float dz = pos[2] - p[2];
+		float d2 = dx*dx + dy*dy + dz*dz;
+
+		if (d2 <= bestDistSqr)
+		{
+			bestDistSqr = d2;
+			best = ent;
+		}
+	}
+
+	return best;
+}
 
 static int FindClosestRagdollNearPoint(const float p[3], float radius, float now)
 {
@@ -436,10 +583,13 @@ static void StartDragging(int client, bool viaCmd)
 	g_iActiveDrags++;
 	ga_bDragViaCmd[client] = viaCmd;
 	ga_fNextTraceTime[client] = 0.0;
+	DragSpeed_Enable(client);
 }
 
 static void StopDragging(int client)
 {
+	DragSpeed_Disable(client);
+
 	int rag = EntRefToEntIndex(ga_iDragRagRef[client]);
 	if (rag != INVALID_ENT_REFERENCE && IsValidEntity(rag))
 	{
@@ -505,11 +655,12 @@ static int AcquireRagdoll(int client)
 				return -1;
 		}
 
-		if (IsRagAlreadyDragged(aimed))
-			return -1;
-
 		if (IsCloseEnough(client, aimed, DRAG_ACQUIRE_DIST_MAX))
+		{
+			if (!TakeoverRagIfNeeded(client, aimed))
+				return -1;
 			return aimed;
+		}
 	}
 
 	// -------- Precompute eye/fwd once
@@ -526,12 +677,16 @@ static int AcquireRagdoll(int client)
 
 	// -------- Pass B: nearest rag to aim point (handles foliage / tiny props)
 	{
-		int nearAim = FindClosestRagdollNearPoint(aimPoint, 56.0, now);
+		int nearAim = FindClosestRagdollNearPoint_Aim(client, aimPoint, 56.0, now);
 		if (nearAim != -1)
 		{
 			// Slightly relaxed distance for this pass
 			if (IsCloseEnough(client, nearAim, DRAG_ACQUIRE_DIST_MAX + 20.0))
+			{
+				if (!TakeoverRagIfNeeded(client, nearAim))
+					return -1;
 				return nearAim;
+			}
 		}
 	}
 
