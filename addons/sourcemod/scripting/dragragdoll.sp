@@ -3,10 +3,15 @@
 
 #include <sourcemod>
 #include <sdktools>
+#include <sdktools_trace>
+
+#if !defined CONTENTS_SOLID
+#define CONTENTS_SOLID 0x1
+#endif
 
 native bool Medic_IsClientMedic(int client);
 
-#define PLUGIN_VERSION		"0.0.18"
+#define PLUGIN_VERSION		"0.0.24"
 #define PLUGIN_DESCRIPTION	"Plugin for pulling prop_ragdoll bodies"
 
 #define MAXENTITIES 2048
@@ -82,6 +87,8 @@ native bool Medic_IsClientMedic(int client);
 										// ↓ More frequent traces (smoother over bumps; more CPU).
 										// ↑ Fewer traces (lighter; less responsive on rough ground).
 
+#define GROUND_TRACE_DOWN		1024.0	// GroundZAt trace depth
+
 #define CLAMP_OFFSET			12.0	// Offset for multi-sample clamping (center + 4 points) if you enable that preset.
 										// Kept for completeness; not used in the current single-point clamp.
 
@@ -92,6 +99,26 @@ native bool Medic_IsClientMedic(int client);
 #define DRAG_MEDIC_SPEED_MUL	1.5		// Medics move this much faster while dragging (multiplies current speed). Set to 1.0 to disable.
 
 // ----------------------
+// wall/clip protection
+// ----------------------
+#define DRAG_WALLBLOCK_HULL			18.0	// hull half-size used to prevent dragging through walls (higher = stricter)
+#define DRAG_CLIPCHECK_RATE_SEC		0.05	// rate-limit expensive wall/solid hull tests while dragging (seconds)
+#define DRAG_POSTDROP_CLIP_DELAY1	0.25	// seconds after drop: check for clipped rag (in wall/void)
+#define DRAG_POSTDROP_CLIP_DELAY2	3.0		// second post-drop check (catches late physics settle)
+#define POSTDROP_MAX_SAFE_DROP_Z	1024.0	// if rag drops this far below last safe Z after drop, rescue
+#define DRAG_DROP_TELE_AHEAD		0.0		// rescue teleport: how far in front of dropper
+#define DRAG_DROP_TELE_LIFT			20.0	// rescue teleport: how high above dropper feet before clamping
+#define DRAG_DROP_TELE_MIN_SEP		10.0	// rescue teleport: additional Z lift after clamping
+
+
+Handle	g_hPostDropTimer = null;
+int		g_iPostDropActive = 0;
+float	g_fPostDropExpire[MAXENTITIES];
+int		g_iPostDropStage[MAXENTITIES]; // 0 none, 1 waiting delay1, 2 waiting delay2
+float	g_fPostDropCheck1At[MAXENTITIES];
+float	g_fPostDropCheck2At[MAXENTITIES];
+
+// ----------------------
 // state
 // ----------------------
 int		ga_iDragRagRef[MAXPLAYERS + 1] = { INVALID_ENT_REFERENCE, ... };
@@ -99,13 +126,19 @@ bool	ga_bDragging[MAXPLAYERS + 1] = { false, ... };
 bool	ga_bDragViaCmd[MAXPLAYERS + 1] = { false, ... };
 int		ga_iLastButtons[MAXPLAYERS + 1] = { 0, ... };
 float	ga_fNextTraceTime[MAXPLAYERS + 1] = { 0.0, ... };
+float	ga_fNextClipCheckTime[MAXPLAYERS + 1] = { 0.0, ... };
 int		ga_iLastStance[MAXPLAYERS + 1] = { 0, ... };	// 0 stand, 1 crouch, 2 prone
 
 bool	ga_bMedicDragSpeed[MAXPLAYERS + 1];
 float	ga_fMedicDragSpeedBase[MAXPLAYERS + 1];
 float	ga_fMedicDragSpeedApplied[MAXPLAYERS + 1];
 
-float	g_fIgnoreUntil[MAXENTITIES + 1] = { 0.0, ... };
+float	g_fIgnoreUntil[MAXENTITIES] = { 0.0, ... };
+
+// Per-ragdoll last safe position (prevents losing bodies inside walls/void)
+bool	g_bRagHasLastSafe[MAXENTITIES];
+float	g_vRagLastSafePos[MAXENTITIES][3];
+int		g_iRagLastDropperUserId[MAXENTITIES];
 int		g_iActiveDrags = 0;
 
 // Cached datamap offset (ragdoll teleport safety)
@@ -188,7 +221,27 @@ public void OnPluginStart()
 public void OnMapStart()
 {
 	for (int i = 0; i < MAXENTITIES; i++)
+	{
 		g_fIgnoreUntil[i] = 0.0;
+		g_bRagHasLastSafe[i] = false;
+		g_iRagLastDropperUserId[i] = 0;
+
+		g_iPostDropStage[i] = 0;
+		g_fPostDropExpire[i] = 0.0;
+		g_fPostDropCheck1At[i] = 0.0;
+		g_fPostDropCheck2At[i] = 0.0;
+	}
+
+	g_iPostDropActive = 0;
+	g_hPostDropTimer = null;
+
+	g_iActiveDrags = 0;
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		ga_bDragging[i] = false;
+		ga_bDragViaCmd[i] = false;
+		ga_iDragRagRef[i] = INVALID_ENT_REFERENCE;
+	}
 }
 
 public void OnClientDisconnect(int client)
@@ -201,6 +254,7 @@ public void OnClientDisconnect(int client)
 	ga_iLastButtons[client] = 0;
 	ga_iLastStance[client] = 0;
 	ga_fNextTraceTime[client] = 0.0;
+	ga_fNextClipCheckTime[client] = 0.0;
 	ga_bMedicDragSpeed[client] = false;
 	ga_fMedicDragSpeedBase[client] = 0.0;
 	ga_fMedicDragSpeedApplied[client] = 0.0;
@@ -570,6 +624,8 @@ static void StartDragging(int client, bool viaCmd)
 	int rag = AcquireRagdoll(client);
 	if (rag == -1)
 		return;
+	if (rag <= MaxClients || rag >= MAXENTITIES)
+		return;
 
 	int cg = GetEntProp(rag, Prop_Data, "m_CollisionGroup", 1);
 	if (cg == 17)
@@ -578,13 +634,22 @@ static void StartDragging(int client, bool viaCmd)
 	// Freeze physics so it can't sink while we steer it
 	SetEntityMoveType(rag, MOVETYPE_NONE);
 
+	float pos[3];
+	GetEntPropVector(rag, Prop_Send, "m_vecOrigin", pos);
+	Drag_SaveLastSafe(rag, pos);
+
+	g_iRagLastDropperUserId[rag] = GetClientUserId(client);
+
 	ga_iDragRagRef[client] = EntIndexToEntRef(rag);
 	ga_bDragging[client] = true;
 	g_iActiveDrags++;
 	ga_bDragViaCmd[client] = viaCmd;
 	ga_fNextTraceTime[client] = 0.0;
+	ga_fNextClipCheckTime[client] = 0.0;
+
 	DragSpeed_Enable(client);
 }
+
 
 static void StopDragging(int client)
 {
@@ -600,6 +665,8 @@ static void StopDragging(int client)
 		SetEntityMoveType(rag, MOVETYPE_VPHYSICS);
 		AcceptEntityInput(rag, "Wake");
 
+		Drag_PostDropSchedule(rag, client);
+
 		#if DRAG_USE_SAFETY_TIMER
 		// Safety clamp shortly after release in case solver nudges down
 		CreateTimer(0.02, Timer_SettleClamp, EntIndexToEntRef(rag), TIMER_FLAG_NO_MAPCHANGE);
@@ -612,6 +679,7 @@ static void StopDragging(int client)
 	ga_bDragViaCmd[client] = false;
 	ga_iDragRagRef[client] = INVALID_ENT_REFERENCE;
 	ga_fNextTraceTime[client] = 0.0;
+	ga_fNextClipCheckTime[client] = 0.0;
 }
 
 static bool IsRagdoll(int ent)
@@ -749,7 +817,7 @@ static bool IsCloseEnough(int client, int ent, float maxd)
 
 public bool TraceFilter_IgnorePlayersAndEnt(int entity, int contentsMask, any data)
 {
-	return (entity > MaxClients && entity != data);
+	return (entity == 0 || (entity > MaxClients && entity != data));
 }
 
 // Returns ground Z under XY, or guessZ if nothing hit
@@ -763,7 +831,7 @@ static float GroundZAt(float x, float y, float guessZ, int ignoreEnt)
 	float end[3];
 	end[0] = x;
 	end[1] = y;
-	end[2] = guessZ - 1024.0;
+	end[2] = guessZ - GROUND_TRACE_DOWN;
 
 	Handle tr = TR_TraceRayFilterEx(start, end, MASK_SOLID, RayType_EndPoint, TraceFilter_IgnorePlayersAndEnt, ignoreEnt);
 	float z = guessZ;
@@ -833,6 +901,264 @@ public Action Timer_SettleClamp(Handle timer, any ragRef)
 }
 #endif
 
+static void Drag_SaveLastSafe(int rag, const float pos[3])
+{
+	if (rag <= MaxClients || rag >= MAXENTITIES)
+		return;
+
+	g_bRagHasLastSafe[rag] = true;
+	g_vRagLastSafePos[rag][0] = pos[0];
+	g_vRagLastSafePos[rag][1] = pos[1];
+	g_vRagLastSafePos[rag][2] = pos[2];
+}
+
+static bool Drag_GetLastSafe(int rag, float outPos[3])
+{
+	if (rag <= MaxClients || rag >= MAXENTITIES)
+		return false;
+	if (!g_bRagHasLastSafe[rag])
+		return false;
+
+	outPos[0] = g_vRagLastSafePos[rag][0];
+	outPos[1] = g_vRagLastSafePos[rag][1];
+	outPos[2] = g_vRagLastSafePos[rag][2];
+	return true;
+}
+
+static bool Drag_PointInSolid(const float posIn[3], int ignoreEnt)
+{
+	// Detect being clipped into SOLID (walls/props) without false-positives from simply resting on the ground.
+	// Use a small horizontal hull and only test ABOVE the point (mins z = 0) so floors don't trigger it.
+	float pos[3];
+	pos[0] = posIn[0];
+	pos[1] = posIn[1];
+	pos[2] = posIn[2];
+
+	float mins[3];
+	mins[0] = -8.0;
+	mins[1] = -8.0;
+	mins[2] = 0.0;
+
+	float maxs[3];
+	maxs[0] = 8.0;
+	maxs[1] = 8.0;
+	maxs[2] = 32.0;
+
+	Handle tr = TR_TraceHullFilterEx(pos, pos, mins, maxs, MASK_SOLID, TraceFilter_IgnorePlayersAndEnt, ignoreEnt);
+	bool solid = TR_StartSolid(tr) || TR_AllSolid(tr);
+	CloseHandle(tr);
+	return solid;
+}
+
+static bool Drag_IsBadLocation(int rag, const float posIn[3])
+{
+	float p[3];
+	p[0] = posIn[0];
+	p[1] = posIn[1];
+	p[2] = posIn[2];
+
+	if (TR_PointOutsideWorld(p))
+		return true;
+
+	return Drag_PointInSolid(p, rag);
+}
+
+// Clamp 'dest' so we don't drag ragdolls through solid walls.
+// Returns true if movement was blocked.
+static bool Drag_BlockThroughWalls(int rag, const float fromIn[3], float dest[3])
+{
+	float from[3];
+	from[0] = fromIn[0];
+	from[1] = fromIn[1];
+	from[2] = fromIn[2];
+
+	float mins[3];
+	mins[0] = -DRAG_WALLBLOCK_HULL;
+	mins[1] = -DRAG_WALLBLOCK_HULL;
+	mins[2] = -DRAG_WALLBLOCK_HULL;
+
+	float maxs[3];
+	maxs[0] = DRAG_WALLBLOCK_HULL;
+	maxs[1] = DRAG_WALLBLOCK_HULL;
+	maxs[2] = DRAG_WALLBLOCK_HULL;
+
+	Handle tr = TR_TraceHullFilterEx(from, dest, mins, maxs, MASK_SOLID, TraceFilter_IgnorePlayersAndEnt, rag);
+	bool blocked = false;
+
+	if (TR_DidHit(tr))
+	{
+		float frac = TR_GetFraction(tr);
+		if (frac < 1.0)
+		{
+			float hit[3];
+			TR_GetEndPosition(hit, tr);
+
+			float nrm[3];
+			TR_GetPlaneNormal(tr, nrm);
+
+			dest[0] = hit[0] + nrm[0] * 2.0;
+			dest[1] = hit[1] + nrm[1] * 2.0;
+			dest[2] = hit[2] + nrm[2] * 2.0;
+
+			blocked = true;
+		}
+	}
+
+	CloseHandle(tr);
+	return blocked;
+}
+
+static void Drag_RescueToDropper(int rag)
+{
+	if (rag <= MaxClients || rag >= MAXENTITIES)
+		return;
+	if (!IsValidEntity(rag))
+		return;
+
+	int client = 0;
+	int userid = g_iRagLastDropperUserId[rag];
+	if (userid != 0)
+		client = GetClientOfUserId(userid);
+
+	float dest[3];
+	bool haveDest = false;
+
+	if (client > 0 && client <= MaxClients && IsClientInGame(client))
+	{
+		float feet[3];
+		GetClientAbsOrigin(client, feet);
+
+		float ang[3];
+		GetClientEyeAngles(client, ang);
+
+		float fwd[3];
+		GetAngleVectors(ang, fwd, NULL_VECTOR, NULL_VECTOR);
+		NormalizeVector(fwd, fwd);
+
+		dest[0] = feet[0] + fwd[0] * DRAG_DROP_TELE_AHEAD;
+		dest[1] = feet[1] + fwd[1] * DRAG_DROP_TELE_AHEAD;
+		dest[2] = feet[2] + DRAG_DROP_TELE_LIFT;
+
+		haveDest = true;
+	}
+	else
+	{
+		haveDest = Drag_GetLastSafe(rag, dest);
+	}
+
+	if (!haveDest)
+		return;
+
+	float gz = GroundZAt(dest[0], dest[1], dest[2], rag);
+	if (gz != dest[2])
+		dest[2] = gz + CLAMP_CLEARANCE_Z + DRAG_DROP_TELE_MIN_SEP;
+
+	static const float VEC_ZERO[3] = { 0.0, 0.0, 0.0 };
+	SetEntityMoveType(rag, MOVETYPE_VPHYSICS);
+	TeleportEntity(rag, dest, NULL_VECTOR, VEC_ZERO);
+	AcceptEntityInput(rag, "Wake");
+}
+
+static void Drag_PostDropSchedule(int rag, int dropper)
+{
+	if (rag <= MaxClients || rag >= MAXENTITIES)
+		return;
+
+	g_iRagLastDropperUserId[rag] = (dropper > 0 && dropper <= MaxClients) ? GetClientUserId(dropper) : 0;
+
+	float now = GetGameTime();
+
+	if (g_iPostDropStage[rag] == 0)
+		g_iPostDropActive++;
+
+	g_iPostDropStage[rag] = 1;
+	g_fPostDropCheck1At[rag] = now + DRAG_POSTDROP_CLIP_DELAY1;
+	g_fPostDropCheck2At[rag] = now + DRAG_POSTDROP_CLIP_DELAY2;
+	g_fPostDropExpire[rag] = g_fPostDropCheck2At[rag] + 0.75;
+
+	PostDrop_EnsureTimer();
+}
+
+static void PostDrop_RunClipCheck(int rag)
+{
+	if (rag <= MaxClients || !IsValidEntity(rag) || !IsRagdoll(rag))
+		return;
+
+	if (IsRagAlreadyDragged(rag))
+		return;
+
+	float pos[3];
+	GetEntPropVector(rag, Prop_Send, "m_vecOrigin", pos);
+
+	if (Drag_IsBadLocation(rag, pos))
+	{
+		Drag_RescueToDropper(rag);
+		return;
+	}
+
+	if (g_bRagHasLastSafe[rag] && pos[2] < g_vRagLastSafePos[rag][2] - POSTDROP_MAX_SAFE_DROP_Z)
+		Drag_RescueToDropper(rag);
+}
+
+static void PostDrop_EnsureTimer()
+{
+	if (g_hPostDropTimer != null) return;
+	if (g_iPostDropActive <= 0) return;
+
+	g_hPostDropTimer = CreateTimer(0.25, Timer_PostDropTick, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+}
+
+public Action Timer_PostDropTick(Handle timer, any data)
+{
+	float now = GetGameTime();
+
+	for (int rag = MaxClients + 1; rag < MAXENTITIES; rag++)
+	{
+		int stage = g_iPostDropStage[rag];
+		if (!stage) continue;
+
+		if (now > g_fPostDropExpire[rag] || !IsValidEntity(rag) || !IsRagdoll(rag) || IsRagAlreadyDragged(rag))
+		{
+			PostDrop_ClearRag(rag);
+			continue;
+		}
+
+		if (stage == 1 && now >= g_fPostDropCheck1At[rag])
+		{
+			PostDrop_RunClipCheck(rag);
+			g_iPostDropStage[rag] = 2;
+		}
+
+		if (g_iPostDropStage[rag] == 2 && now >= g_fPostDropCheck2At[rag])
+		{
+			PostDrop_RunClipCheck(rag);
+			PostDrop_ClearRag(rag);
+		}
+	}
+
+	if (g_iPostDropActive <= 0)
+	{
+		g_hPostDropTimer = null;
+		return Plugin_Stop;
+	}
+
+	return Plugin_Continue;
+}
+
+static void PostDrop_ClearRag(int rag)
+{
+	if (rag <= MaxClients || rag >= MAXENTITIES)
+		return;
+
+	if (g_iPostDropStage[rag] != 0 && g_iPostDropActive > 0)
+		g_iPostDropActive--;
+
+	g_iPostDropStage[rag] = 0;
+	g_fPostDropExpire[rag] = 0.0;
+	g_fPostDropCheck1At[rag] = 0.0;
+	g_fPostDropCheck2At[rag] = 0.0;
+}
+
 static void PullRagdollTowardPlayer(int client, int rag)
 {
 	if (!IsValidEntity(rag) || !IsRagdoll(rag))
@@ -852,9 +1178,9 @@ static void PullRagdollTowardPlayer(int client, int rag)
 	GetClientEyeAngles(client, ang);
 	GetAngleVectors(ang, fwd, NULL_VECTOR, NULL_VECTOR);
 
-	int stance = GetEntProp(client, Prop_Send, "m_iCurrentStance"); // 0 stand, 1 crouch, 2 prone
-	float baseLift = (stance >= 2) ? 4.0 : 8.0;					// adjust to 3.0/6.0 if you like
-	float ahead    = (stance >= 2) ? 30.0 : DRAG_TARGET_AHEAD;	// shorter reach when prone
+	int stance = GetEntProp(client, Prop_Send, "m_iCurrentStance");
+	float baseLift = (stance >= 2) ? 4.0 : 8.0;
+	float ahead = (stance >= 2) ? 30.0 : DRAG_TARGET_AHEAD;
 
 	float zFeetTarget = feet[2] + baseLift + DRAG_Z_LIFT;
 
@@ -866,10 +1192,11 @@ static void PullRagdollTowardPlayer(int client, int rag)
 
 	bool needClamp = (stance >= 2) || (target[2] < curr[2]);
 
+	float now = GetGameTime();
+
 	#if DRAG_USE_TRACE_RATED
 	if (needClamp)
 	{
-		float now = GetGameTime();
 		if (now >= ga_fNextTraceTime[client])
 		{
 			float start[3];
@@ -919,27 +1246,106 @@ static void PullRagdollTowardPlayer(int client, int rag)
 	if (!EntHasPhysicsObject(rag))
 		return;
 
+	// Prevent pushing the ragdoll through walls/props.
+	bool doExpensive = (now >= ga_fNextClipCheckTime[client]);
+	if (doExpensive)
+		ga_fNextClipCheckTime[client] = now + DRAG_CLIPCHECK_RATE_SEC;
+
+	bool badDest = false;
+
+	if (doExpensive)
+	{
+		badDest = Drag_IsBadLocation(rag, dest);
+
+		if (!badDest)
+			Drag_BlockThroughWalls(rag, curr, dest);
+
+		if (!badDest)
+			Drag_SaveLastSafe(rag, dest);
+	}
+	else
+	{
+		float p[3];
+		p[0] = dest[0];
+		p[1] = dest[1];
+		p[2] = dest[2];
+
+		if (TR_PointOutsideWorld(p) || ((TR_GetPointContents(p) & CONTENTS_SOLID) != 0))
+			badDest = true;
+	}
+
+	if (badDest)
+	{
+		bool badCurr = false;
+
+		if (doExpensive)
+			badCurr = Drag_IsBadLocation(rag, curr);
+		else
+		{
+			float c[3];
+			c[0] = curr[0];
+			c[1] = curr[1];
+			c[2] = curr[2];
+
+			if (TR_PointOutsideWorld(c) || ((TR_GetPointContents(c) & CONTENTS_SOLID) != 0))
+				badCurr = true;
+		}
+
+		if (!badCurr)
+		{
+			dest[0] = curr[0];
+			dest[1] = curr[1];
+			dest[2] = curr[2];
+		}
+		else
+		{
+			float safe[3];
+			if (Drag_GetLastSafe(rag, safe))
+			{
+				dest[0] = safe[0];
+				dest[1] = safe[1];
+				dest[2] = safe[2];
+			}
+			else
+			{
+				dest[0] = curr[0];
+				dest[1] = curr[1];
+				dest[2] = curr[2];
+			}
+		}
+	}
+
 	static const float VEC_ZERO[3] = { 0.0, 0.0, 0.0 };
 	TeleportEntity(rag, dest, NULL_VECTOR, VEC_ZERO);
 }
 
 public void OnEntityDestroyed(int ent)
 {
-	if (g_iActiveDrags == 0) return;
-	if (ent <= MaxClients) return;
+	if (ent <= MaxClients || ent >= MAXENTITIES)
+		return;
+
+	g_bRagHasLastSafe[ent] = false;
+	g_iRagLastDropperUserId[ent] = 0;
+
+	if (g_iActiveDrags == 0)
+		return;
 
 	for (int i = 1; i <= MaxClients; i++)
 	{
-		if (!ga_bDragging[i]) continue;
+		if (!ga_bDragging[i])
+			continue;
 
-		int rag = EntRefToEntIndex(ga_iDragRagRef[i]);
-		if (rag == ent)
-		{
-			ga_iDragRagRef[i] = INVALID_ENT_REFERENCE;
-			ga_bDragging[i] = false;
-			ga_bDragViaCmd[i] = false;
-			if (g_iActiveDrags > 0) g_iActiveDrags--;
-		}
+		if (EntRefToEntIndex(ga_iDragRagRef[i]) != ent)
+			continue;
+
+		ga_iDragRagRef[i] = INVALID_ENT_REFERENCE;
+		ga_bDragging[i] = false;
+		ga_bDragViaCmd[i] = false;
+
+		if (g_iActiveDrags > 0)
+			g_iActiveDrags--;
+
+		break;
 	}
 }
 
