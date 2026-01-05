@@ -4,8 +4,9 @@
 #include <sourcemod>
 #include <sdktools>
 #include <sdkhooks>
+#include <clientprefs>
 
-#define PL_VERSION		"2.26"
+#define PL_VERSION		"2.29"
 
 #define MAXENTITIES		2048
 
@@ -46,20 +47,20 @@
 #define STARTBUILDPOINTS			3	// Free starting build points for all players
 
 #define PROP_ALPHA					125
-#define PROP_ROTATE_STEP			10.0
+#define PROP_ROTATE_STEP			30.0
 #define PROP_DAMAGE_TAKE			100.0	// Amount of damage the prop takes each time a bot touches it, limited by PROP_TOUCH_COOLDOWN.
 #define PROP_TOUCH_COOLDOWN			0.50
 #define PROP_GLOWHP_PERCENT			0.25
 #define PROP_HEALTH					6000
-#define PROP_HOLD_DISTANCE			120.0
+#define PROP_HOLD_DISTANCE			130.0
 #define PROP_LIMIT					10		// Prop limit per player
 #define PROP_PLAYER_DISTANCE		50.0
-#define PROP_PICKUP_DISTANCE		150.0
+#define PROP_PICKUP_DISTANCE		170.0
 
 #define BOT_BLEED_WIREDAMAGE		10.0	// Amount of bleed damage bot takes from a barbed wire
 
 #define MENU_COOLDOWN				1.0
-#define MENU_STAYOPENTIME			10
+#define MENU_STAYOPENTIME			25
 
 #define SND_SUPPLYREFUND		"ui/receivedsupply.wav"
 #define SND_BUYBUILDPOINTS		"ui/menu_click.wav"
@@ -94,6 +95,9 @@ Handle		g_hJammerTimer = INVALID_HANDLE;
 
 ArrayList	ga_hPropPlaced[MAXPLAYERS + 1];
 ConVar		g_cvAllFree = null;
+
+Handle		g_hCookiePropRotateStep = null;
+float		ga_fPropRotateStep[MAXPLAYERS + 1] = {PROP_ROTATE_STEP, ...};
 
 #define NUM_WIRESOUNDS 3
 char ga_sBarbWire[NUM_WIRESOUNDS][] = {
@@ -244,6 +248,8 @@ public void OnPluginStart()
 	SetupConVars();          // your existing props convars
 	SetupAmmoConVars();      // NEW: ammo cache convars
 
+	g_hCookiePropRotateStep = RegClientCookie("bm_prop_rotate_step", "Props: rotation step (degrees)", CookieAccess_Private);
+
 	HookEvent("player_death",      Event_PlayerDeath_Pre, EventHookMode_Pre);
 	HookEvent("round_start",       Event_RoundStart);
 	HookEvent("player_spawn",      Event_PlayerSpawn);     // NEW: resupply counter init
@@ -260,6 +266,9 @@ public void OnPluginStart()
 		{
 			if (!IsClientInGame(i))
 				continue;
+
+			ga_fPropRotateStep[i] = PROP_ROTATE_STEP;
+			LoadRotateStepCookie(i);
 
 			ga_iLastMattressOwner[i]      = 0;
 			ga_fLastMattressLaunchTime[i] = 0.0;
@@ -341,6 +350,9 @@ public void OnClientPostAdminCheck(int client)
 	ga_fLastPlaceTime[client]    = 0.0;
 	ga_bJustPlaced[client]       = false;
 
+	ga_fPropRotateStep[client]    = PROP_ROTATE_STEP;
+	LoadRotateStepCookie(client);
+
 	ga_iLastMattressOwner[client]      = 0;
 	ga_fLastMattressLaunchTime[client] = 0.0;
 	ga_bMattressDeath[client]          = false;
@@ -373,6 +385,14 @@ public void OnClientPostAdminCheck(int client)
 	{
 		SDKHook(client, SDKHook_OnTakeDamage, BotOnTakeDamage);
 	}
+}
+
+public void OnClientCookiesCached(int client)
+{
+	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
+		return;
+
+	LoadRotateStepCookie(client);
 }
 
 public void OnClientDisconnect(int client) {
@@ -1165,6 +1185,15 @@ public Action PlayerOnTakeDamage(int victim, int &attacker, int &inflictor, floa
 
 		Handle trace = TR_TraceRayFilterEx(vStart, vEnd, MASK_SOLID, RayType_EndPoint, TraceEntityFilterPlayers, victim);
 		if (TR_DidHit(trace)) {
+			// Anti-abuse:
+			// If the trace starts in solid (player clipped into a prop/wall), or the hit is basically at 0 distance,
+			// don't count that as "cover" for explosions.
+			float frac = TR_GetFraction(trace);
+			if (TR_StartSolid(trace) || TR_AllSolid(trace) || frac <= 0.02) {
+				CloseHandle(trace);
+				return Plugin_Continue;
+			}
+
 			int hitEnt = TR_GetEntityIndex(trace);
 			if (hitEnt != victim && hitEnt > MaxClients && IsValidEntity(hitEnt)) {
 				char sModelName[PLATFORM_MAX_PATH];
@@ -1805,14 +1834,18 @@ void OpenPropSelectionMenu(int client) {
 	Menu propMenu = new Menu(PropSelectionMenuHandler);
 	propMenu.SetTitle("Select Prop.\n(build points: %d)", ga_iPlayerBuildPoints[client]);
 
-	char itemBuffer[64], modelName[64], indexStr[8];
+	char itemBuffer[128], modelName[64], indexStr[8];
 
 	for (int i = 0; i < PROP_COUNT; i++) {
 		if (g_iAllFree == 0 && !HasEnoughResources(client, g_PropDefs[i].cost))
 			continue;
 
+		int maxHealth = g_PropDefs[i].health;
+		if (maxHealth < 1)
+			maxHealth = PROP_HEALTH;
+
 		GetModelName(g_PropDefs[i].model, modelName, sizeof(modelName));
-		FormatEx(itemBuffer, sizeof(itemBuffer), "%s - Cost: %d", modelName, (g_iAllFree == 0 ? g_PropDefs[i].cost : 0));
+		FormatEx(itemBuffer, sizeof(itemBuffer), "%s (HP: %d) - Cost: %d", modelName, maxHealth, (g_iAllFree == 0 ? g_PropDefs[i].cost : 0));
 		IntToString(i, indexStr, sizeof(indexStr));
 		propMenu.AddItem(indexStr, itemBuffer);
 	}
@@ -1822,13 +1855,18 @@ void OpenPropSelectionMenu(int client) {
 
 	propMenu.AddItem("98", "Open shop menu (Cycle Firemode)");
 
+
 	if (g_iAllFree == 0) {
 		for (int i = 0; i < PROP_COUNT; i++) {
 			if (HasEnoughResources(client, g_PropDefs[i].cost))
 				continue;
 
+			int maxHealth = g_PropDefs[i].health;
+			if (maxHealth < 1)
+				maxHealth = PROP_HEALTH;
+
 			GetModelName(g_PropDefs[i].model, modelName, sizeof(modelName));
-			FormatEx(itemBuffer, sizeof(itemBuffer), "%s - Cost: %d (Can't afford)", modelName, g_PropDefs[i].cost);
+			FormatEx(itemBuffer, sizeof(itemBuffer), "%s (HP: %d) - Cost: %d (Can't afford)", modelName, maxHealth, g_PropDefs[i].cost);
 			IntToString(i, indexStr, sizeof(indexStr));
 			propMenu.AddItem(indexStr, itemBuffer, ITEMDRAW_DISABLED);
 		}
@@ -1904,7 +1942,11 @@ void OpenRotationMenu(int client) {
 	ga_bPropRotateMenuOpen[client] = true;
 
 	Menu rotationMenu = new Menu(RotationMenuHandler);
-	rotationMenu.SetTitle("Rotation");
+	float step = ga_fPropRotateStep[client];
+	if (step <= 0.0)
+		step = PROP_ROTATE_STEP;
+
+	rotationMenu.SetTitle("Rotation\nStep: %.1f°", step);
 
 	rotationMenu.AddItem("y+", "+Yaw");
 	rotationMenu.AddItem("y-", "-Yaw");
@@ -1913,9 +1955,130 @@ void OpenRotationMenu(int client) {
 	rotationMenu.AddItem("z+", "+Roll");
 	rotationMenu.AddItem("z-", "-Roll");
 	rotationMenu.AddItem("reset", "Reset Rotation");
+	rotationMenu.AddItem("spacer", " ", ITEMDRAW_DISABLED | ITEMDRAW_SPACER);
+
+	char stepItem[64];
+	FormatEx(stepItem, sizeof(stepItem), "Rotation step: %.1f° (change)", step);
+	rotationMenu.AddItem("rotstep", stepItem);
 
 	rotationMenu.ExitBackButton = false;
 	rotationMenu.Display(client, 60);
+}
+
+static bool IsValidRotateStep(float step)
+{
+	int deg = RoundToNearest(step);
+	if (FloatAbs(step - float(deg)) > 0.01)
+		return false;
+	if (deg < 5 || deg > 180)
+		return false;
+	if ((deg % 5) != 0)
+		return false;
+	return true;
+}
+
+static float BM_NormalizeAngle360(float ang)
+{
+	ang -= 360.0 * float(RoundToFloor(ang / 360.0));
+	if (ang < 0.0)
+		ang += 360.0;
+	return ang;
+}
+
+static void LoadRotateStepCookie(int client)
+{
+	if (g_hCookiePropRotateStep == null)
+		return;
+	if (client < 1 || client > MaxClients || IsFakeClient(client))
+		return;
+	if (!AreClientCookiesCached(client))
+		return;
+
+	char s[16];
+	GetClientCookie(client, g_hCookiePropRotateStep, s, sizeof(s));
+
+	float step = StringToFloat(s);
+	if (!IsValidRotateStep(step))
+		step = PROP_ROTATE_STEP;
+
+	ga_fPropRotateStep[client] = step;
+}
+
+static void SaveRotateStepCookie(int client)
+{
+	if (g_hCookiePropRotateStep == null)
+		return;
+	if (client < 1 || client > MaxClients || IsFakeClient(client))
+		return;
+
+	char s[16];
+	FormatEx(s, sizeof(s), "%.2f", ga_fPropRotateStep[client]);
+	SetClientCookie(client, g_hCookiePropRotateStep, s);
+}
+
+void OpenRotateStepMenu(int client)
+{
+	Menu m = new Menu(RotateStepMenuHandler);
+
+	float cur = ga_fPropRotateStep[client];
+	if (!IsValidRotateStep(cur))
+		cur = PROP_ROTATE_STEP;
+
+	m.SetTitle("Rotation step\nCurrent: %.0f°", cur);
+
+	int curDeg = RoundToNearest(cur);
+
+	char info[16], disp[64];
+
+	for (int deg = 5; deg <= 180; deg += 5)
+	{
+		IntToString(deg, info, sizeof(info));
+
+		if (deg == curDeg)
+		{
+			FormatEx(disp, sizeof(disp), "%d° (current)", deg);
+			m.AddItem(info, disp, ITEMDRAW_DISABLED);
+		}
+		else
+		{
+			FormatEx(disp, sizeof(disp), "%d°", deg);
+			m.AddItem(info, disp);
+		}
+	}
+
+	m.ExitBackButton = true;
+	m.Display(client, MENU_STAYOPENTIME);
+}
+
+public int RotateStepMenuHandler(Menu menu, MenuAction action, int client, int param) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Select)
+	{
+		char info[16];
+		menu.GetItem(param, info, sizeof(info));
+
+		int deg = StringToInt(info);
+		float step = float(deg);
+
+		if (!IsValidRotateStep(step))
+		{
+			PrintToChat(client, "Invalid rotation step.");
+			OpenRotationMenu(client);
+			return 0;
+		}
+
+		ga_fPropRotateStep[client] = step;
+		SaveRotateStepCookie(client);
+
+		PrintToChat(client, "Rotation step set to %d°.", deg);
+		OpenRotationMenu(client);
+	}
+	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients) {
+		if (param == MenuCancel_ExitBack)
+			OpenRotationMenu(client);
+	}
+	return 0;
 }
 
 public int RotationMenuHandler(Menu menu, MenuAction action, int client, int param) {
@@ -1931,6 +2094,12 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 			return 0;
 		if (style & ITEMDRAW_DISABLED)
 			return 0;
+
+		if (strcmp(item, "rotstep", false) == 0) {
+			OpenRotateStepMenu(client);
+			return 0;
+		}
+
 		int ent = EntRefToEntIndex(ga_iPropHolding[client]);
 		if (ent <= MaxClients || !IsValidEntity(ent))
 			return 0;
@@ -1938,20 +2107,31 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 		float vRot[3];
 		GetEntPropVector(ent, Prop_Send, "m_angRotation", vRot);
 
+		float step = ga_fPropRotateStep[client];
+		if (step <= 0.0)
+			step = PROP_ROTATE_STEP;
+
 		if (strcmp(item, "y+") == 0)
-			vRot[1] += PROP_ROTATE_STEP;
+			vRot[1] += step;
 		else if (strcmp(item, "y-") == 0)
-			vRot[1] -= PROP_ROTATE_STEP;
+			vRot[1] -= step;
 		else if (strcmp(item, "x+") == 0)
-			vRot[0] += PROP_ROTATE_STEP;
+			vRot[0] += step;
 		else if (strcmp(item, "x-") == 0)
-			vRot[0] -= PROP_ROTATE_STEP;
+			vRot[0] -= step;
 		else if (strcmp(item, "z+") == 0)
-			vRot[2] += PROP_ROTATE_STEP;
+			vRot[2] += step;
 		else if (strcmp(item, "z-") == 0)
-			vRot[2] -= PROP_ROTATE_STEP;
-		else if (strcmp(item, "reset") == 0)
-			{ vRot[0] = 0.0; vRot[1] = 0.0; vRot[2] = 0.0; }
+			vRot[2] -= step;
+		else if (strcmp(item, "reset") == 0) {
+			vRot[0] = 0.0;
+			vRot[1] = 0.0;
+			vRot[2] = 0.0;
+		}
+
+		vRot[0] = BM_NormalizeAngle360(vRot[0]);
+		vRot[1] = BM_NormalizeAngle360(vRot[1]);
+		vRot[2] = BM_NormalizeAngle360(vRot[2]);
 
 		SetEntPropVector(ent, Prop_Send, "m_angRotation", vRot);
 
