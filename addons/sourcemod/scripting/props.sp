@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <clientprefs>
 
-#define PL_VERSION		"2.29"
+#define PL_VERSION		"2.30"
 
 #define MAXENTITIES		2048
 
@@ -164,6 +164,8 @@ int		ga_iPropHolding[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
 int		ga_iHoldHp[MAXPLAYERS + 1];
 int		ga_iHoldMaxHp[MAXPLAYERS + 1];
 int		ga_iLastButtons[MAXPLAYERS + 1];
+
+int		g_iOffLaggedMovementValue = -1;
 int		ga_iLastInflictor[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
 int		ga_iEntIdBipodDeployedOn[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
 int		ga_iPlayerBuildPoints[MAXPLAYERS + 1] = {STARTBUILDPOINTS, ...};
@@ -304,6 +306,8 @@ public void OnPluginStart()
 			SetModelIndex(i);
 		}
 	}
+
+	g_iOffLaggedMovementValue = FindSendPropInfo("CBasePlayer", "m_flLaggedMovementValue");
 }
 
 public void OnMapStart()
@@ -569,6 +573,14 @@ void HoldProp(int client) {
 	GetClientEyeAngles(client, vAng);
 	GetPositionInFront(vPos, vAng, PROP_HOLD_DISTANCE);
 	CreateProp(client, vPos, NULL_VECTOR);
+}
+
+static void TouchLaggedMovementValue(int client)
+{
+	if (g_iOffLaggedMovementValue <= 0)
+		return;
+	float cur = GetEntDataFloat(client, g_iOffLaggedMovementValue);
+	SetEntDataFloat(client, g_iOffLaggedMovementValue, cur, true);
 }
 
 void StopHolding(int client, bool now = false) {
@@ -932,6 +944,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 			SetEntityRenderMode(prop, RENDER_TRANSCOLOR);
 			SetEntityRenderColor(prop, 255, 255, 255, PROP_ALPHA);
 			ga_iPropHolding[client] = EntIndexToEntRef(prop);
+			TouchLaggedMovementValue(client);
 
 			if (ga_iPropOwner[client] > 0 && IsClientInGame(ga_iPropOwner[client])) {
 				char modelName[64];
@@ -1854,7 +1867,6 @@ void OpenPropSelectionMenu(int client) {
 		propMenu.AddItem("99", "Deconstruct all props");
 
 	propMenu.AddItem("98", "Open shop menu (Cycle Firemode)");
-
 
 	if (g_iAllFree == 0) {
 		for (int i = 0; i < PROP_COUNT; i++) {
