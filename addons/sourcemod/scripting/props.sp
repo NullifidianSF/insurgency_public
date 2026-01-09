@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <clientprefs>
 
-#define PL_VERSION		"2.30"
+#define PL_VERSION		"2.31"
 
 #define MAXENTITIES		2048
 
@@ -724,6 +724,10 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			return;
 
 		if (ga_iPropHolding[client] == INVALID_ENT_REFERENCE) {
+			if (GetClientButtons(client) & BTN_SPRINT) {
+				PrintCenterText(client, "You can't pick up props while sprinting.");
+				return;
+			}
 			int target = GetClientAimTarget(client, false);
 
 			if (target <= MaxClients || !IsValidEntity(target))
