@@ -103,6 +103,8 @@ ConVar		g_cvAllFree = null;
 Handle		g_hCookiePropRotateStep = null;
 float		ga_fPropRotateStep[MAXPLAYERS + 1] = {PROP_ROTATE_STEP, ...};
 
+Handle		g_hTipTimer = null;
+
 #define NUM_WIRESOUNDS 3
 char ga_sBarbWire[NUM_WIRESOUNDS][] = {
 	"doi/dynamic/barbedwire_stress_01.ogg",
@@ -260,13 +262,13 @@ public void OnPluginStart()
 
 	HookEvent("player_death",      Event_PlayerDeath_Pre, EventHookMode_Pre);
 	HookEvent("round_start",       Event_RoundStart);
-	HookEvent("player_spawn",      Event_PlayerSpawn);     // NEW: resupply counter init
+	HookEvent("player_spawn",      Event_PlayerSpawn);
 	HookEvent("player_pick_squad", Event_PlayerPickSquad);
 	HookEvent("object_destroyed",  Event_ObjectiveDone, EventHookMode_PostNoCopy);
 	HookEvent("controlpoint_captured", Event_ObjectiveDone, EventHookMode_PostNoCopy);
 
 	RegConsoleCmd("prophelp",           cmd_prophelp, "Open help menu.");
-	RegConsoleCmd("inventory_resupply", cmd_inventory_resupply); // NEW
+	RegConsoleCmd("inventory_resupply", cmd_inventory_resupply);
 
 	if (g_bLateLoad)
 	{
@@ -283,10 +285,10 @@ public void OnPluginStart()
 			ga_bMattressDeath[i]          = false;
 			ga_iMattressKiller[i]         = 0;
 
-			ga_bAmmoBagResupply[i]       = false;              // NEW
-			ga_iResupplyCounter[i]       = g_iResupplyDelay;   // NEW
-			ga_iResupplyCooldown[i]      = 0;                  // NEW
-			for (int ent = MaxClients + 1; ent <= MAXENTITIES; ent++) // NEW
+			ga_bAmmoBagResupply[i]       = false;
+			ga_iResupplyCounter[i]       = g_iResupplyDelay;
+			ga_iResupplyCooldown[i]      = 0;
+			for (int ent = MaxClients + 1; ent <= MAXENTITIES; ent++)
 				ga_iPlayerUsedAmmoBagRef[i][ent] = INVALID_ENT_REFERENCE;
 
 			if (IsFakeClient(i))
@@ -312,6 +314,7 @@ public void OnPluginStart()
 			SetModelIndex(i);
 		}
 
+		EnsureTipTimer();
 		RebuildAmmoCacheIcons();
 	}
 
@@ -330,7 +333,7 @@ public void OnMapStart()
 	for (int i = 0; i <= MAXENTITIES; i++)
 	{
 		ga_fWireSoundCooldown[i] = 0.0;
-		ga_iAmmoAmount[i]        = 0;    // NEW
+		ga_iAmmoAmount[i]        = 0;
 		ga_iAmmoIconHolderRef[i] = INVALID_ENT_REFERENCE;
 		ga_iAmmoIconSpriteRef[i] = INVALID_ENT_REFERENCE;
 	}
@@ -342,10 +345,10 @@ public void OnMapStart()
 
 	JC_ScheduleNext(15.0);
 
-	FindAndSetResupplyConvars();                                     // NEW
-	CreateTimer(1.0, Timer_AmmoResupply, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE); // NEW
+	FindAndSetResupplyConvars();
+	CreateTimer(1.0, Timer_AmmoResupply, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 
-	for (int client = 1; client <= MaxClients; client++)             // NEW
+	for (int client = 1; client <= MaxClients; client++)
 	{
 		ga_bAmmoBagResupply[client] = false;
 		ga_iResupplyCounter[client] = g_iResupplyDelay;
@@ -379,7 +382,6 @@ public void OnClientPostAdminCheck(int client)
 	ga_bMattressDeath[client]          = false;
 	ga_iMattressKiller[client]         = 0;
 
-	// NEW: ammo cache state
 	ga_bAmmoBagResupply[client] = false;
 	ga_iResupplyCounter[client] = g_iResupplyDelay;
 	ga_iResupplyCooldown[client] = 0;
@@ -482,6 +484,9 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 		ga_bJustPlaced[i] = false;
 		RestoreBuildPoints(i);
 	}
+
+	EnsureTipTimer();
+
 	return Plugin_Continue;
 }
 
@@ -2480,12 +2485,51 @@ bool hasCorrectWeapon(const char[] sWeapon)
 	return false;
 }
 
+static bool HasAnyHumans() {
+	for (int i = 1; i <= MaxClients; i++)
+		if (IsClientInGame(i) && !IsFakeClient(i))
+			return true;
+	return false;
+}
+
+static void EnsureTipTimer() {
+	if (g_hTipTimer != null) return;
+	if (!HasAnyHumans()) return;
+
+	float delay = GetRandomFloat(600.0, 1200.0);
+	g_hTipTimer = CreateTimer(delay, Timer_BuildTip, _, TIMER_FLAG_NO_MAPCHANGE);
+}
+
+static void KillTipTimer() {
+	if (g_hTipTimer != null) {
+		CloseHandle(g_hTipTimer);
+		g_hTipTimer = null;
+	}
+}
+
+public Action Timer_BuildTip(Handle timer, any data) {
+	g_hTipTimer = null;
+
+	if (HasAnyHumans()) {
+		BroadcastBuildTip();
+		EnsureTipTimer();
+	}
+	return Plugin_Stop;
+}
+
+static void BroadcastBuildTip() {
+	PrintToChatAll("\x04Build:\x01 With your knife out, press \x03secondary fire\x01 / \x03bipod\x01 to open the build menu.");
+	PrintToChatAll("\x04Menu keys not working?\x01 In the game console: \x03bind 5 slot5\x01 (use any key + slot5..slot9).");
+}
+
 public void OnMapEnd() {
 	JC_Stop();
 	if (g_hJammers != null) {
 		delete g_hJammers;
 		g_hJammers = null;
 	}
+
+	KillTipTimer();
 }
 
 public void OnPluginEnd() {
@@ -2515,6 +2559,8 @@ public void OnPluginEnd() {
 	ServerCommand("mp_player_resupply_coop_grace %d", g_iDefaultResupplyGrace);
 	ServerCommand("mp_player_resupply_coop_grace_initial %d", g_iDefaultResupplyGraceInitial);
 	ServerCommand("mp_player_resupply_coop_penalty_reset %d", g_iDefaultResupplyPenaltyReset);
+
+	KillTipTimer();
 }
 
 void SetupConVars() {
