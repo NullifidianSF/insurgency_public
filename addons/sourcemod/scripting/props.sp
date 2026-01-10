@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <clientprefs>
 
-#define PL_VERSION		"2.31"
+#define PL_VERSION		"2.32"
 
 #define MAXENTITIES		2048
 
@@ -65,6 +65,10 @@
 #define SND_SUPPLYREFUND		"ui/receivedsupply.wav"
 #define SND_BUYBUILDPOINTS		"ui/menu_click.wav"
 #define SND_CANTBUY				"ui/vote_no.wav"
+
+#define AMMO_CACHE_MODEL		"models/sernix/ammo_cache/ammo_cache_small.mdl"
+#define AMMO_ICON_SPRITE		"sprites/bm/ammobag.vmt"
+#define AMMO_ICON_ZOFFSET		38.0
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
@@ -152,7 +156,7 @@ static const PropDef g_PropDefs[] = {
 	{ "models/static_props/container_01_open2.mdl",			6, true, PROP_HEALTH },
 	{ "models/embassy/embassy_center_02.mdl",				8, true, 8000 },
 	{ "models/sernix/ied_jammer/ied_jammer.mdl",			5, false, 1000 },
-	{ "models/sernix/ammo_cache/ammo_cache_small.mdl",		8, false, 1000 }
+	{ AMMO_CACHE_MODEL,										8, false, 1000 }
 };
 
 #define PROP_COUNT (sizeof(g_PropDefs))
@@ -201,6 +205,7 @@ float	ga_fShopMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
 float	ga_fWireSoundCooldown[MAXENTITIES + 1] = {0.0, ...};
 
 float	g_fAmmoResupplyRange;
+float	g_fAmmoResupplyRangeSqr;
 int		g_iAmmoAmount;
 int		g_iResupplyDelay;
 bool	g_bAmmoOnce;
@@ -208,6 +213,8 @@ bool	g_bAmmoOnce;
 int		ga_iResupplyCounter[MAXPLAYERS + 1];
 int		ga_iResupplyCooldown[MAXPLAYERS + 1];
 int		ga_iAmmoAmount[MAXENTITIES + 1];
+int		ga_iAmmoIconHolderRef[MAXENTITIES + 1];
+int		ga_iAmmoIconSpriteRef[MAXENTITIES + 1];
 int		ga_iPlayerUsedAmmoBagRef[MAXPLAYERS + 1][MAXENTITIES + 1];
 bool	ga_bAmmoBagResupply[MAXPLAYERS + 1] = {false, ...};
 
@@ -225,7 +232,7 @@ ConVar	g_cvAmmoOnce = null;
 
 public Plugin myinfo = {
 	name = "props",
-	author = "Nullifidian, ChatGPT & Owned|Myself",
+	author = "Nullifidian, ChatGPT, Owned|Myself, Linothorax",
 	description = "Spawn props",
 	version = PL_VERSION,
 	url = ""
@@ -247,8 +254,7 @@ public void OnPluginStart()
 		return;
 	}
 
-	SetupConVars();          // your existing props convars
-	SetupAmmoConVars();      // NEW: ammo cache convars
+	SetupConVars();
 
 	g_hCookiePropRotateStep = RegClientCookie("bm_prop_rotate_step", "Props: rotation step (degrees)", CookieAccess_Private);
 
@@ -305,9 +311,16 @@ public void OnPluginStart()
 			SDKHook(i, SDKHook_WeaponSwitchPost, Hook_WeaponSwitch);
 			SetModelIndex(i);
 		}
+
+		RebuildAmmoCacheIcons();
 	}
 
 	g_iOffLaggedMovementValue = FindSendPropInfo("CBasePlayer", "m_flLaggedMovementValue");
+
+	char sBuffer[PLATFORM_MAX_PATH];
+	GetPluginFilename(INVALID_HANDLE, sBuffer, sizeof(sBuffer));
+	ReplaceString(sBuffer, sizeof(sBuffer), ".smx", "", false);
+	AutoExecConfig(true, sBuffer);
 }
 
 public void OnMapStart()
@@ -318,6 +331,8 @@ public void OnMapStart()
 	{
 		ga_fWireSoundCooldown[i] = 0.0;
 		ga_iAmmoAmount[i]        = 0;    // NEW
+		ga_iAmmoIconHolderRef[i] = INVALID_ENT_REFERENCE;
+		ga_iAmmoIconSpriteRef[i] = INVALID_ENT_REFERENCE;
 	}
 
 	if (g_hJammers != null)
@@ -339,6 +354,8 @@ public void OnMapStart()
 		for (int ent = MaxClients + 1; ent <= MAXENTITIES; ent++)
 			ga_iPlayerUsedAmmoBagRef[client][ent] = INVALID_ENT_REFERENCE;
 	}
+
+	UpdateAmmoRangeCache();
 }
 
 public void OnClientPostAdminCheck(int client)
@@ -728,6 +745,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 				PrintCenterText(client, "You can't pick up props while sprinting.");
 				return;
 			}
+			
 			int target = GetClientAimTarget(client, false);
 
 			if (target <= MaxClients || !IsValidEntity(target))
@@ -739,7 +757,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			if (StrContains(sName, "bmprop_c#", true) != -1) {
 				char sModelName[PLATFORM_MAX_PATH];
 				GetEntPropString(target, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
-				if (strcmp(sModelName, "models/sernix/ammo_cache/ammo_cache_small.mdl") == 0)
+				if (strcmp(sModelName, AMMO_CACHE_MODEL) == 0)
 					return;
 
 				if (IsPlayerOnProp(client)) {
@@ -834,6 +852,112 @@ void OnButtonPress(int client, int button, float vel[3]) {
 	}
 }
 
+static void RemoveIcon(int prop) {
+	if (prop <= MaxClients || prop > MAXENTITIES)
+		return;
+
+	SafeKillRef(ga_iAmmoIconSpriteRef[prop]);
+	SafeKillRef(ga_iAmmoIconHolderRef[prop]);
+
+	ga_iAmmoIconSpriteRef[prop] = INVALID_ENT_REFERENCE;
+	ga_iAmmoIconHolderRef[prop] = INVALID_ENT_REFERENCE;
+}
+
+public Action Hook_SetTransmit_AmmoIcon(int entity, int client) {
+	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
+		return Plugin_Handled;
+
+	float vOrigin[3];
+	float vClient[3];
+
+	GetEntPropVector(entity, Prop_Data, "m_vecAbsOrigin", vOrigin);
+	GetClientAbsOrigin(client, vClient);
+
+	if (GetVectorDistance(vOrigin, vClient, true) > g_fAmmoResupplyRangeSqr)
+		return Plugin_Handled;
+
+	return Plugin_Continue;
+}
+
+static void CreateIcon(int prop) {
+	if (prop <= MaxClients || prop > MAXENTITIES || !IsValidEntity(prop))
+		return;
+
+	RemoveIcon(prop);
+
+	PrecacheModel(AMMO_ICON_SPRITE, true);
+
+	float vPos[3];
+	GetEntPropVector(prop, Prop_Send, "m_vecOrigin", vPos);
+
+	float vSpritePos[3];
+	vSpritePos[0] = vPos[0];
+	vSpritePos[1] = vPos[1];
+	vSpritePos[2] = vPos[2] + AMMO_ICON_ZOFFSET;
+
+	// Holder isolates the sprite from any glow effects on the prop itself.
+	int holder = CreateEntityByName("info_target");
+	if (holder == -1)
+		return;
+
+	DispatchSpawn(holder);
+	TeleportEntity(holder, vPos, NULL_VECTOR, NULL_VECTOR);
+
+	SetVariantString("!activator");
+	AcceptEntityInput(holder, "SetParent", prop, holder);
+
+	int sprite = CreateEntityByName("env_sprite");
+	if (sprite == -1) {
+		SafeKillIdx(holder);
+		return;
+	}
+
+	DispatchKeyValue(sprite, "model", AMMO_ICON_SPRITE);
+	DispatchKeyValue(sprite, "spawnflags", "1");
+	DispatchKeyValue(sprite, "scale", "0.25");
+	DispatchKeyValue(sprite, "rendermode", "1");
+	DispatchKeyValue(sprite, "renderamt", "255");
+	DispatchKeyValue(sprite, "rendercolor", "255 255 255");
+	DispatchSpawn(sprite);
+
+	TeleportEntity(sprite, vSpritePos, NULL_VECTOR, NULL_VECTOR);
+
+	SetVariantString("!activator");
+	AcceptEntityInput(sprite, "SetParent", holder, sprite);
+
+	SDKHook(sprite, SDKHook_SetTransmit, Hook_SetTransmit_AmmoIcon);
+
+	ga_iAmmoIconHolderRef[prop] = EntIndexToEntRef(holder);
+	ga_iAmmoIconSpriteRef[prop] = EntIndexToEntRef(sprite);
+}
+
+static void RebuildAmmoCacheIcons() {
+	char model[128];
+	char name[64];
+
+	for (int ent = MaxClients + 1; ent <= MAXENTITIES; ent++) {
+		if (!IsValidEntity(ent))
+			continue;
+
+		GetEntPropString(ent, Prop_Data, "m_ModelName", model, sizeof(model));
+		if (strcmp(model, AMMO_CACHE_MODEL, false) != 0)
+			continue;
+
+		GetEntPropString(ent, Prop_Data, "m_iName", name, sizeof(name));
+		if (StrContains(name, "bmprop_c#", true) == -1)
+			continue;
+
+		if (ga_iAmmoIconSpriteRef[ent] != INVALID_ENT_REFERENCE)
+			continue;
+
+		CreateIcon(ent);
+	}
+}
+
+static void UpdateAmmoRangeCache() {
+	g_fAmmoResupplyRangeSqr = g_fAmmoResupplyRange * g_fAmmoResupplyRange;
+}
+
 void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, bool solid = false) {
 	if (!IsPlayerOnGround(client)) {
 		PrintCenterText(client, "You cannot build a prop while falling!");
@@ -848,159 +972,190 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 		if (solid) {
 			PrintCenterText(client, "You don't have enough resources to build. Press 'Cycle Firemode' to open the shop menu.");
 			return;
-		}
-		else if (SetModelIndex(client)) {
+		} else if (SetModelIndex(client)) {
 			modelId = ga_iModelIndex[client];
 			mid = MID(modelId);
 			buildCost = g_PropDefs[mid].cost;
-		}
-		else {
+		} else {
 			PrintCenterText(client, "You don't have enough resources to build. Press 'Cycle Firemode' to open the shop menu.");
 			return;
 		}
 	}
 
 	int prop = CreateEntityByName("prop_dynamic_override");
-	if (prop != -1) {
-		DispatchKeyValue(prop, "physdamagescale", "0.0");
-		DispatchKeyValue(prop, "model", g_PropDefs[mid].model);
-		if (solid) {
-			char PropName[64];
-			DispatchKeyValue(prop, "solid", "6");
+	if (prop == -1) {
+		PrintCenterText(client, "Failed to create prop.");
+		return;
+	}
 
-			if (!ga_iPropOwner[client]) {
-				if (g_iAllFree != 1) {
-					int buildCostActual = g_PropDefs[mid].cost;
-					if (!HasEnoughResources(client, buildCostActual)) {
-						PrintCenterText(client, "Not enough resources.");
-						SafeKillIdx(prop);
-						return;
-					}
-					ga_iPlayerBuildPoints[client] -= buildCostActual;
+	bool bDoAmmoGlowAndIcon = false;
+	bool bDoJammerGlow = false;
+
+	DispatchKeyValue(prop, "physdamagescale", "0.0");
+	DispatchKeyValue(prop, "model", g_PropDefs[mid].model);
+
+	if (solid) {
+		char PropName[64];
+		DispatchKeyValue(prop, "solid", "6");
+
+		if (!ga_iPropOwner[client]) {
+			if (g_iAllFree != 1) {
+				int buildCostActual = g_PropDefs[mid].cost;
+				if (!HasEnoughResources(client, buildCostActual)) {
+					PrintCenterText(client, "Not enough resources.");
+					SafeKillIdx(prop);
+					return;
 				}
+				ga_iPlayerBuildPoints[client] -= buildCostActual;
+			}
 
+			ClearOldestPropIfLimitReached(client);
+
+			if (ga_hPropPlaced[client] == null)
+				ga_hPropPlaced[client] = new ArrayList();
+
+			ga_hPropPlaced[client].Push(EntIndexToEntRef(prop));
+			FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", client, mid);
+		} else {
+			if (ga_hPropPlaced[ga_iPropOwner[client]] != null) {
+				ga_hPropPlaced[ga_iPropOwner[client]].Push(EntIndexToEntRef(prop));
+				FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", ga_iPropOwner[client], mid);
+			} else {
 				ClearOldestPropIfLimitReached(client);
-				TeleportEntity(prop, vPos, ga_fPropRotations[client][mid], NULL_VECTOR);
 
 				if (ga_hPropPlaced[client] == null)
 					ga_hPropPlaced[client] = new ArrayList();
 
 				ga_hPropPlaced[client].Push(EntIndexToEntRef(prop));
 				FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", client, mid);
+				oldhealth = 0;
 			}
-			else {
-				TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
-
-				if (ga_hPropPlaced[ga_iPropOwner[client]] != null) {
-					ga_hPropPlaced[ga_iPropOwner[client]].Push(EntIndexToEntRef(prop));
-					FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", ga_iPropOwner[client], mid);
-				}
-				else {
-					ClearOldestPropIfLimitReached(client);
-
-					if (ga_hPropPlaced[client] == null)
-						ga_hPropPlaced[client] = new ArrayList();
-
-					ga_hPropPlaced[client].Push(EntIndexToEntRef(prop));
-					FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", client, mid);
-					oldhealth = 0;
-				}
-				ga_iPropOwner[client] = 0;
-			}
-
-			if (strcmp(g_PropDefs[mid].model, "models/sernix/ammo_cache/ammo_cache_small.mdl") == 0) {
-				SetVariantColor({255, 255, 102, 255});
-				SetEntityRenderMode(prop, RENDER_NORMAL);
-				SetEntityRenderColor(prop, 255, 255, 255, 255);
-				AcceptEntityInput(prop, "SetGlowColor");
-				SetEntProp(prop, Prop_Send, "m_bShouldGlow", true);
-				SetEntPropFloat(prop, Prop_Send, "m_flGlowMaxDist", 1600.0);
-				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
-			}
-			else if (strcmp(g_PropDefs[mid].model, "models/sernix/ied_jammer/ied_jammer.mdl") == 0) {
-				SetVariantColor({80, 210, 255, 255});
-				SetEntityRenderMode(prop, RENDER_NORMAL);
-				AcceptEntityInput(prop, "SetGlowColor");
-				SetEntProp(prop, Prop_Send, "m_bShouldGlow", true);
-				SetEntPropFloat(prop, Prop_Send, "m_flGlowMaxDist", 600.0);
-				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
-				JC_AddJammer(prop);
-			}
-			else if (strcmp(g_PropDefs[mid].model, "models/fortifications/barbed_wire_02b.mdl") == 0)
-				SDKHook(prop, SDKHook_Touch, SHook_OnTouchWire);
-			else if (strcmp(g_PropDefs[mid].model, "models/static_afghan/prop_interior_mattress_a.mdl") == 0)
-				SDKHook(prop, SDKHook_Touch, SHook_OnTouchMattress);
-			else
-				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
-
-			DispatchKeyValue(prop, "targetname", PropName);
-			SDKHook(prop, SDKHook_OnTakeDamage, PropOnTakeDamage);
-
-			if (ga_bPropRotateMenuOpen[client]) {
-				ClientCommand(client, "slot9");
-				ga_bPropRotateMenuOpen[client] = false;
-			}
+			ga_iPropOwner[client] = 0;
 		}
-		else {
-			DispatchKeyValue(prop, "solid", "0");
-			DispatchKeyValue(prop, "disableshadows", "1");
-			DispatchKeyValue(prop, "disableshadowdepth", "1");
-			SetEntityRenderMode(prop, RENDER_TRANSCOLOR);
-			SetEntityRenderColor(prop, 255, 255, 255, PROP_ALPHA);
-			ga_iPropHolding[client] = EntIndexToEntRef(prop);
-			TouchLaggedMovementValue(client);
 
-			if (ga_iPropOwner[client] > 0 && IsClientInGame(ga_iPropOwner[client])) {
-				char modelName[64];
-				GetModelName(g_PropDefs[mid].model, modelName, sizeof(modelName));
+		if (strcmp(g_PropDefs[mid].model, AMMO_CACHE_MODEL, false) == 0) {
+			bDoAmmoGlowAndIcon = true;
+			SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
+		} else if (strcmp(g_PropDefs[mid].model, "models/sernix/ied_jammer/ied_jammer.mdl", false) == 0) {
+			bDoJammerGlow = true;
+			SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
+		} else if (strcmp(g_PropDefs[mid].model, "models/fortifications/barbed_wire_02b.mdl", false) == 0) {
+			SDKHook(prop, SDKHook_Touch, SHook_OnTouchWire);
+		} else if (strcmp(g_PropDefs[mid].model, "models/static_afghan/prop_interior_mattress_a.mdl", false) == 0) {
+			SDKHook(prop, SDKHook_Touch, SHook_OnTouchMattress);
+		} else {
+			SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
+		}
 
-				int maxHealth = g_PropDefs[mid].health;
+		DispatchKeyValue(prop, "targetname", PropName);
+		SDKHook(prop, SDKHook_OnTakeDamage, PropOnTakeDamage);
+	} else {
+		DispatchKeyValue(prop, "solid", "0");
+		DispatchKeyValue(prop, "disableshadows", "1");
+		DispatchKeyValue(prop, "disableshadowdepth", "1");
+
+		SetEntityRenderMode(prop, RENDER_TRANSCOLOR);
+		SetEntityRenderColor(prop, 255, 255, 255, PROP_ALPHA);
+
+		ga_iPropHolding[client] = EntIndexToEntRef(prop);
+		TouchLaggedMovementValue(client);
+	}
+
+	DispatchSpawn(prop);
+
+	if (solid) {
+		if (!ga_iPropOwner[client])
+			TeleportEntity(prop, vPos, ga_fPropRotations[client][mid], NULL_VECTOR);
+		else
+			TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
+
+		if (ga_bPropRotateMenuOpen[client]) {
+			ClientCommand(client, "slot9");
+			ga_bPropRotateMenuOpen[client] = false;
+		}
+	} else {
+		if (ga_iPropOwner[client] > 0 && IsClientInGame(ga_iPropOwner[client])) {
+			char modelName[64];
+			GetModelName(g_PropDefs[mid].model, modelName, sizeof(modelName));
+
+			int maxHealth = g_PropDefs[mid].health;
 			if (maxHealth < 1)
 				maxHealth = PROP_HEALTH;
 
-				int hp = (oldhealth > 0) ? oldhealth : maxHealth;
-				if (hp > maxHealth)
-					hp = maxHealth;
-				else if (hp < 0)
-					hp = 0;
-				ga_iHoldHp[client] = hp;
-				ga_iHoldMaxHp[client] = maxHealth;
+			int hp = (oldhealth > 0) ? oldhealth : maxHealth;
+			if (hp > maxHealth)
+				hp = maxHealth;
+			else if (hp < 0)
+				hp = 0;
 
-				TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
-				PrintCenterText(client, "%s built by: %N\nHealth: %d/%d", modelName, ga_iPropOwner[client], hp, maxHealth);
-				OpenRotationMenu(client);
-			}
-			else
-				TeleportEntity(prop, vPos, ga_fPropRotations[client][mid], NULL_VECTOR);
-		}
-
-		DispatchSpawn(prop);
-		SetEntityMoveType(prop, MOVETYPE_NONE);
-		SetEntProp(prop, Prop_Data, "m_takedamage", DAMAGE_YES);
-
-		int maxHealth = g_PropDefs[mid].health;
-		if (maxHealth < 1)
-			maxHealth = PROP_HEALTH;
-
-		SetEntProp(prop, Prop_Data, "m_iMaxHealth", maxHealth);
-
-		if (oldhealth > 0) {
-			if (oldhealth > maxHealth)
-				oldhealth = maxHealth;
-
-			SetEntProp(prop, Prop_Data, "m_iHealth", oldhealth);
-			GlowLowHp(prop, oldhealth);
-		}
-		else
-			SetEntProp(prop, Prop_Data, "m_iHealth", maxHealth);
-
-		if (!solid && ga_iPropHolding[client] != INVALID_ENT_REFERENCE && EntRefToEntIndex(ga_iPropHolding[client]) == prop) {
-			ga_iHoldHp[client] = GetEntProp(prop, Prop_Data, "m_iHealth");
+			ga_iHoldHp[client] = hp;
 			ga_iHoldMaxHp[client] = maxHealth;
+
+			TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
+			PrintCenterText(client, "%s built by: %N\nHealth: %d/%d", modelName, ga_iPropOwner[client], hp, maxHealth);
+
+			OpenRotationMenu(client);
+		} else {
+			TeleportEntity(prop, vPos, ga_fPropRotations[client][mid], NULL_VECTOR);
 		}
 	}
-	else
-		PrintCenterText(client, "Failed to create prop.");
+
+	SetEntityMoveType(prop, MOVETYPE_NONE);
+	SetEntProp(prop, Prop_Data, "m_takedamage", DAMAGE_YES);
+
+	int maxHealth = g_PropDefs[mid].health;
+	if (maxHealth < 1)
+		maxHealth = PROP_HEALTH;
+
+	SetEntProp(prop, Prop_Data, "m_iMaxHealth", maxHealth);
+
+	if (oldhealth > 0) {
+		if (oldhealth > maxHealth)
+			oldhealth = maxHealth;
+
+		SetEntProp(prop, Prop_Data, "m_iHealth", oldhealth);
+		GlowLowHp(prop, oldhealth);
+	} else {
+		SetEntProp(prop, Prop_Data, "m_iHealth", maxHealth);
+	}
+
+	if (!solid && ga_iPropHolding[client] != INVALID_ENT_REFERENCE && EntRefToEntIndex(ga_iPropHolding[client]) == prop) {
+		ga_iHoldHp[client] = GetEntProp(prop, Prop_Data, "m_iHealth");
+		ga_iHoldMaxHp[client] = maxHealth;
+	}
+
+	if (bDoAmmoGlowAndIcon) {
+		int col[4];
+		col[0] = 255;
+		col[1] = 255;
+		col[2] = 102;
+		col[3] = 255;
+
+		SetVariantColor(col);
+		SetEntityRenderMode(prop, RENDER_NORMAL);
+		SetEntityRenderColor(prop, 255, 255, 255, 255);
+		AcceptEntityInput(prop, "SetGlowColor");
+		SetEntProp(prop, Prop_Send, "m_bShouldGlow", true);
+		SetEntPropFloat(prop, Prop_Send, "m_flGlowMaxDist", 8000.0);
+
+		CreateIcon(prop);
+	}
+
+	if (bDoJammerGlow) {
+		int col[4];
+		col[0] = 80;
+		col[1] = 210;
+		col[2] = 255;
+		col[3] = 255;
+
+		SetVariantColor(col);
+		SetEntityRenderMode(prop, RENDER_NORMAL);
+		AcceptEntityInput(prop, "SetGlowColor");
+		SetEntProp(prop, Prop_Send, "m_bShouldGlow", true);
+		SetEntPropFloat(prop, Prop_Send, "m_flGlowMaxDist", 600.0);
+
+		JC_AddJammer(prop);
+	}
 }
 
 void ClearOldestPropIfLimitReached(int client) {
@@ -1260,6 +1415,8 @@ public void OnEntityDestroyed(int entity) {
 		return;
 
 	JC_RemoveJammer(entity);
+
+	RemoveIcon(entity);
 
 	int propOwner = GetPropOwner(entity);
 	if (propOwner < 1)
@@ -1536,7 +1693,7 @@ int FindValidProp_InDistance(int client)
 
 			// Check model is the small ammo cache only
 			GetEntPropString(ent, Prop_Data, "m_ModelName", model, sizeof(model));
-			if (strcmp(model, "models/sernix/ammo_cache/ammo_cache_small.mdl", false) != 0)
+			if (strcmp(model, AMMO_CACHE_MODEL, false) != 0)
 				continue;
 
 			// Distance check
@@ -1610,6 +1767,8 @@ void PrecacheFiles() {
 	PrecacheSound(SND_SUPPLYREFUND, true);
 	PrecacheSound(SND_BUYBUILDPOINTS, true);
 	PrecacheSound(SND_CANTBUY, true);
+
+	PrecacheModel(AMMO_ICON_SPRITE, true);
 }
 
 bool IsHoldingMeleeWeapon(int client) {
@@ -2362,53 +2521,41 @@ void SetupConVars() {
 	g_cvAllFree = CreateConVar("sm_props_allfree", "0", "Make all props free?; 0 - disabled, 1 - enabled", _, true, 0.0, true, 1.0);
 	g_iAllFree = g_cvAllFree.IntValue;
 	g_cvAllFree.AddChangeHook(OnConVarChanged);
-}
 
-void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
-	if (convar == g_cvAllFree)
-		g_iAllFree = g_cvAllFree.IntValue;
-}
-
-void SetupAmmoConVars() {
-	g_cvAmmoResupplyRange = CreateConVar("sm_ammo_resupply_range", "80",
+	g_cvAmmoResupplyRange = CreateConVar("sm_ammo_resupply_range", "100",
 		"Range to resupply near ammo cache");
 	g_fAmmoResupplyRange = g_cvAmmoResupplyRange.FloatValue;
-	g_cvAmmoResupplyRange.AddChangeHook(OnAmmoConVarChanged);
+	g_cvAmmoResupplyRange.AddChangeHook(OnConVarChanged);
 
 	g_cvAmmoAmount = CreateConVar("sm_ammo_resupply_amount", "4",
 		"How many resupplies an ammo cache holds");
 	g_iAmmoAmount = g_cvAmmoAmount.IntValue;
-	g_cvAmmoAmount.AddChangeHook(OnAmmoConVarChanged);
+	g_cvAmmoAmount.AddChangeHook(OnConVarChanged);
 
 	g_cvResupplyDelay = CreateConVar("sm_resupply_delay", "8",
 		"Delay (seconds) while holding reload to resupply");
 	g_iResupplyDelay = g_cvResupplyDelay.IntValue;
-	g_cvResupplyDelay.AddChangeHook(OnAmmoConVarChanged);
+	g_cvResupplyDelay.AddChangeHook(OnConVarChanged);
 
 	g_cvAmmoOnce = CreateConVar("sm_ammo_resupply_once", "1",
 		"If 1, players may only resupply once per ammo cache");
 	g_bAmmoOnce = g_cvAmmoOnce.BoolValue;
-	g_cvAmmoOnce.AddChangeHook(OnAmmoConVarChanged);
+	g_cvAmmoOnce.AddChangeHook(OnConVarChanged);
 }
 
-public void OnAmmoConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
-{
-	if (convar == g_cvAmmoResupplyRange)
-	{
+public void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
+	if (convar == g_cvAllFree)
+		g_iAllFree = g_cvAllFree.IntValue;
+	else if (convar == g_cvAmmoResupplyRange) {
 		g_fAmmoResupplyRange = g_cvAmmoResupplyRange.FloatValue;
+		UpdateAmmoRangeCache();
 	}
 	else if (convar == g_cvAmmoAmount)
-	{
 		g_iAmmoAmount = g_cvAmmoAmount.IntValue;
-	}
 	else if (convar == g_cvResupplyDelay)
-	{
 		g_iResupplyDelay = g_cvResupplyDelay.IntValue;
-	}
 	else if (convar == g_cvAmmoOnce)
-	{
 		g_bAmmoOnce = g_cvAmmoOnce.BoolValue;
-	}
 }
 
 void FindAndSetResupplyConvars() {
