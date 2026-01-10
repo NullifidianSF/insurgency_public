@@ -95,7 +95,6 @@ native bool Medic_IsClientMedic(int client);
 #define DRAG_IGNORE_MAX_SEC 	2.0		// Hard cap on “ignore this rag” cooldown (protects against cross-map time drift).
 										// If ignore exceeds this, it’s cleared immediately.
 
-
 #define DRAG_MEDIC_SPEED_MUL	1.5		// Medics move this much faster while dragging (multiplies current speed). Set to 1.0 to disable.
 
 // ----------------------
@@ -109,7 +108,6 @@ native bool Medic_IsClientMedic(int client);
 #define DRAG_DROP_TELE_AHEAD		0.0		// rescue teleport: how far in front of dropper
 #define DRAG_DROP_TELE_LIFT			20.0	// rescue teleport: how high above dropper feet before clamping
 #define DRAG_DROP_TELE_MIN_SEP		10.0	// rescue teleport: additional Z lift after clamping
-
 
 Handle	g_hPostDropTimer = null;
 int		g_iPostDropActive = 0;
@@ -144,7 +142,6 @@ int		g_iActiveDrags = 0;
 // Cached datamap offset (ragdoll teleport safety)
 int		g_iOffsPhysicsObject = -1;
 int		g_iOffsLaggedMovement = -1;	// CBasePlayer::m_flLaggedMovementValue (speed scaling)
-
 
 // --- NEW: ultra-light randomized tip pump (only when humans present) ---
 Handle	g_hTipTimer = null;
@@ -258,11 +255,6 @@ public void OnClientDisconnect(int client)
 	ga_bMedicDragSpeed[client] = false;
 	ga_fMedicDragSpeedBase[client] = 0.0;
 	ga_fMedicDragSpeedApplied[client] = 0.0;
-
-
-	// If the server is now empty, kill the tip pump so it does nothing while empty
-	if (!HasAnyHumans())
-		KillTipTimer();
 }
 
 public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast)
@@ -512,7 +504,6 @@ static void DragSpeed_Disable(int client)
 	ga_fMedicDragSpeedApplied[client] = 0.0;
 }
 
-
 static int FindDraggerForRag(int rag)
 {
 	for (int i = 1; i <= MaxClients; i++)
@@ -649,7 +640,6 @@ static void StartDragging(int client, bool viaCmd)
 
 	DragSpeed_Enable(client);
 }
-
 
 static void StopDragging(int client)
 {
