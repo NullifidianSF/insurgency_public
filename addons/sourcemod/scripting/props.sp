@@ -67,7 +67,7 @@
 #define SND_CANTBUY				"ui/vote_no.wav"
 
 #define AMMO_CACHE_MODEL		"models/sernix/ammo_cache/ammo_cache_small.mdl"
-#define AMMO_ICON_SPRITE		"sprites/bm/ammobag.vmt"
+#define AMMO_ICON_SPRITE		"sprites/bm/ammobag.vmt"	// https://steamcommunity.com/sharedfiles/filedetails/?id=1581225279
 #define AMMO_ICON_ZOFFSET		38.0
 
 #define TEAM_SPECTATOR	1
