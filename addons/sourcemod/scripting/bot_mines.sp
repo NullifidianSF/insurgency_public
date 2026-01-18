@@ -5,7 +5,7 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PLUGIN_VERSION		"3.5"
+#define PLUGIN_VERSION		"3.6"
 
 #define MAXENTITIES			2048
 #define ENTIDX_OK(%1)	((%1) > 0 && (%1) <= MAXENTITIES)
@@ -42,6 +42,8 @@ float ga_fMineLastPos[MAXENTITIES + 1][3];
 
 int g_iRoundStatus = 0;
 int g_iMaxMines;
+int g_iTriggeredMines = 0;
+
 int ga_iMineToView[MAXPLAYERS + 1] = {-1, ...};
 int ga_iConfirmedMisc[MAXPLAYERS + 1] = {-1, ...};
 int g_iDamage;
@@ -177,6 +179,9 @@ public void OnClientDisconnect(int client)
 		ResetMineStats(client);
 		ga_iMineToView[client] = -1;
 		ga_bAutoViewMine[client] = false;
+
+		if (g_iRoundStatus && ga_hMines.Length > 0 && g_iTriggeredMines > 0)
+			RequestFrame(Frame_CheckLastManMines, 0);
 	}
 }
 
@@ -189,6 +194,7 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 		SafeKillRef(ga_hMines.Get(i));
 	}
 	ga_hMines.Clear();
+	g_iTriggeredMines = 0;
 
 	StartRandomSpawnTimer();
 
@@ -212,6 +218,7 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 public Action Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
 {
 	g_iRoundStatus = 0;
+	g_iTriggeredMines = 0;
 	return Plugin_Continue;
 }
 
@@ -227,11 +234,15 @@ public Action Event_PlayerRespawn(Event event, const char[] name, bool dontBroad
 public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
-	if (client > 0)
+	if (client > 0 && client <= MaxClients && IsClientInGame(client) && !IsFakeClient(client))
 	{
 		if (ga_bPlayerHooked[client]) DamageHook(client, false);
+
 		if (GetEntProp(client, Prop_Send, "m_bGlowEnabled"))
 			SetEntProp(client, Prop_Send, "m_bGlowEnabled", false);
+
+		if (g_iRoundStatus && ga_hMines.Length > 0 && g_iTriggeredMines > 0)
+			RequestFrame(Frame_CheckLastManMines, 0);
 	}
 
 	if (event.GetInt("weaponid") == -1 && FloatAbs(GetGameTime() - g_fMineBreakTime) <= MINE_DEATH_WINDOW)
@@ -356,6 +367,28 @@ bool PosClearOfHumans(const float pos[3], float minDist)
 		GetClientAbsOrigin(i, p);
 		if (GetVectorDistance(pos, p) < minDist)
 			return false;
+	}
+	return true;
+}
+
+bool IsLastHumanOnTeam(int client)
+{
+	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client) || !IsPlayerAlive(client))
+		return false;
+
+	int team = GetClientTeam(client);
+	if (team <= 1)
+		return false;
+
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (i == client)
+			continue;
+		if (!IsClientInGame(i) || IsFakeClient(i) || !IsPlayerAlive(i))
+			continue;
+		if (GetClientTeam(i) != team)
+			continue;
+		return false;
 	}
 	return true;
 }
@@ -539,9 +572,21 @@ public Action Hook_StartTouch(int entity, int touch)
 
 	if (touch > 0 && touch <= MaxClients && IsClientInGame(touch) && !IsFakeClient(touch))
 	{
+		if (IsLastHumanOnTeam(touch))
+		{
+			RequestFrame(BreakNextFrame, EntIndexToEntRef(entity));
+			return Plugin_Continue;
+		}
+
 		if (GetRandomFloat(0.0, 1.0) <= g_fHelpChance)
 		{
-			if (ENTIDX_OK(entity)) ga_iTouchedBy[entity] = touch;
+			if (ENTIDX_OK(entity))
+			{
+				if (ga_iTouchedBy[entity] == 0)
+					g_iTriggeredMines++;
+				ga_iTouchedBy[entity] = touch;
+			}
+
 			ga_fPlayerOrgSpeed[touch] = GetEntPropFloat(touch, Prop_Send, "m_flLaggedMovementValue");
 			SetEntPropFloat(touch, Prop_Send, "m_flLaggedMovementValue", 0.0);
 
@@ -604,6 +649,29 @@ Action Timer_HelpMe(Handle timer, DataPack dPack)
 	return Plugin_Stop;
 }
 
+void Frame_CheckLastManMines(any data)
+{
+	if (!g_iRoundStatus || ga_hMines.Length == 0)
+		return;
+
+	for (int i = ga_hMines.Length - 1; i >= 0; i--)
+	{
+		int mine = EntRefToEntIndex(ga_hMines.Get(i));
+		if (mine == INVALID_ENT_REFERENCE || !IsValidEntity(mine))
+			continue;
+		if (!ENTIDX_OK(mine) || !ga_iTouchedBy[mine])
+			continue;
+
+		int victim = ga_iTouchedBy[mine];
+		if (victim < 1 || victim > MaxClients || !IsClientInGame(victim) || IsFakeClient(victim) || !IsPlayerAlive(victim))
+			continue;
+		if (!IsLastHumanOnTeam(victim))
+			continue;
+
+		RequestFrame(BreakNextFrame, EntIndexToEntRef(mine));
+	}
+}
+
 public Action Hook_OnTakeDamageBlock(int victim, int &attacker, int &inflictor, float &damage, int &damagetype)
 {
 	if (attacker < 1 || attacker > MaxClients || !IsClientInGame(attacker) || IsFakeClient(attacker))
@@ -646,6 +714,10 @@ void Mine_OnBreak(const char[] output, int caller, int activator, float delay)
 			if (GetEntProp(victim, Prop_Send, "m_bGlowEnabled"))
 				SetEntProp(victim, Prop_Send, "m_bGlowEnabled", false);
 		}
+		
+		if (ga_iTouchedBy[caller] > 0 && g_iTriggeredMines > 0)
+			g_iTriggeredMines--;
+
 		ga_iTouchedBy[caller] = 0;
 	}
 
@@ -904,6 +976,9 @@ void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue
 public void OnEntityDestroyed(int ent)
 {
 	if (!ENTIDX_OK(ent)) return;
+
+	if (ga_iTouchedBy[ent] > 0 && g_iTriggeredMines > 0)
+		g_iTriggeredMines--;
 
 	ga_iTouchedBy[ent] = 0;
 	ga_fMineSoundCooldown[ent] = 0.0;
