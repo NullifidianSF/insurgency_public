@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <clientprefs>
 
-#define PL_VERSION		"2.32"
+#define PL_VERSION		"2.33"
 
 #define MAXENTITIES		2048
 
@@ -969,6 +969,8 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 		return;
 	}
 
+	bool bMovingExisting = (ga_iPropOwner[client] > 0);
+
 	PropId modelId = ga_iModelIndex[client];
 	int mid = MID(modelId);
 	int buildCost = (g_iAllFree == 1) ? 0 : g_PropDefs[mid].cost;
@@ -1069,7 +1071,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 	DispatchSpawn(prop);
 
 	if (solid) {
-		if (!ga_iPropOwner[client])
+		if (!bMovingExisting)
 			TeleportEntity(prop, vPos, ga_fPropRotations[client][mid], NULL_VECTOR);
 		else
 			TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
@@ -1079,7 +1081,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 			ga_bPropRotateMenuOpen[client] = false;
 		}
 	} else {
-		if (ga_iPropOwner[client] > 0 && IsClientInGame(ga_iPropOwner[client])) {
+		if (bMovingExisting) {
 			char modelName[64];
 			GetModelName(g_PropDefs[mid].model, modelName, sizeof(modelName));
 
@@ -1097,9 +1099,14 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 			ga_iHoldMaxHp[client] = maxHealth;
 
 			TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
-			PrintCenterText(client, "%s built by: %N\nHealth: %d/%d", modelName, ga_iPropOwner[client], hp, maxHealth);
 
-			OpenRotationMenu(client);
+			int owner = ga_iPropOwner[client];
+			if (owner >= 1 && owner <= MaxClients && IsClientInGame(owner)) {
+				PrintCenterText(client, "%s built by: %N\nHealth: %d/%d", modelName, owner, hp, maxHealth);
+				OpenRotationMenu(client);
+			} else {
+				PrintCenterText(client, "%s\nHealth: %d/%d", modelName, hp, maxHealth);
+			}
 		} else {
 			TeleportEntity(prop, vPos, ga_fPropRotations[client][mid], NULL_VECTOR);
 		}
