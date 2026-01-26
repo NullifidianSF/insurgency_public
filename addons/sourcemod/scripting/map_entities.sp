@@ -34,13 +34,14 @@ public Plugin myinfo = {
 	name = "map_entities",
 	author = "Nullifidian + ChatGPT",
 	description = "remove or modify entities for some maps",
-	version = "3.0"
+	version = "3.1"
 };
 
 public void OnPluginStart() {
 	RegAdminCmd("sm_totalent", cmd_totalent, ADMFLAG_RCON, "Print total entities");
 	RegAdminCmd("sm_entstats", cmd_entstats, ADMFLAG_RCON, "List entity counts by classname.");
 	RegAdminCmd("sm_entdelete", cmd_entdelete, ADMFLAG_RCON, "Delete ents by classname with optional name/model filters");
+	RegAdminCmd("sm_entaiminfo", cmd_entaiminfo, ADMFLAG_RCON, "Dump info about the aimed entity to your console.");
 }
 
 public void OnPluginEnd() {
@@ -272,6 +273,304 @@ void RemoveEntities(const char[] sClass, const char[] sName = "") {
 public Action cmd_totalent(int client, int args) {
 	ReplyToCommand(client, "Total entities: %i", CountEnt());
 	return Plugin_Handled;
+}
+
+public Action cmd_entaiminfo(int client, int args) {
+	if (client < 1 || client > MaxClients || !IsClientInGame(client)) {
+		ReplyToCommand(client, "[map_entities] In-game clients only.");
+		return Plugin_Handled;
+	}
+
+	int ent = -1;
+
+	if (args >= 1) {
+		char sEnt[16];
+		GetCmdArg(1, sEnt, sizeof(sEnt));
+		ent = StringToInt(sEnt);
+	}
+	else {
+		ent = GetClientAimTarget(client, false);
+	}
+
+	if (ent <= 0 || !IsValidEntity(ent)) {
+		ReplyToCommand(client, "[map_entities] No valid entity targeted.");
+		return Plugin_Handled;
+	}
+
+	PrintEntAimInfo(client, ent);
+	ReplyToCommand(client, "[map_entities] Entity info dumped to your console (ent %d).", ent);
+	return Plugin_Handled;
+}
+
+static void MoveTypeToString(MoveType mt, char[] out, int maxlen) {
+	switch (mt) {
+		case MOVETYPE_NONE: strcopy(out, maxlen, "NONE");
+		case MOVETYPE_ISOMETRIC: strcopy(out, maxlen, "ISOMETRIC");
+		case MOVETYPE_WALK: strcopy(out, maxlen, "WALK");
+		case MOVETYPE_STEP: strcopy(out, maxlen, "STEP");
+		case MOVETYPE_FLY: strcopy(out, maxlen, "FLY");
+		case MOVETYPE_FLYGRAVITY: strcopy(out, maxlen, "FLYGRAVITY");
+		case MOVETYPE_VPHYSICS: strcopy(out, maxlen, "VPHYSICS");
+		case MOVETYPE_PUSH: strcopy(out, maxlen, "PUSH");
+		case MOVETYPE_NOCLIP: strcopy(out, maxlen, "NOCLIP");
+		case MOVETYPE_LADDER: strcopy(out, maxlen, "LADDER");
+		case MOVETYPE_OBSERVER: strcopy(out, maxlen, "OBSERVER");
+		default: strcopy(out, maxlen, "UNKNOWN");
+	}
+}
+
+static bool GetSendPropOffsetBits(int ent, const char[] prop, int &offs, int &bits) {
+	bits = 0;
+	offs = GetEntSendPropOffs(ent, prop);
+	return (offs > 0);
+}
+
+static bool GetDataMapOffset(int ent, const char[] prop, int &offs) {
+	offs = FindDataMapInfo(ent, prop);
+	return (offs > 0);
+}
+
+static bool DumpEntIntProp(int client, int ent, const char[] prop) {
+	bool printed = false;
+
+	if (HasEntProp(ent, Prop_Send, prop)) {
+		int v = GetEntProp(ent, Prop_Send, prop);
+		PrintToConsole(client, "send.%s = %d (0x%X)", prop, v, v);
+		printed = true;
+	}
+
+	if (HasEntProp(ent, Prop_Data, prop)) {
+		int v = GetEntProp(ent, Prop_Data, prop);
+		PrintToConsole(client, "data.%s = %d (0x%X)", prop, v, v);
+		printed = true;
+	}
+
+	return printed;
+}
+
+static bool DumpEntFloatProp(int client, int ent, const char[] prop) {
+	bool printed = false;
+
+	if (HasEntProp(ent, Prop_Send, prop)) {
+		int offs, bits;
+		if (GetSendPropOffsetBits(ent, prop, offs, bits)) {
+			int raw = GetEntData(ent, offs, 4);
+			float v = GetEntDataFloat(ent, offs);
+			PrintToConsole(client, "send.%s = %.6f (int=%d 0x%X bits=%d offs=%d)", prop, v, raw, raw, bits, offs);
+			printed = true;
+		}
+	}
+
+	if (HasEntProp(ent, Prop_Data, prop)) {
+		int offs;
+		if (GetDataMapOffset(ent, prop, offs)) {
+			int raw = GetEntData(ent, offs, 4);
+			float v = GetEntDataFloat(ent, offs);
+			PrintToConsole(client, "data.%s = %.6f (int=%d 0x%X offs=%d)", prop, v, raw, raw, offs);
+			printed = true;
+		}
+	}
+
+	return printed;
+}
+
+static bool DumpEntVectorProp(int client, int ent, const char[] prop) {
+	bool printed = false;
+
+	float v[3];
+
+	if (HasEntProp(ent, Prop_Send, prop)) {
+		GetEntPropVector(ent, Prop_Send, prop, v);
+		PrintToConsole(client, "send.%s = %.3f %.3f %.3f", prop, v[0], v[1], v[2]);
+		printed = true;
+	}
+
+	if (HasEntProp(ent, Prop_Data, prop)) {
+		GetEntPropVector(ent, Prop_Data, prop, v);
+		PrintToConsole(client, "data.%s = %.3f %.3f %.3f", prop, v[0], v[1], v[2]);
+		printed = true;
+	}
+
+	return printed;
+}
+
+static bool DumpEntStringProp(int client, int ent, PropType ptype, const char[] prop, const char[] prefix) {
+	if (!HasEntProp(ent, ptype, prop))
+		return false;
+
+	char buf[PLATFORM_MAX_PATH];
+	GetEntPropString(ent, ptype, prop, buf, sizeof(buf));
+	if (!buf[0])
+		return false;
+
+	PrintToConsole(client, "%s.%s = %s", prefix, prop, buf);
+	return true;
+}
+
+static void PrintEntAimInfo(int client, int ent) {
+	char cls[64];
+	GetEntityClassname(ent, cls, sizeof(cls));
+
+	char net[64];
+	net[0] = '\0';
+	GetEntityNetClass(ent, net, sizeof(net));
+
+	PrintToConsole(client, " ");
+	PrintToConsole(client, "==================== [ENT AIM INFO] ====================");
+	PrintToConsole(client, "entindex: %d", ent);
+	PrintToConsole(client, "classname: %s", cls);
+	PrintToConsole(client, "netclass: %s", net[0] ? net : "(n/a)");
+
+	if (ent >= 1 && ent <= MaxClients && IsClientInGame(ent)) {
+		char pname[64];
+		GetClientName(ent, pname, sizeof(pname));
+
+		char steam2[32]; steam2[0] = '\0';
+		char steam64[32]; steam64[0] = '\0';
+		GetClientAuthId(ent, AuthId_Steam2, steam2, sizeof(steam2), true);
+		GetClientAuthId(ent, AuthId_SteamID64, steam64, sizeof(steam64), true);
+
+		PrintToConsole(client, "player: %s", pname);
+		PrintToConsole(client, "userid: %d  team: %d  alive: %d  health: %d",
+			GetClientUserId(ent),
+			GetClientTeam(ent),
+			IsPlayerAlive(ent),
+			GetClientHealth(ent));
+		PrintToConsole(client, "steam2: %s", steam2[0] ? steam2 : "(n/a)");
+		PrintToConsole(client, "steam64: %s", steam64[0] ? steam64 : "(n/a)");
+	}
+
+	// targetname / model
+	DumpEntStringProp(client, ent, Prop_Data, "m_iName", "data");
+	DumpEntStringProp(client, ent, Prop_Data, "m_ModelName", "data");
+	DumpEntStringProp(client, ent, Prop_Send, "m_ModelName", "send");
+
+	// hammer id if present
+	if (HasEntProp(ent, Prop_Data, "m_iHammerID"))
+		PrintToConsole(client, "data.m_iHammerID = %d", GetEntProp(ent, Prop_Data, "m_iHammerID"));
+
+	// origin / angles
+	float org[3];
+	float ang[3];
+	bool hasOrg = false;
+	bool hasAng = false;
+
+	if (HasEntProp(ent, Prop_Send, "m_vecOrigin")) {
+		GetEntPropVector(ent, Prop_Send, "m_vecOrigin", org);
+		hasOrg = true;
+	}
+	else if (HasEntProp(ent, Prop_Data, "m_vecAbsOrigin")) {
+		GetEntPropVector(ent, Prop_Data, "m_vecAbsOrigin", org);
+		hasOrg = true;
+	}
+
+	if (HasEntProp(ent, Prop_Send, "m_angRotation")) {
+		GetEntPropVector(ent, Prop_Send, "m_angRotation", ang);
+		hasAng = true;
+	}
+	else if (HasEntProp(ent, Prop_Data, "m_angAbsRotation")) {
+		GetEntPropVector(ent, Prop_Data, "m_angAbsRotation", ang);
+		hasAng = true;
+	}
+
+	if (hasOrg)
+		PrintToConsole(client, "origin: %.3f %.3f %.3f", org[0], org[1], org[2]);
+	if (hasAng)
+		PrintToConsole(client, "angles: %.3f %.3f %.3f", ang[0], ang[1], ang[2]);
+
+	// distance from caller
+	if (hasOrg) {
+		float eye[3];
+		GetClientEyePosition(client, eye);
+
+		float dx = org[0] - eye[0];
+		float dy = org[1] - eye[1];
+		float dz = org[2] - eye[2];
+
+		float dist = SquareRoot(dx * dx + dy * dy + dz * dz);
+		PrintToConsole(client, "distance(from you): %.1f units (%.2f m)", dist, dist * 0.0254);
+	}
+
+	// bbox
+	if (HasEntProp(ent, Prop_Send, "m_vecMins") && HasEntProp(ent, Prop_Send, "m_vecMaxs")) {
+		float mins[3];
+		float maxs[3];
+		GetEntPropVector(ent, Prop_Send, "m_vecMins", mins);
+		GetEntPropVector(ent, Prop_Send, "m_vecMaxs", maxs);
+		PrintToConsole(client, "bbox mins: %.2f %.2f %.2f", mins[0], mins[1], mins[2]);
+		PrintToConsole(client, "bbox maxs: %.2f %.2f %.2f", maxs[0], maxs[1], maxs[2]);
+	}
+
+	// movetype / flags / render
+	MoveType mt = GetEntityMoveType(ent);
+	char mtStr[16];
+	MoveTypeToString(mt, mtStr, sizeof(mtStr));
+	PrintToConsole(client, "movetype: %d (%s)", mt, mtStr);
+
+	int flags = GetEntityFlags(ent);
+	PrintToConsole(client, "flags: 0x%X (%d)", flags, flags);
+
+	int r, g, b, a;
+	GetEntityRenderColor(ent, r, g, b, a);
+
+	RenderMode rm = GetEntityRenderMode(ent);
+	RenderFx fx = GetEntityRenderFx(ent);
+	PrintToConsole(client, "render: mode=%d fx=%d color=%d %d %d %d", rm, fx, r, g, b, a);
+
+	// owner / parent
+	if (HasEntProp(ent, Prop_Send, "m_hOwnerEntity"))
+		PrintToConsole(client, "send.m_hOwnerEntity = %d", GetEntPropEnt(ent, Prop_Send, "m_hOwnerEntity"));
+	if (HasEntProp(ent, Prop_Send, "m_hMoveParent"))
+		PrintToConsole(client, "send.m_hMoveParent = %d", GetEntPropEnt(ent, Prop_Send, "m_hMoveParent"));
+
+	PrintToConsole(client, "------------------- [common props] --------------------");
+
+	static const char g_IntProps[][] = {
+		"m_spawnflags",
+		"m_iTeamNum",
+		"m_iHealth",
+		"m_iMaxHealth",
+		"m_takedamage",
+		"m_nModelIndex",
+		"m_nSkin",
+		"m_nBody",
+		"m_fEffects",
+		"m_iEFlags",
+		"m_nRenderMode",
+		"m_nRenderFX",
+		"m_nSolidType",
+		"m_usSolidFlags",
+		"m_CollisionGroup",
+		"m_MoveCollide"
+	};
+
+	static const char g_FloatProps[][] = {
+		"m_flModelScale",
+		"m_flSimulationTime",
+		"m_flAnimTime"
+	};
+
+	static const char g_VecProps[][] = {
+		"m_vecVelocity",
+		"m_vecAbsVelocity",
+		"m_angAbsRotation",
+		"m_vecAbsOrigin"
+	};
+
+	for (int i = 0; i < sizeof(g_IntProps); i++)
+		DumpEntIntProp(client, ent, g_IntProps[i]);
+
+	for (int i = 0; i < sizeof(g_FloatProps); i++)
+		DumpEntFloatProp(client, ent, g_FloatProps[i]);
+
+	for (int i = 0; i < sizeof(g_VecProps); i++)
+		DumpEntVectorProp(client, ent, g_VecProps[i]);
+
+	// some extra strings (best-effort)
+	DumpEntStringProp(client, ent, Prop_Data, "m_iGlobalname", "data");
+	DumpEntStringProp(client, ent, Prop_Data, "m_iClassname", "data");
+
+	PrintToConsole(client, "========================================================");
 }
 
 int CountEnt() {
