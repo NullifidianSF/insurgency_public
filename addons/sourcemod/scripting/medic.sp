@@ -17,7 +17,7 @@ static int  g_iObjResEntity = -1;
 static char g_sObjResNetClass[32];
 
 //LUA Healing define values
-#define Healthkit_Timer_Tickrate			0.5		// Basic Sound has 0.8 loop
+#define Healthkit_Timer_Tickrate			0.5		// Basic Sound has 0.5 loop
 #define Healthkit_Timer_Timeout				300.0	// 5 minutes
 #define Healthkit_Radius					120.0
 #define Revive_Indicator_Radius				100.0
@@ -179,8 +179,8 @@ int		g_iColorHealRing[4];
 
 public Plugin myinfo = {
 	name = "medic",
-	author = "",
-	description = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & ChatGPT",
+	author = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & ChatGPT",
+	description = "Adds the ability to revive with the Medic class and a health kit.",
 	version = "1.0.6",
 	url = ""
 };
@@ -624,7 +624,6 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 	return Plugin_Continue;
 }
 
-
 // Convert dead body to new ragdoll
 void Frame_ConvertDeleteRagdoll(int userid) {
 	int client = GetClientOfUserId(userid);
@@ -817,10 +816,9 @@ void RespawnPlayerRevive(int client) {	// Revive player
 			iHealth = g_iMedicCriticalReviveHp;
 	} else
 		iHealth = g_iNonMedicReviveHp;
+
 	SetEntityHealth(client, iHealth);
-
 	RemoveRagdoll(client);	//Remove network ragdoll
-
 	RespawnPlayerRevivePost(client);
 }
 
@@ -970,7 +968,6 @@ Action Timer_ReviveMonitor(Handle timer) {
 
 	return Plugin_Continue;
 }
-
 
 // Handles medic functions (Inspecting health, healing)
 Action Timer_MedicMonitor(Handle timer) {
