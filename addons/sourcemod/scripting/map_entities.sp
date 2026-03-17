@@ -27,14 +27,15 @@ enum {
 	pipeline_coop,
 	ins_coastdawn_a3,
 	ins_prison_2020_new,
-	siege_coop
+	siege_coop,
+	nova_prospect
 };
 
 public Plugin myinfo = {
 	name = "map_entities",
 	author = "Nullifidian + ChatGPT",
 	description = "remove or modify entities for some maps",
-	version = "3.1"
+	version = "3.2"
 };
 
 public void OnPluginStart() {
@@ -124,6 +125,9 @@ public void OnMapStart() {
 	}
 	else if (strcmp(sMapName, "siege_coop", false) == 0) {
 		g_iMapId = siege_coop;
+	}
+	else if (strcmp(sMapName, "nova_prospect", false) == 0) {
+		g_iMapId = nova_prospect;
 	}
 	else if (g_bEventHooked) {
 		HookRoundStartEvent(false);
@@ -229,6 +233,10 @@ static void NF_ApplyRoundStartEdits(any mapIdAny) {
 		case siege_coop: {
 			RemoveEntities("func_door");
 		}
+		case nova_prospect: {
+			RemoveEntitiesByModel("prop_physics", "metal_panel01a");
+			RemoveEntitiesByModel("prop_physics", "oildrum001");
+		}
 	}
 }
 
@@ -268,6 +276,28 @@ void RemoveEntities(const char[] sClass, const char[] sName = "") {
 			PrintToServer("[map_entities] Didn't find: \"%s\"", sClass);
 		}
 	}
+}
+
+void RemoveEntitiesByModel(const char[] sClass, const char[] sModelSubstr) {
+	int iCount = 0, iEnt = -1;
+	char sTempModel[PLATFORM_MAX_PATH];
+
+	while ((iEnt = FindEntityByClassname(iEnt, sClass)) != -1) {
+		if (!HasEntProp(iEnt, Prop_Data, "m_ModelName"))
+			continue;
+
+		GetEntPropString(iEnt, Prop_Data, "m_ModelName", sTempModel, sizeof(sTempModel));
+		if (StrContains(sTempModel, sModelSubstr, false) == -1)
+			continue;
+
+		SafeKillIdx(iEnt);
+		iCount++;
+	}
+
+	if (iCount > 0)
+		PrintToServer("[map_entities] Removed: \"%s\" model~\"%s\" x %d", sClass, sModelSubstr, iCount);
+	else
+		PrintToServer("[map_entities] Didn't find: \"%s\" model~\"%s\"", sClass, sModelSubstr);
 }
 
 public Action cmd_totalent(int client, int args) {
