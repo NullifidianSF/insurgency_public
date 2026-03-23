@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <clientprefs>
 
-#define PL_VERSION		"2.33"
+#define PL_VERSION		"2.34"
 
 #define MAXENTITIES		2048
 
@@ -164,8 +164,6 @@ static const PropDef g_PropDefs[] = {
 #define PROP_COUNT (sizeof(g_PropDefs))
 PropId ga_iModelIndex[MAXPLAYERS + 1] = {Prop_BarbWire, ...};
 
-char	ga_sLastInflictorModel[MAXPLAYERS + 1][PLATFORM_MAX_PATH];
-
 int		ga_iPropHolding[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
 int		ga_iHoldHp[MAXPLAYERS + 1];
 int		ga_iHoldMaxHp[MAXPLAYERS + 1];
@@ -198,8 +196,10 @@ bool	ga_bPlacingNow[MAXPLAYERS + 1] = { false, ... };
 float	ga_fLastPlaceTime[MAXPLAYERS + 1] = { 0.0, ... };
 bool	ga_bJustPlaced[MAXPLAYERS + 1] = { false, ... };
 const float gc_fPlaceDebounce = 0.20;
+const float gc_fHeldPropTeleportMinDeltaSqr = 1.0;
 
 float	ga_fPropRotations[MAXPLAYERS + 1][PROP_COUNT][3];
+float	ga_fLastHeldPreviewPos[MAXPLAYERS + 1][3];
 float	ga_fLastTouchTime[MAXPLAYERS + 1] = {0.0, ...};
 float	ga_fPressedJumpTime[MAXPLAYERS + 1] = {0.0, ...};
 float	ga_fPropMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
@@ -217,8 +217,17 @@ int		ga_iResupplyCooldown[MAXPLAYERS + 1];
 int		ga_iAmmoAmount[MAXENTITIES + 1];
 int		ga_iAmmoIconHolderRef[MAXENTITIES + 1];
 int		ga_iAmmoIconSpriteRef[MAXENTITIES + 1];
-int		ga_iPlayerUsedAmmoBagRef[MAXPLAYERS + 1][MAXENTITIES + 1];
+int		ga_iLastInflictorPropId[MAXPLAYERS + 1] = {-1, ...};
 bool	ga_bAmmoBagResupply[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bHeldPreviewPosValid[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bPickupQueued[MAXPLAYERS + 1] = {false, ...};
+
+int		ga_iTrackedPropOwner[MAXENTITIES + 1];
+int		ga_iTrackedPropId[MAXENTITIES + 1];
+
+ArrayList g_hAmmoCacheRefs = null;
+ArrayList g_hResupplyTriggerRefs = null;
+ArrayList ga_hUsedAmmoCacheRefs[MAXPLAYERS + 1];
 
 int		g_iDefaultResupplyDelayBase;
 int		g_iDefaultResupplyDelayMax;
@@ -234,7 +243,7 @@ ConVar	g_cvAmmoOnce = null;
 
 public Plugin myinfo = {
 	name = "props",
-	author = "Nullifidian, ChatGPT, Owned|Myself, Linothorax",
+	author = "Nullifidian, Owned|Myself, Linothorax, GPT/Codex",
 	description = "Spawn props",
 	version = PL_VERSION,
 	url = ""
@@ -245,18 +254,29 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 	return APLRes_Success;
 }
 
-public void OnPluginStart()
-{
+public void OnPluginStart() {
 	int enumCount  = view_as<int>(Prop_Count);
 	int arrayCount = PROP_COUNT;
 
-	if (enumCount != arrayCount)
-	{
+	if (enumCount != arrayCount) {
 		SetFailState("PropId count (%d) != g_PropDefs count (%d). Update the enum or the array order.", enumCount, arrayCount);
 		return;
 	}
 
 	SetupConVars();
+
+	if (g_hAmmoCacheRefs == null)
+		g_hAmmoCacheRefs = new ArrayList();
+	if (g_hResupplyTriggerRefs == null)
+		g_hResupplyTriggerRefs = new ArrayList();
+
+	for (int i = 0; i <= MAXENTITIES; i++) {
+		ga_iTrackedPropOwner[i] = 0;
+		ga_iTrackedPropId[i] = -1;
+		ga_iAmmoAmount[i] = 0;
+		ga_iAmmoIconHolderRef[i] = INVALID_ENT_REFERENCE;
+		ga_iAmmoIconSpriteRef[i] = INVALID_ENT_REFERENCE;
+	}
 
 	g_hCookiePropRotateStep = RegClientCookie("bm_prop_rotate_step", "Props: rotation step (degrees)", CookieAccess_Private);
 
@@ -270,10 +290,8 @@ public void OnPluginStart()
 	RegConsoleCmd("prophelp",           cmd_prophelp, "Open help menu.");
 	RegConsoleCmd("inventory_resupply", cmd_inventory_resupply);
 
-	if (g_bLateLoad)
-	{
-		for (int i = 1; i <= MaxClients; i++)
-		{
+	if (g_bLateLoad) {
+		for (int i = 1; i <= MaxClients; i++) {
 			if (!IsClientInGame(i))
 				continue;
 
@@ -284,15 +302,17 @@ public void OnPluginStart()
 			ga_fLastMattressLaunchTime[i] = 0.0;
 			ga_bMattressDeath[i]          = false;
 			ga_iMattressKiller[i]         = 0;
+			ga_iLastInflictorPropId[i]    = -1;
 
 			ga_bAmmoBagResupply[i]       = false;
 			ga_iResupplyCounter[i]       = g_iResupplyDelay;
 			ga_iResupplyCooldown[i]      = 0;
-			for (int ent = MaxClients + 1; ent <= MAXENTITIES; ent++)
-				ga_iPlayerUsedAmmoBagRef[i][ent] = INVALID_ENT_REFERENCE;
 
-			if (IsFakeClient(i))
-			{
+			ArrayList usedAmmo = EnsureUsedAmmoCacheList(i);
+			if (usedAmmo != null)
+				usedAmmo.Clear();
+
+			if (IsFakeClient(i)) {
 				SDKHook(i, SDKHook_OnTakeDamage, BotOnTakeDamage);
 				continue;
 			}
@@ -307,14 +327,13 @@ public void OnPluginStart()
 			if (ga_hPropPlaced[i] == null)
 				LogError("Failed to create array for client %d", i);
 
-			if (IsHoldingMeleeWeapon(i))
-				ga_bHoldingMeleeWeapon[i] = true;
-
 			SDKHook(i, SDKHook_WeaponSwitchPost, Hook_WeaponSwitch);
+			UpdateClientWeaponState(i);
 			SetModelIndex(i);
 		}
 
 		EnsureTipTimer();
+		RebuildResupplyTriggerCache();
 		RebuildAmmoCacheIcons();
 	}
 
@@ -326,16 +345,24 @@ public void OnPluginStart()
 	AutoExecConfig(true, sBuffer);
 }
 
-public void OnMapStart()
-{
+public void OnMapStart() {
 	PrecacheFiles();
 
-	for (int i = 0; i <= MAXENTITIES; i++)
-	{
+	if (g_hAmmoCacheRefs != null)
+		delete g_hAmmoCacheRefs;
+	g_hAmmoCacheRefs = new ArrayList();
+
+	if (g_hResupplyTriggerRefs != null)
+		delete g_hResupplyTriggerRefs;
+	g_hResupplyTriggerRefs = new ArrayList();
+
+	for (int i = 0; i <= MAXENTITIES; i++) {
 		ga_fWireSoundCooldown[i] = 0.0;
 		ga_iAmmoAmount[i]        = 0;
 		ga_iAmmoIconHolderRef[i] = INVALID_ENT_REFERENCE;
 		ga_iAmmoIconSpriteRef[i] = INVALID_ENT_REFERENCE;
+		ga_iTrackedPropOwner[i]  = 0;
+		ga_iTrackedPropId[i]     = -1;
 	}
 
 	if (g_hJammers != null)
@@ -346,23 +373,23 @@ public void OnMapStart()
 	JC_ScheduleNext(15.0);
 
 	FindAndSetResupplyConvars();
+	RebuildResupplyTriggerCache();
 	CreateTimer(1.0, Timer_AmmoResupply, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 
-	for (int client = 1; client <= MaxClients; client++)
-	{
+	for (int client = 1; client <= MaxClients; client++) {
 		ga_bAmmoBagResupply[client] = false;
 		ga_iResupplyCounter[client] = g_iResupplyDelay;
 		ga_iResupplyCooldown[client] = 0;
 
-		for (int ent = MaxClients + 1; ent <= MAXENTITIES; ent++)
-			ga_iPlayerUsedAmmoBagRef[client][ent] = INVALID_ENT_REFERENCE;
+		ArrayList usedAmmo = EnsureUsedAmmoCacheList(client);
+		if (usedAmmo != null)
+			usedAmmo.Clear();
 	}
 
 	UpdateAmmoRangeCache();
 }
 
-public void OnClientPostAdminCheck(int client)
-{
+public void OnClientPostAdminCheck(int client) {
 	if (client < 1 || client > MaxClients || !IsClientInGame(client))
 		return;
 
@@ -373,6 +400,8 @@ public void OnClientPostAdminCheck(int client)
 	ga_bPlacingNow[client]       = false;
 	ga_fLastPlaceTime[client]    = 0.0;
 	ga_bJustPlaced[client]       = false;
+	ga_bPickupQueued[client]     = false;
+	ga_bHeldPreviewPosValid[client] = false;
 
 	ga_fPropRotateStep[client]    = PROP_ROTATE_STEP;
 	LoadRotateStepCookie(client);
@@ -381,15 +410,17 @@ public void OnClientPostAdminCheck(int client)
 	ga_fLastMattressLaunchTime[client] = 0.0;
 	ga_bMattressDeath[client]          = false;
 	ga_iMattressKiller[client]         = 0;
+	ga_iLastInflictorPropId[client]    = -1;
 
 	ga_bAmmoBagResupply[client] = false;
 	ga_iResupplyCounter[client] = g_iResupplyDelay;
 	ga_iResupplyCooldown[client] = 0;
-	for (int ent = MaxClients + 1; ent <= MAXENTITIES; ent++)
-		ga_iPlayerUsedAmmoBagRef[client][ent] = INVALID_ENT_REFERENCE;
 
-	if (!IsFakeClient(client))
-	{
+	ArrayList usedAmmo = EnsureUsedAmmoCacheList(client);
+	if (usedAmmo != null)
+		usedAmmo.Clear();
+
+	if (!IsFakeClient(client)) {
 		SDKHook(client, SDKHook_WeaponSwitchPost, Hook_WeaponSwitch);
 		SDKHook(client, SDKHook_OnTakeDamage, PlayerOnTakeDamage);
 
@@ -403,15 +434,12 @@ public void OnClientPostAdminCheck(int client)
 
 		ga_bBipodForced[client] = false;
 		ga_bFirstTimeJoinedSquad[client] = true;
+		UpdateClientWeaponState(client);
 	}
-	else
-	{
-		SDKHook(client, SDKHook_OnTakeDamage, BotOnTakeDamage);
-	}
+	else SDKHook(client, SDKHook_OnTakeDamage, BotOnTakeDamage);
 }
 
-public void OnClientCookiesCached(int client)
-{
+public void OnClientCookiesCached(int client) {
 	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
 		return;
 
@@ -423,6 +451,9 @@ public void OnClientDisconnect(int client) {
 		return;
 
 	ga_iLastButtons[client] = 0;
+	ga_bPickupQueued[client] = false;
+	ga_bHeldPreviewPosValid[client] = false;
+	ga_iLastInflictorPropId[client] = -1;
 
 	ga_iLastMattressOwner[client]      = 0;
 	ga_fLastMattressLaunchTime[client] = 0.0;
@@ -443,6 +474,9 @@ public void OnClientDisconnect(int client) {
 
 		delete list;
 	}
+
+	if (ga_hUsedAmmoCacheRefs[client] != null)
+		ga_hUsedAmmoCacheRefs[client].Clear();
 
 	for (int i = 1; i <= MaxClients; i++) {
 		if (ga_iPropOwner[i] == client)
@@ -490,13 +524,14 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 	return Plugin_Continue;
 }
 
-public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
-{
+public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast) {
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	if (client < 1 || client > MaxClients || !IsClientInGame(client))
 		return Plugin_Continue;
 
 	ga_iResupplyCounter[client] = g_iResupplyDelay;
+	ga_iLastInflictorPropId[client] = -1;
+	UpdateClientWeaponState(client);
 	return Plugin_Continue;
 }
 
@@ -523,19 +558,12 @@ public Action Event_PlayerDeath_Pre(Event event, const char[] name, bool dontBro
 		int inflictor = EntRefToEntIndex(ga_iLastInflictor[victim]);
 		
 		if (inflictor != INVALID_ENT_REFERENCE && IsValidEntity(inflictor)) {
-			char inflictorClassname[64];
-			GetEntityClassname(inflictor, inflictorClassname, sizeof(inflictorClassname));
-			if (strcmp(inflictorClassname, "prop_dynamic") == 0) {
-				char sModelName[PLATFORM_MAX_PATH];
-				GetEntPropString(inflictor, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
-
-				if (strcmp(sModelName, "models/fortifications/barbed_wire_02b.mdl") == 0) {
-					event.SetString("weapon", "Barbed Wire");
-					return Plugin_Changed;
-				}
+			if (GetTrackedPropId(inflictor) == MID(Prop_BarbWire)) {
+				event.SetString("weapon", "Barbed Wire");
+				return Plugin_Changed;
 			}
 		}
-		else if (strcmp(ga_sLastInflictorModel[victim], "models/fortifications/barbed_wire_02b.mdl") == 0) {
+		else if (ga_iLastInflictorPropId[victim] == MID(Prop_BarbWire)) {
 			event.SetString("weapon", "Barbed Wire");
 			return Plugin_Changed;
 		}
@@ -590,6 +618,8 @@ void HoldProp(int client) {
 	if (ga_iPropHolding[client] != INVALID_ENT_REFERENCE)
 		StopHolding(client);
 
+	ga_bHeldPreviewPosValid[client] = false;
+
 	float vPos[3], vAng[3];
 	GetClientEyePosition(client, vPos);
 	GetClientEyeAngles(client, vAng);
@@ -597,8 +627,7 @@ void HoldProp(int client) {
 	CreateProp(client, vPos, NULL_VECTOR);
 }
 
-static void TouchLaggedMovementValue(int client)
-{
+static void TouchLaggedMovementValue(int client) {
 	if (g_iOffLaggedMovementValue <= 0)
 		return;
 	float cur = GetEntDataFloat(client, g_iOffLaggedMovementValue);
@@ -606,6 +635,9 @@ static void TouchLaggedMovementValue(int client)
 }
 
 void StopHolding(int client, bool now = false) {
+	ga_bHeldPreviewPosValid[client] = false;
+	ga_bPickupQueued[client] = false;
+
 	int ref = ga_iPropHolding[client];
 	if (ref == INVALID_ENT_REFERENCE)
 		return;
@@ -624,30 +656,116 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 	if (!IsClientInGame(client) || !IsPlayerAlive(client) || IsFakeClient(client))
 		return Plugin_Continue;
 
-	int button;
-	for (int i = 0; i < MAX_BUTTONS; i++) {
-		button = (1 << i);
-		if (buttons & button) {
-			if (!(ga_iLastButtons[client] & button))
-				OnButtonPress(client, button, vel);
-		}
-	}
+	int pressed = buttons & ~ga_iLastButtons[client];
+	if (pressed & BTN_JUMP)
+		OnButtonPress(client, BTN_JUMP, vel);
+	if (pressed & (BTN_SPRINT | BTN_SPRINT_TOGGLE | BTN_ATTACK1))
+		OnButtonPress(client, pressed & (BTN_SPRINT | BTN_SPRINT_TOGGLE | BTN_ATTACK1), vel);
+	if (pressed & (BTN_AIM | BTN_AIM_TOGGLE))
+		OnButtonPress(client, pressed & (BTN_AIM | BTN_AIM_TOGGLE), vel);
+	if (pressed & BTN_SPECIAL1)
+		OnButtonPress(client, BTN_SPECIAL1, vel);
+	if (pressed & (BTN_DUCK | BTN_DUCK_TOGGLE | BTN_FORWARD | BTN_BACKWARD | BTN_LEFT | BTN_RIGHT))
+		OnButtonPress(client, pressed & (BTN_DUCK | BTN_DUCK_TOGGLE | BTN_FORWARD | BTN_BACKWARD | BTN_LEFT | BTN_RIGHT), vel);
+	if (pressed & BTN_FIREMODE)
+		OnButtonPress(client, BTN_FIREMODE, vel);
+
 	ga_iLastButtons[client] = buttons;
 
 	if (!ga_bHoldingMeleeWeapon[client])
 		return Plugin_Continue;
 
 	int ent = EntRefToEntIndex(ga_iPropHolding[client]);
-	if (ent > MaxClients && IsValidEntity(ent)) {
-		float vAng[3];
-		GetClientEyeAngles(client, vAng);
-
-		float vPos[3];
-		GetClientEyePosition(client, vPos);
-		GetPositionInFront(vPos, vAng, PROP_HOLD_DISTANCE);
-		TeleportEntity(ent, vPos, NULL_VECTOR, NULL_VECTOR);
+	if (ent <= MaxClients || !IsValidEntity(ent)) {
+		ga_iPropHolding[client] = INVALID_ENT_REFERENCE;
+		ga_bHeldPreviewPosValid[client] = false;
+		return Plugin_Continue;
 	}
+
+	float vAng[3];
+	GetClientEyeAngles(client, vAng);
+
+	float vPos[3];
+	GetClientEyePosition(client, vPos);
+	GetPositionInFront(vPos, vAng, PROP_HOLD_DISTANCE);
+
+	if (!ga_bHeldPreviewPosValid[client]
+		|| GetVectorDistance(vPos, ga_fLastHeldPreviewPos[client], true) > gc_fHeldPropTeleportMinDeltaSqr) {
+		TeleportEntity(ent, vPos, NULL_VECTOR, NULL_VECTOR);
+		ga_fLastHeldPreviewPos[client][0] = vPos[0];
+		ga_fLastHeldPreviewPos[client][1] = vPos[1];
+		ga_fLastHeldPreviewPos[client][2] = vPos[2];
+		ga_bHeldPreviewPosValid[client] = true;
+	}
+
 	return Plugin_Continue;
+}
+
+static void QueueExistingPropPickup(int client, int target) {
+	if (ga_bPickupQueued[client] || target <= MaxClients || !IsValidEntity(target))
+		return;
+
+	DataPack pack = new DataPack();
+	pack.WriteCell(GetClientUserId(client));
+	pack.WriteCell(EntIndexToEntRef(target));
+	ga_bPickupQueued[client] = true;
+	RequestFrame(NF_DeferredPickupExistingProp, pack);
+}
+
+static void NF_DeferredPickupExistingProp(any data) {
+	DataPack pack = view_as<DataPack>(data);
+	pack.Reset();
+
+	int client = GetClientOfUserId(pack.ReadCell());
+	int targetRef = pack.ReadCell();
+	delete pack;
+
+	if (client < 1 || client > MaxClients)
+		return;
+
+	ga_bPickupQueued[client] = false;
+
+	if (!IsClientInGame(client) || !IsPlayerAlive(client) || IsFakeClient(client) || !ga_bHoldingMeleeWeapon[client])
+		return;
+	if (ga_iPropHolding[client] != INVALID_ENT_REFERENCE)
+		return;
+	if (GetClientButtons(client) & (BTN_SPRINT | BTN_SPRINT_TOGGLE | BTN_ATTACK1))
+		return;
+	if (!IsPlayerOnGround(client) || IsPlayerOnProp(client))
+		return;
+
+	int target = EntRefToEntIndex(targetRef);
+	if (target <= MaxClients || !IsValidEntity(target))
+		return;
+
+	int modelId = GetTrackedPropId(target);
+	if (modelId < 0 || modelId >= PROP_COUNT || modelId == MID(Prop_AmmoCacheSmall))
+		return;
+
+	float vPos[3], vAng[3], vEye[3];
+	GetEntPropVector(target, Prop_Send, "m_vecOrigin", vPos);
+	GetEntPropVector(target, Prop_Send, "m_angRotation", vAng);
+	GetClientEyePosition(client, vEye);
+	if (GetVectorDistance(vEye, vPos, true) > (PROP_PICKUP_DISTANCE * PROP_PICKUP_DISTANCE))
+		return;
+
+	int health = GetEntProp(target, Prop_Data, "m_iHealth");
+	int propOwner = GetPropOwner(target);
+
+	PropId previousModel = ga_iModelIndex[client];
+	int previousOwner = ga_iPropOwner[client];
+
+	ga_iModelIndex[client] = view_as<PropId>(modelId);
+	ga_iPropOwner[client] = propOwner;
+	CreateProp(client, vPos, vAng, health);
+
+	if (ga_iPropHolding[client] == INVALID_ENT_REFERENCE) {
+		ga_iModelIndex[client] = previousModel;
+		ga_iPropOwner[client] = previousOwner;
+		return;
+	}
+
+	SafeKillIdx(target);
 }
 
 void OnButtonPress(int client, int button, float vel[3]) {
@@ -678,14 +796,10 @@ void OnButtonPress(int client, int button, float vel[3]) {
 						if (target <= MaxClients)
 							return;
 
-						char sName[64];
-						GetEntPropString(target, Prop_Data, "m_iName", sName, sizeof(sName));
-						if (StrContains(sName, "bmprop_c#", true) == -1)
+						if (GetPropOwner(target) < 1)
 							return;
 
-						char sModelName[PLATFORM_MAX_PATH];
-						GetEntPropString(target, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
-						if (StrContains(sModelName, "sandbagwall01", false) == -1)
+						if (GetTrackedPropId(target) != MID(Prop_SandbagWall))
 							return;
 
 						float vPos[3], vPosClient[3], vAng[3];
@@ -756,13 +870,9 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			if (target <= MaxClients || !IsValidEntity(target))
 				return;
 
-			char sName[64];
-			GetEntPropString(target, Prop_Data, "m_iName", sName, sizeof(sName));
-
-			if (StrContains(sName, "bmprop_c#", true) != -1) {
-				char sModelName[PLATFORM_MAX_PATH];
-				GetEntPropString(target, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
-				if (strcmp(sModelName, AMMO_CACHE_MODEL) == 0)
+			int modelId = GetTrackedPropId(target);
+			if (modelId >= 0) {
+				if (modelId == MID(Prop_AmmoCacheSmall))
 					return;
 
 				if (IsPlayerOnProp(client)) {
@@ -785,25 +895,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 					return;
 				}
 
-				int propOwner = GetNumber(sName, "_c#");
-				int iArraySize = (ga_hPropPlaced[propOwner] != null) ? ga_hPropPlaced[propOwner].Length : 0;
-
-				if (iArraySize > 0) {
-					int ent;
-					for (int j = iArraySize - 1; j >= 0; j--) {
-						ent = EntRefToEntIndex(ga_hPropPlaced[propOwner].Get(j));
-						if (ent == target) {
-							ga_hPropPlaced[propOwner].Erase(j);
-							break;
-						}
-					}
-				}
-
-				int health = GetEntProp(target, Prop_Data, "m_iHealth");
-				SafeKillIdx(target);
-				ga_iModelIndex[client] = view_as<PropId>(GetNumber(sName, "_m#"));
-				ga_iPropOwner[client] = propOwner;
-				CreateProp(client, vPos, vAng, health);
+				QueueExistingPropPickup(client, target);
 			}
 			return;
 		}
@@ -937,30 +1029,176 @@ static void CreateIcon(int prop) {
 }
 
 static void RebuildAmmoCacheIcons() {
-	char model[128];
 	char name[64];
+
+	if (g_hAmmoCacheRefs == null)
+		g_hAmmoCacheRefs = new ArrayList();
+	else
+		g_hAmmoCacheRefs.Clear();
 
 	for (int ent = MaxClients + 1; ent <= MAXENTITIES; ent++) {
 		if (!IsValidEntity(ent))
-			continue;
-
-		GetEntPropString(ent, Prop_Data, "m_ModelName", model, sizeof(model));
-		if (strcmp(model, AMMO_CACHE_MODEL, false) != 0)
 			continue;
 
 		GetEntPropString(ent, Prop_Data, "m_iName", name, sizeof(name));
 		if (StrContains(name, "bmprop_c#", true) == -1)
 			continue;
 
-		if (ga_iAmmoIconSpriteRef[ent] != INVALID_ENT_REFERENCE)
+		int owner = GetNumber(name, "_c#");
+		int modelId = GetNumber(name, "_m#");
+		if (owner < 1 || owner > MaxClients || modelId < 0 || modelId >= PROP_COUNT)
 			continue;
 
-		CreateIcon(ent);
+		ga_iTrackedPropOwner[ent] = owner;
+		ga_iTrackedPropId[ent] = modelId;
+
+		if (ga_hPropPlaced[owner] != null)
+			AddUniqueEntityRef(ga_hPropPlaced[owner], ent);
+
+		if (modelId == MID(Prop_AmmoCacheSmall)) {
+			AddUniqueEntityRef(g_hAmmoCacheRefs, ent);
+			if (ga_iAmmoIconSpriteRef[ent] == INVALID_ENT_REFERENCE)
+				CreateIcon(ent);
+		}
 	}
 }
 
 static void UpdateAmmoRangeCache() {
 	g_fAmmoResupplyRangeSqr = g_fAmmoResupplyRange * g_fAmmoResupplyRange;
+}
+
+static bool RefListContainsEntity(ArrayList list, int entity) {
+	if (list == null || entity <= MaxClients)
+		return false;
+
+	for (int i = 0; i < list.Length; i++) {
+		if (EntRefToEntIndex(list.Get(i)) == entity)
+			return true;
+	}
+	return false;
+}
+
+static void AddUniqueEntityRef(ArrayList list, int entity) {
+	if (list == null || entity <= MaxClients || !IsValidEntity(entity))
+		return;
+
+	if (!RefListContainsEntity(list, entity))
+		list.Push(EntIndexToEntRef(entity));
+}
+
+static ArrayList EnsureUsedAmmoCacheList(int client) {
+	if (client < 1 || client > MaxClients)
+		return null;
+
+	if (ga_hUsedAmmoCacheRefs[client] == null)
+		ga_hUsedAmmoCacheRefs[client] = new ArrayList();
+
+	return ga_hUsedAmmoCacheRefs[client];
+}
+
+static void RemoveEntityRef(ArrayList list, int entity) {
+	if (list == null || entity <= MaxClients)
+		return;
+
+	for (int i = list.Length - 1; i >= 0; i--) {
+		if (EntRefToEntIndex(list.Get(i)) == entity)
+			list.Erase(i);
+	}
+}
+
+static void TrackSolidProp(int entity, int owner, PropId modelId) {
+	if (entity <= MaxClients || entity > MAXENTITIES)
+		return;
+
+	ga_iTrackedPropOwner[entity] = owner;
+	ga_iTrackedPropId[entity] = MID(modelId);
+
+	if (modelId == Prop_AmmoCacheSmall)
+		AddUniqueEntityRef(g_hAmmoCacheRefs, entity);
+}
+
+static void UntrackSolidProp(int entity) {
+	if (entity <= MaxClients || entity > MAXENTITIES)
+		return;
+
+	RemoveEntityRef(g_hAmmoCacheRefs, entity);
+	ga_iTrackedPropOwner[entity] = 0;
+	ga_iTrackedPropId[entity] = -1;
+}
+
+static int GetTrackedPropId(int entity) {
+	if (entity <= MaxClients || entity > MAXENTITIES)
+		return -1;
+
+	int trackedId = ga_iTrackedPropId[entity];
+	if (trackedId >= 0 && trackedId < PROP_COUNT)
+		return trackedId;
+
+	if (!IsValidEntity(entity))
+		return -1;
+
+	char sName[64];
+	GetEntPropString(entity, Prop_Data, "m_iName", sName, sizeof(sName));
+	if (StrContains(sName, "bmprop_c#", false) == -1)
+		return -1;
+
+	int modelId = GetNumber(sName, "_m#");
+	if (modelId < 0 || modelId >= PROP_COUNT)
+		return -1;
+
+	ga_iTrackedPropId[entity] = modelId;
+	return modelId;
+}
+
+static bool PropIdBlocksExplosion(int modelId) {
+	return (modelId >= 0 && modelId < PROP_COUNT) ? g_PropDefs[modelId].blocksExplosive : false;
+}
+
+static bool HasUsedAmmoCache(int client, int entity) {
+	ArrayList list = EnsureUsedAmmoCacheList(client);
+	if (list == null || entity <= MaxClients)
+		return false;
+
+	for (int i = list.Length - 1; i >= 0; i--) {
+		int ent = EntRefToEntIndex(list.Get(i));
+		if (ent <= MaxClients || !IsValidEntity(ent)) {
+			list.Erase(i);
+			continue;
+		}
+
+		if (ent == entity)
+			return true;
+	}
+	return false;
+}
+
+static void MarkAmmoCacheUsed(int client, int entity) {
+	ArrayList list = EnsureUsedAmmoCacheList(client);
+	if (list == null || entity <= MaxClients || !IsValidEntity(entity))
+		return;
+
+	AddUniqueEntityRef(list, entity);
+}
+
+static void UpdateClientWeaponState(int client, int entity = -1) {
+	if (client < 1 || client > MaxClients || !IsClientInGame(client))
+		return;
+
+	if (entity == -1)
+		entity = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+
+	ga_bHoldingMeleeWeapon[client] = (entity > 0 && GetPlayerWeaponSlot(client, 2) == entity);
+}
+
+static void RebuildResupplyTriggerCache() {
+	if (g_hResupplyTriggerRefs == null)
+		g_hResupplyTriggerRefs = new ArrayList();
+	else
+		g_hResupplyTriggerRefs.Clear();
+
+	int ent = -1;
+	while ((ent = FindEntityByClassname(ent, "ins_spawnzone")) != -1)
+		AddUniqueEntityRef(g_hResupplyTriggerRefs, ent);
 }
 
 void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, bool solid = false) {
@@ -997,6 +1235,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 
 	bool bDoAmmoGlowAndIcon = false;
 	bool bDoJammerGlow = false;
+	int trackedOwner = 0;
 
 	DispatchKeyValue(prop, "physdamagescale", "0.0");
 	DispatchKeyValue(prop, "model", g_PropDefs[mid].model);
@@ -1023,10 +1262,12 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 
 			ga_hPropPlaced[client].Push(EntIndexToEntRef(prop));
 			FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", client, mid);
+			trackedOwner = client;
 		} else {
 			if (ga_hPropPlaced[ga_iPropOwner[client]] != null) {
 				ga_hPropPlaced[ga_iPropOwner[client]].Push(EntIndexToEntRef(prop));
 				FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", ga_iPropOwner[client], mid);
+				trackedOwner = ga_iPropOwner[client];
 			} else {
 				ClearOldestPropIfLimitReached(client);
 
@@ -1036,22 +1277,29 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 				ga_hPropPlaced[client].Push(EntIndexToEntRef(prop));
 				FormatEx(PropName, sizeof(PropName), "bmprop_c#%d_m#%d", client, mid);
 				oldhealth = 0;
+				trackedOwner = client;
 			}
 			ga_iPropOwner[client] = 0;
 		}
 
-		if (strcmp(g_PropDefs[mid].model, AMMO_CACHE_MODEL, false) == 0) {
-			bDoAmmoGlowAndIcon = true;
-			SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
-		} else if (strcmp(g_PropDefs[mid].model, "models/sernix/ied_jammer/ied_jammer.mdl", false) == 0) {
-			bDoJammerGlow = true;
-			SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
-		} else if (strcmp(g_PropDefs[mid].model, "models/fortifications/barbed_wire_02b.mdl", false) == 0) {
-			SDKHook(prop, SDKHook_Touch, SHook_OnTouchWire);
-		} else if (strcmp(g_PropDefs[mid].model, "models/static_afghan/prop_interior_mattress_a.mdl", false) == 0) {
-			SDKHook(prop, SDKHook_Touch, SHook_OnTouchMattress);
-		} else {
-			SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
+		switch (modelId) {
+			case Prop_AmmoCacheSmall: {
+				bDoAmmoGlowAndIcon = true;
+				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
+			}
+			case Prop_IedJammer: {
+				bDoJammerGlow = true;
+				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
+			}
+			case Prop_BarbWire: {
+				SDKHook(prop, SDKHook_Touch, SHook_OnTouchWire);
+			}
+			case Prop_Mattress: {
+				SDKHook(prop, SDKHook_Touch, SHook_OnTouchMattress);
+			}
+			default: {
+				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
+			}
 		}
 
 		DispatchKeyValue(prop, "targetname", PropName);
@@ -1069,6 +1317,9 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 	}
 
 	DispatchSpawn(prop);
+
+	if (solid)
+		TrackSolidProp(prop, trackedOwner, modelId);
 
 	if (solid) {
 		if (!bMovingExisting)
@@ -1148,7 +1399,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 		SetEntityRenderColor(prop, 255, 255, 255, 255);
 		AcceptEntityInput(prop, "SetGlowColor");
 		SetEntProp(prop, Prop_Send, "m_bShouldGlow", true);
-		SetEntPropFloat(prop, Prop_Send, "m_flGlowMaxDist", 8000.0);
+		SetEntPropFloat(prop, Prop_Send, "m_flGlowMaxDist", 4000.0);
 
 		CreateIcon(prop);
 	}
@@ -1329,6 +1580,7 @@ public Action PropOnTakeDamage(int entity, int &attacker, int &inflictor, float 
 
 public Action BotOnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype) {
 	ga_iLastInflictor[victim] = EntIndexToEntRef(inflictor);
+	ga_iLastInflictorPropId[victim] = GetTrackedPropId(inflictor);
 	ga_bMattressDeath[victim] = false;
 	ga_iMattressKiller[victim] = 0;
 
@@ -1352,13 +1604,9 @@ public Action BotOnTakeDamage(int victim, int &attacker, int &inflictor, float &
 public Action PlayerOnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype) {
 	if (damagetype & DMG_FALL) {
 		int groundEntity = GetEntPropEnt(victim, Prop_Send, "m_hGroundEntity");
-		if (groundEntity > MaxClients && IsValidEntity(groundEntity)) {
-			char sModelName[PLATFORM_MAX_PATH];
-			GetEntPropString(groundEntity, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
-			if (strcmp(sModelName, "models/static_afghan/prop_interior_mattress_a.mdl") == 0) {
-				PrintCenterText(victim, "Mattress cushioned your fall!");
-				return Plugin_Handled;
-			}
+		if (GetTrackedPropId(groundEntity) == MID(Prop_Mattress)) {
+			PrintCenterText(victim, "Mattress cushioned your fall!");
+			return Plugin_Handled;
 		}
 	}
 
@@ -1369,9 +1617,6 @@ public Action PlayerOnTakeDamage(int victim, int &attacker, int &inflictor, floa
 
 		Handle trace = TR_TraceRayFilterEx(vStart, vEnd, MASK_SOLID, RayType_EndPoint, TraceEntityFilterPlayers, victim);
 		if (TR_DidHit(trace)) {
-			// Anti-abuse:
-			// If the trace starts in solid (player clipped into a prop/wall), or the hit is basically at 0 distance,
-			// don't count that as "cover" for explosions.
 			float frac = TR_GetFraction(trace);
 			if (TR_StartSolid(trace) || TR_AllSolid(trace) || frac <= 0.02) {
 				CloseHandle(trace);
@@ -1380,15 +1625,14 @@ public Action PlayerOnTakeDamage(int victim, int &attacker, int &inflictor, floa
 
 			int hitEnt = TR_GetEntityIndex(trace);
 			if (hitEnt != victim && hitEnt > MaxClients && IsValidEntity(hitEnt)) {
-				char sModelName[PLATFORM_MAX_PATH];
-				GetEntPropString(hitEnt, Prop_Data, "m_ModelName", sModelName, sizeof(sModelName));
-				if (!ModelBlocksExplosion(sModelName)) {
+				int hitPropId = GetTrackedPropId(hitEnt);
+				if (!PropIdBlocksExplosion(hitPropId)) {
 					CloseHandle(trace);
 					return Plugin_Continue;
 				}
 
 				char shortName[64];
-				GetModelName(sModelName, shortName, sizeof(shortName));
+				GetModelName(g_PropDefs[hitPropId].model, shortName, sizeof(shortName));
 				PrintCenterText(victim, "A %s shielded you from the explosion!", shortName);
 				CloseHandle(trace);
 				return Plugin_Handled;
@@ -1400,14 +1644,6 @@ public Action PlayerOnTakeDamage(int victim, int &attacker, int &inflictor, floa
 }
 
 public bool TraceEntityFilterPlayers(int entity, int contentsMask, any data) { return (entity != data && (entity <= 0 || entity > MaxClients)); }
-
-bool ModelBlocksExplosion(const char[] sModelName) {
-	for (int i = 0; i < PROP_COUNT; i++) {
-		if (strcmp(g_PropDefs[i].model, sModelName) == 0)
-			return g_PropDefs[i].blocksExplosive;
-	}
-	return false;
-}
 
 bool GlowLowHp(int entity, int health) {
 	int maxHealth = GetEntProp(entity, Prop_Data, "m_iMaxHealth");
@@ -1426,17 +1662,20 @@ public void OnEntityDestroyed(int entity) {
 	if (entity <= MaxClients)
 		return;
 
+	int trackedPropId = GetTrackedPropId(entity);
 	JC_RemoveJammer(entity);
 
 	RemoveIcon(entity);
 
 	int propOwner = GetPropOwner(entity);
+	UntrackSolidProp(entity);
+	ga_iAmmoAmount[entity] = 0;
 	if (propOwner < 1)
 		return;
 
 	for (int i = 1; i <= MaxClients; i++) {
 		if (EntRefToEntIndex(ga_iLastInflictor[i]) == entity) {
-			GetEntPropString(entity, Prop_Data, "m_ModelName", ga_sLastInflictorModel[i], PLATFORM_MAX_PATH);
+			ga_iLastInflictorPropId[i] = trackedPropId;
 			ga_iLastInflictor[i] = INVALID_ENT_REFERENCE;
 		}
 
@@ -1460,6 +1699,12 @@ public void OnEntityDestroyed(int entity) {
 }
 
 int GetPropOwner(int entity) {
+	if (entity > MaxClients && entity <= MAXENTITIES) {
+		int trackedOwner = ga_iTrackedPropOwner[entity];
+		if (trackedOwner >= 1 && trackedOwner <= MaxClients)
+			return trackedOwner;
+	}
+
 	char sName[64];
 	GetEntPropString(entity, Prop_Data, "m_iName", sName, sizeof(sName));
 	if (StrContains(sName, "bmprop_c#", false) == -1)
@@ -1469,8 +1714,13 @@ int GetPropOwner(int entity) {
 	if (propOwner < 1 || propOwner > MaxClients)
 		return -1;
 
-	if (ga_hPropPlaced[propOwner] == null)
-		return -1;
+	if (entity > MaxClients && entity <= MAXENTITIES) {
+		ga_iTrackedPropOwner[entity] = propOwner;
+
+		int modelId = GetNumber(sName, "_m#");
+		if (modelId >= 0 && modelId < PROP_COUNT)
+			ga_iTrackedPropId[entity] = modelId;
+	}
 
 	return propOwner;
 }
@@ -1538,47 +1788,27 @@ public Action Timer_ForceDeployBipod(Handle timer, DataPack hDatapack) {
 	return Plugin_Stop;
 }
 
-public Action Timer_AmmoResupply(Handle timer)
-{
-	int		ActiveWeapon;
+public Action Timer_AmmoResupply(Handle timer) {
 	int		validAmmoCache;
-	int		iBagIused;
-	char	sWeapon[32];
 
-	for (int client = 1; client <= MaxClients; client++)
-	{
+	for (int client = 1; client <= MaxClients; client++) {
 		if (!IsClientInGame(client)
 			|| !IsPlayerAlive(client)
-			|| GetClientTeam(client) != TEAM_SECURITY)
-		{
+			|| GetClientTeam(client) != TEAM_SECURITY) {
 			continue;
 		}
 
-		ActiveWeapon = GetEntPropEnt(client, Prop_Data, "m_hActiveWeapon");
-		if (ActiveWeapon < 0)
+		if (!ga_bHoldingMeleeWeapon[client])
 			continue;
 
-		GetEdictClassname(ActiveWeapon, sWeapon, sizeof(sWeapon));
-
-		// Hold reload with knife/defib/etc out
-		if (GetClientButtons(client) & BTN_RELOAD && hasCorrectWeapon(sWeapon))
-		{
+		if (GetClientButtons(client) & BTN_RELOAD) {
 			validAmmoCache = FindValidProp_InDistance(client);
 			if (validAmmoCache == -1)
 				continue;
 
-			if (g_bAmmoOnce)
-			{
-				int ref = ga_iPlayerUsedAmmoBagRef[client][validAmmoCache];
-				if (ref != INVALID_ENT_REFERENCE)
-				{
-					iBagIused = EntRefToEntIndex(ref);
-					if (iBagIused == validAmmoCache && IsValidEntity(iBagIused))
-					{
-						PrintHintText(client, "You are not allowed to resupply from the same ammo cache more than once!");
-						continue;
-					}
-				}
+			if (g_bAmmoOnce && HasUsedAmmoCache(client, validAmmoCache)) {
+				PrintHintText(client, "You are not allowed to resupply from the same ammo cache more than once!");
+				continue;
 			}
 
 			ga_iResupplyCounter[client]--;
@@ -1589,23 +1819,17 @@ public Action Timer_AmmoResupply(Handle timer)
 			PrintHintText(client, "Resupplying ammo in %d seconds | Supply left: %d",
 				ga_iResupplyCounter[client], ga_iAmmoAmount[validAmmoCache]);
 
-			if (ga_iResupplyCounter[client] <= 0)
-			{
+			if (ga_iResupplyCounter[client] <= 0) {
 				ga_iResupplyCounter[client] = g_iResupplyDelay;
 
 				AmmoResupply_Player(client);
 
 				ga_iAmmoAmount[validAmmoCache]--;
-				if (ga_iAmmoAmount[validAmmoCache] <= 0 && validAmmoCache != -1)
-				{
-					for (int i = 1; i <= MaxClients; i++)
-						ga_iPlayerUsedAmmoBagRef[i][validAmmoCache] = INVALID_ENT_REFERENCE;
-
+				if (ga_iAmmoAmount[validAmmoCache] <= 0 && validAmmoCache != -1) {
 					SafeKillIdx(validAmmoCache);
 				}
-				else
-				{
-					ga_iPlayerUsedAmmoBagRef[client][validAmmoCache] = EntIndexToEntRef(validAmmoCache);
+				else {
+					MarkAmmoCacheUsed(client, validAmmoCache);
 				}
 
 				PrintHintText(client, "Rearmed! Ammo Supply left: %d", ga_iAmmoAmount[validAmmoCache]);
@@ -1616,136 +1840,94 @@ public Action Timer_AmmoResupply(Handle timer)
 	return Plugin_Continue;
 }
 
-void AmmoResupply_Player(int client)
-{
+void AmmoResupply_Player(int client) {
 	ga_bAmmoBagResupply[client] = true;
 
-	if (GetEntProp(client, Prop_Send, "m_iPlayerFlags") & PF_BUYZONE)
-	{
+	if (GetEntProp(client, Prop_Send, "m_iPlayerFlags") & PF_BUYZONE) {
 		FakeClientCommandEx(client, "inventory_resupply");
 		return;
 	}
 
-	char sClassName[64];
-	for (int i = 0; i < GetMaxEntities(); i++)
-	{
-		if (!IsValidEntity(i))
+	if (g_hResupplyTriggerRefs == null || g_hResupplyTriggerRefs.Length == 0)
+		RebuildResupplyTriggerCache();
+
+	for (int i = g_hResupplyTriggerRefs.Length - 1; i >= 0; i--) {
+		int trigger = EntRefToEntIndex(g_hResupplyTriggerRefs.Get(i));
+		if (trigger <= MaxClients || !IsValidEntity(trigger)) {
+			g_hResupplyTriggerRefs.Erase(i);
+			continue;
+		}
+
+		if (GetEntProp(trigger, Prop_Send, "m_bDisabled"))
 			continue;
 
-		GetEntityClassname(i, sClassName, sizeof(sClassName));
-		if (strcmp(sClassName, "ins_spawnzone", false) != 0)
-			continue;
-
-		if (GetEntProp(i, Prop_Send, "m_bDisabled"))
-			continue;
-
-		CallStartTouch(i, client);
+		CallStartTouch(trigger, client);
 		SetEntProp(client, Prop_Send, "m_iPlayerFlags", GetEntProp(client, Prop_Send, "m_iPlayerFlags") | PF_BUYZONE);
 		FakeClientCommandEx(client, "inventory_resupply");
-		CallEndTouch(i, client);
+		CallEndTouch(trigger, client);
 		break;
 	}
 }
 
-// Simulate touching the resupply trigger
-public void CallStartTouch(int trigger, int client)
-{
+public void CallStartTouch(int trigger, int client) {
 	AcceptEntityInput(trigger, "StartTouch", client, client, 0);
 }
 
-public void CallEndTouch(int trigger, int client)
-{
+public void CallEndTouch(int trigger, int client) {
 	AcceptEntityInput(trigger, "EndTouch", client, client, 0);
 }
 
-// Find nearest ammo cache prop placed by any player, within g_fAmmoResupplyRange.
-// Returns entity index or -1 if none found.
-int FindValidProp_InDistance(int client)
-{
+int FindValidProp_InDistance(int client) {
 	if (!IsClientInGame(client))
 		return -1;
 
 	float eye[3];
 	GetClientEyePosition(client, eye);
 
-	float maxDist = g_fAmmoResupplyRange;
-	float maxDistSqr = maxDist * maxDist;
-	float bestDistSqr = maxDistSqr + 1.0;
+	float bestDistSqr = g_fAmmoResupplyRangeSqr + 1.0;
 
 	int bestEnt = -1;
-	int ent, ref;
 	float pos[3];
-	char model[128];
+	if (g_hAmmoCacheRefs == null || g_hAmmoCacheRefs.Length == 0)
+		return -1;
 
-	ArrayList list;
+	for (int i = g_hAmmoCacheRefs.Length - 1; i >= 0; i--) {
+		int ent = EntRefToEntIndex(g_hAmmoCacheRefs.Get(i));
+		if (ent <= MaxClients || !IsValidEntity(ent) || ga_iTrackedPropId[ent] != MID(Prop_AmmoCacheSmall)) {
+			g_hAmmoCacheRefs.Erase(i);
+			continue;
+		}
 
-	for (int owner = 1; owner <= MaxClients; owner++)
-	{
-		if (!IsClientInGame(owner))
+		GetEntPropVector(ent, Prop_Send, "m_vecOrigin", pos);
+		float distSqr = GetVectorDistance(eye, pos, true);
+		if (distSqr > g_fAmmoResupplyRangeSqr)
 			continue;
 
-		list = ga_hPropPlaced[owner];
-		if (list == null)
-			continue;
-
-		int count = list.Length;
-		if (count == 0)
-			continue;
-
-		for (int i = 0; i < count; i++)
-		{
-			// ent ref stored in the ArrayList
-			ref = list.Get(i);
-			if (ref == INVALID_ENT_REFERENCE)
-				continue;
-
-			ent = EntRefToEntIndex(ref);
-			if (ent <= MaxClients || !IsValidEntity(ent))
-				continue;
-
-			// Check model is the small ammo cache only
-			GetEntPropString(ent, Prop_Data, "m_ModelName", model, sizeof(model));
-			if (strcmp(model, AMMO_CACHE_MODEL, false) != 0)
-				continue;
-
-			// Distance check
-			GetEntPropVector(ent, Prop_Send, "m_vecOrigin", pos);
-			float distSqr = GetVectorDistance(eye, pos, true);
-			if (distSqr > maxDistSqr)
-				continue;
-
-			if (distSqr < bestDistSqr)
-			{
-				bestDistSqr = distSqr;
-				bestEnt = ent;
-			}
+		if (distSqr < bestDistSqr) {
+			bestDistSqr = distSqr;
+			bestEnt = ent;
 		}
 	}
 
 	return bestEnt;
 }
 
-public Action cmd_inventory_resupply(int client, int args)
-{
+public Action cmd_inventory_resupply(int client, int args) {
 	if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
 		return Plugin_Continue;
 
-	// Ammo-cache-triggered resupply: allow, but clear flag
-	if (ga_bAmmoBagResupply[client])
-	{
+	if (ga_bAmmoBagResupply[client]) {
 		ga_bAmmoBagResupply[client] = false;
 		return Plugin_Continue;
 	}
 
-	// Normal spawn resupply, we enforce cooldown
 	if ((GetEntProp(client, Prop_Send, "m_iPlayerFlags") & PF_BUYZONE) == 0)
 		return Plugin_Handled;
 
 	int now = GetTime();
 	int left = ga_iResupplyCooldown[client] - now;
 
-	if (left > 0)
-	{
+	if (left > 0) {
 		PrintToChat(client, "You may resupply in %d second%s.", left, (left == 1) ? "" : "s");
 		return Plugin_Handled;
 	}
@@ -1755,7 +1937,9 @@ public Action cmd_inventory_resupply(int client, int args)
 }
 
 public Action Hook_WeaponSwitch(int client, int entity) {
-	if (IsHoldingMeleeWeapon(client)) {
+	UpdateClientWeaponState(client, entity);
+
+	if (ga_bHoldingMeleeWeapon[client]) {
 		ga_bHoldingMeleeWeapon[client] = true;
 		PrintCenterText(client, "Bipod = Build menu. !prophelp = Open help menu.");
 	}
@@ -1781,18 +1965,6 @@ void PrecacheFiles() {
 	PrecacheSound(SND_CANTBUY, true);
 
 	PrecacheModel(AMMO_ICON_SPRITE, true);
-}
-
-bool IsHoldingMeleeWeapon(int client) {
-	int iWeapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-	if (iWeapon < 1)
-		return false;
-
-	// slot 2 = melee
-	if (GetPlayerWeaponSlot(client, 2) != iWeapon)
-		return false;
-
-	return true;
 }
 
 bool IsCollidingWithPlayer(int client, float vPos[3]) {
@@ -2152,8 +2324,7 @@ void OpenRotationMenu(int client) {
 	rotationMenu.Display(client, 60);
 }
 
-static bool IsValidRotateStep(float step)
-{
+static bool IsValidRotateStep(float step) {
 	int deg = RoundToNearest(step);
 	if (FloatAbs(step - float(deg)) > 0.01)
 		return false;
@@ -2164,16 +2335,14 @@ static bool IsValidRotateStep(float step)
 	return true;
 }
 
-static float BM_NormalizeAngle360(float ang)
-{
+static float BM_NormalizeAngle360(float ang) {
 	ang -= 360.0 * float(RoundToFloor(ang / 360.0));
 	if (ang < 0.0)
 		ang += 360.0;
 	return ang;
 }
 
-static void LoadRotateStepCookie(int client)
-{
+static void LoadRotateStepCookie(int client) {
 	if (g_hCookiePropRotateStep == null)
 		return;
 	if (client < 1 || client > MaxClients || IsFakeClient(client))
@@ -2191,8 +2360,7 @@ static void LoadRotateStepCookie(int client)
 	ga_fPropRotateStep[client] = step;
 }
 
-static void SaveRotateStepCookie(int client)
-{
+static void SaveRotateStepCookie(int client) {
 	if (g_hCookiePropRotateStep == null)
 		return;
 	if (client < 1 || client > MaxClients || IsFakeClient(client))
@@ -2203,8 +2371,7 @@ static void SaveRotateStepCookie(int client)
 	SetClientCookie(client, g_hCookiePropRotateStep, s);
 }
 
-void OpenRotateStepMenu(int client)
-{
+void OpenRotateStepMenu(int client) {
 	Menu m = new Menu(RotateStepMenuHandler);
 
 	float cur = ga_fPropRotateStep[client];
@@ -2217,17 +2384,14 @@ void OpenRotateStepMenu(int client)
 
 	char info[16], disp[64];
 
-	for (int deg = 5; deg <= 180; deg += 5)
-	{
+	for (int deg = 5; deg <= 180; deg += 5) {
 		IntToString(deg, info, sizeof(info));
 
-		if (deg == curDeg)
-		{
+		if (deg == curDeg) {
 			FormatEx(disp, sizeof(disp), "%d° (current)", deg);
 			m.AddItem(info, disp, ITEMDRAW_DISABLED);
 		}
-		else
-		{
+		else {
 			FormatEx(disp, sizeof(disp), "%d°", deg);
 			m.AddItem(info, disp);
 		}
@@ -2240,16 +2404,14 @@ void OpenRotateStepMenu(int client)
 public int RotateStepMenuHandler(Menu menu, MenuAction action, int client, int param) {
 	if (action == MenuAction_End)
 		delete menu;
-	else if (action == MenuAction_Select)
-	{
+	else if (action == MenuAction_Select) {
 		char info[16];
 		menu.GetItem(param, info, sizeof(info));
 
 		int deg = StringToInt(info);
 		float step = float(deg);
 
-		if (!IsValidRotateStep(step))
-		{
+		if (!IsValidRotateStep(step)) {
 			PrintToChat(client, "Invalid rotation step.");
 			OpenRotationMenu(client);
 			return 0;
@@ -2415,12 +2577,7 @@ bool IsPlayerOnProp(int client) {
 		return false;
 
 	int groundEntity = GetEntPropEnt(client, Prop_Send, "m_hGroundEntity");
-	if (groundEntity <= MaxClients || !IsValidEntity(groundEntity))
-		return false;
-
-	char entityName[64];
-	GetEntPropString(groundEntity, Prop_Data, "m_iName", entityName, sizeof(entityName));
-	return (StrContains(entityName, "bmprop_c#", false) != -1);
+	return GetPropOwner(groundEntity) > 0;
 }
 
 void JC_Stop() {
@@ -2482,8 +2639,7 @@ public Action JC_Timer_Play(Handle timer) {
 	return Plugin_Stop;
 }
 
-bool hasCorrectWeapon(const char[] sWeapon)
-{
+bool hasCorrectWeapon(const char[] sWeapon) {
 	if (StrContains(sWeapon, "weapon_defib", false) != -1
 		|| StrContains(sWeapon, "weapon_knife", false) != -1
 		|| StrContains(sWeapon, "weapon_kabar", false) != -1
@@ -2535,6 +2691,20 @@ public void OnMapEnd() {
 		delete g_hJammers;
 		g_hJammers = null;
 	}
+	for (int i = 1; i <= MaxClients; i++) {
+		if (ga_hUsedAmmoCacheRefs[i] != null) {
+			delete ga_hUsedAmmoCacheRefs[i];
+			ga_hUsedAmmoCacheRefs[i] = null;
+		}
+	}
+	if (g_hAmmoCacheRefs != null) {
+		delete g_hAmmoCacheRefs;
+		g_hAmmoCacheRefs = null;
+	}
+	if (g_hResupplyTriggerRefs != null) {
+		delete g_hResupplyTriggerRefs;
+		g_hResupplyTriggerRefs = null;
+	}
 
 	KillTipTimer();
 }
@@ -2558,6 +2728,20 @@ public void OnPluginEnd() {
 	if (g_hJammers != null) {
 		delete g_hJammers;
 		g_hJammers = null;
+	}
+	for (int i = 1; i <= MaxClients; i++) {
+		if (ga_hUsedAmmoCacheRefs[i] != null) {
+			delete ga_hUsedAmmoCacheRefs[i];
+			ga_hUsedAmmoCacheRefs[i] = null;
+		}
+	}
+	if (g_hAmmoCacheRefs != null) {
+		delete g_hAmmoCacheRefs;
+		g_hAmmoCacheRefs = null;
+	}
+	if (g_hResupplyTriggerRefs != null) {
+		delete g_hResupplyTriggerRefs;
+		g_hResupplyTriggerRefs = null;
 	}
 
 	ServerCommand("mp_player_resupply_coop_delay_base %d", g_iDefaultResupplyDelayBase);
@@ -2659,8 +2843,7 @@ stock void KillNowRef(int entref) {
 	}
 }
 
-static void ClearJustPlaced_NextFrame(any serial)
-{
+static void ClearJustPlaced_NextFrame(any serial) {
 	int client = GetClientFromSerial(serial);
 	if (client >= 1 && client <= MaxClients)
 		ga_bJustPlaced[client] = false;
