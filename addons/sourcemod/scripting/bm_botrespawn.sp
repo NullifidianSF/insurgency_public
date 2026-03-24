@@ -5,19 +5,13 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PL_VERSION		"1.1.5"
+#define PL_VERSION		"1.1.6"
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
 #define TEAM_INSURGENT	3
 
 #define MAX_CPS			32
-
-enum BotSpawnRole {
-	BotSpawnRole_Normal = 0,
-	BotSpawnRole_Bomber,
-	BotSpawnRole_Tank
-};
 
 // ------------------------------------------------------------
 // Config / state
@@ -30,10 +24,6 @@ float g_fProxGraceUntil = 0.0;
 
 ArrayList g_CPSpawns[MAX_CPS];
 ArrayList g_CASpawns[MAX_CPS];
-ArrayList g_CPSpawnLastUsed[MAX_CPS];
-ArrayList g_CASpawnLastUsed[MAX_CPS];
-ArrayList g_CPSpawnPenaltyUntil[MAX_CPS];
-ArrayList g_CASpawnPenaltyUntil[MAX_CPS];
 int g_iNumCPs = 0;
 int g_iActiveCP = 0;
 
@@ -51,38 +41,6 @@ ConVar cv_hMinSpawnDistHuman = null;
 ConVar cv_hProximityGraceSeconds = null;
 ConVar cv_hBomberRespawns = null;
 ConVar cv_hTankRespawns = null;
-ConVar cv_hRoleMinDistScaleNormal = null;
-ConVar cv_hRoleMinDistScaleBomber = null;
-ConVar cv_hRoleMinDistScaleTank = null;
-ConVar cv_hHeatCooldownNormal = null;
-ConVar cv_hHeatCooldownNormalCA = null;
-ConVar cv_hHeatCooldownBomber = null;
-ConVar cv_hHeatCooldownBomberCA = null;
-ConVar cv_hHeatCooldownTank = null;
-ConVar cv_hHeatCooldownTankCA = null;
-ConVar cv_hThreatNearDist = null;
-ConVar cv_hThreatVisDist = null;
-ConVar cv_hScoreNormalDist = null;
-ConVar cv_hScoreNormalNear = null;
-ConVar cv_hScoreNormalVisible = null;
-ConVar cv_hScoreBomberDist = null;
-ConVar cv_hScoreBomberNear = null;
-ConVar cv_hScoreBomberVisible = null;
-ConVar cv_hScoreTankTargetDist = null;
-ConVar cv_hScoreTankTargetDistCA = null;
-ConVar cv_hScoreTankTargetBase = null;
-ConVar cv_hScoreTankTargetWeight = null;
-ConVar cv_hScoreTankNear = null;
-ConVar cv_hScoreTankVisible = null;
-ConVar cv_hHeatPenaltyBase = null;
-ConVar cv_hHeatPenaltyWeight = null;
-ConVar cv_hHeatRandomJitter = null;
-ConVar cv_hAntiLoopWindow = null;
-ConVar cv_hAntiLoopDist = null;
-ConVar cv_hAntiLoopPenalty = null;
-ConVar cv_hAntiLoopPenaltyBomberBonus = null;
-ConVar cv_hAntiLoopPenaltyTankBonus = null;
-ConVar cv_hAntiLoopPenaltyMax = null;
 
 ConVar g_cvCADelay = null;
 ConVar g_cvCADelayFinale = null;
@@ -91,38 +49,6 @@ ConVar g_cvCAWarnRadius = null;
 int g_iMaxCounterAttackDuration = 0;
 int g_iMinCounterAttackDuration = 0;
 float g_fCounterAttackChance = 0.0;
-float g_fRoleMinDistScaleNormal = 1.0;
-float g_fRoleMinDistScaleBomber = 1.35;
-float g_fRoleMinDistScaleTank = 0.75;
-float g_fHeatCooldownNormal = 18.0;
-float g_fHeatCooldownNormalCA = 12.0;
-float g_fHeatCooldownBomber = 30.0;
-float g_fHeatCooldownBomberCA = 20.0;
-float g_fHeatCooldownTank = 12.0;
-float g_fHeatCooldownTankCA = 8.0;
-float g_fThreatNearDist = 1600.0;
-float g_fThreatVisDist = 2950.0;
-float g_fScoreNormalDist = 0.40;
-float g_fScoreNormalNear = 180.0;
-float g_fScoreNormalVisible = 250.0;
-float g_fScoreBomberDist = 0.70;
-float g_fScoreBomberNear = 260.0;
-float g_fScoreBomberVisible = 425.0;
-float g_fScoreTankTargetDist = 950.0;
-float g_fScoreTankTargetDistCA = 800.0;
-float g_fScoreTankTargetBase = 350.0;
-float g_fScoreTankTargetWeight = 0.25;
-float g_fScoreTankNear = 110.0;
-float g_fScoreTankVisible = 120.0;
-float g_fHeatPenaltyBase = 500.0;
-float g_fHeatPenaltyWeight = 20.0;
-float g_fHeatRandomJitter = 10.0;
-float g_fAntiLoopWindow = 20.0;
-float g_fAntiLoopDist = 800.0;
-float g_fAntiLoopPenalty = 45.0;
-float g_fAntiLoopPenaltyBomberBonus = 15.0;
-float g_fAntiLoopPenaltyTankBonus = 10.0;
-float g_fAntiLoopPenaltyMax = 120.0;
 
 const int gc_iBomber = 31;
 const int gc_iTank = 32;
@@ -142,9 +68,6 @@ bool ga_bBotSpawnOriginValid[MAXPLAYERS + 1];
 float ga_fBotLastPos[MAXPLAYERS + 1][3];
 float ga_fBotLastMoveTime[MAXPLAYERS + 1];
 int ga_iBotIdleMoveChecks[MAXPLAYERS + 1];
-int ga_iBotLastSpawnCP[MAXPLAYERS + 1];
-int ga_iBotLastSpawnIndex[MAXPLAYERS + 1];
-bool ga_bBotLastSpawnCA[MAXPLAYERS + 1];
 
 int g_iBotLives = 0;
 int g_iBotLivesRemain = 0;
@@ -185,7 +108,7 @@ float g_fCAWarnRadius = 350.0;
 
 public Plugin myinfo = {
 	name		= "bm_botrespawn",
-	author		= "Nullifidian + GPT/Codex",
+	author		= "Nullifidian + ChatGPT",
 	description	= "Respawns bots at custom spawn locations + integrated CA countdown and spawn warnings",
 	version		= PL_VERSION
 };
@@ -370,9 +293,6 @@ static void BM_ResetClientState(int client) {
 	ga_fBotLastPos[client][2] = 0.0;
 	ga_fBotLastMoveTime[client] = 0.0;
 	ga_iBotIdleMoveChecks[client] = 0;
-	ga_iBotLastSpawnCP[client] = -1;
-	ga_iBotLastSpawnIndex[client] = -1;
-	ga_bBotLastSpawnCA[client] = false;
 }
 
 public void OnClientPostAdminCheck(int client) {
@@ -467,8 +387,6 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 	if (victim < 1 || !IsClientInGame(victim) || !IsFakeClient(victim) || GetClientTeam(victim) != TEAM_INSURGENT)
 		return Plugin_Continue;
 
-	BM_ApplyAntiLoopPenalty(victim);
-	
 	if (ga_bIsBomber[victim]) {
 		if (g_iBomberRespawCount >= g_iBomberRespawnsMax)
 			return Plugin_Continue;
@@ -700,50 +618,6 @@ static bool BM_InProxGrace() {
 	return GetGameTime() < g_fProxGraceUntil;
 }
 
-static ArrayList BM_EnsureSpawnMetaList(int cp, bool inCA, bool penalty) {
-	if (cp < 0 || cp >= MAX_CPS)
-		return null;
-
-	ArrayList list = null;
-	if (inCA)
-		list = penalty ? g_CASpawnPenaltyUntil[cp] : g_CASpawnLastUsed[cp];
-	else
-		list = penalty ? g_CPSpawnPenaltyUntil[cp] : g_CPSpawnLastUsed[cp];
-
-	if (list != null)
-		return list;
-
-	list = new ArrayList();
-	if (inCA) {
-		if (penalty)
-			g_CASpawnPenaltyUntil[cp] = list;
-		else
-			g_CASpawnLastUsed[cp] = list;
-	}
-	else {
-		if (penalty)
-			g_CPSpawnPenaltyUntil[cp] = list;
-		else
-			g_CPSpawnLastUsed[cp] = list;
-	}
-
-	return list;
-}
-
-static float BM_GetMetaFloat(ArrayList list, int index) {
-	if (list == null || index < 0 || index >= list.Length)
-		return 0.0;
-
-	return view_as<float>(list.Get(index));
-}
-
-static void BM_SetMetaFloat(ArrayList list, int index, float value) {
-	if (list == null || index < 0 || index >= list.Length)
-		return;
-
-	list.Set(index, view_as<int>(value));
-}
-
 static int BM_CollectSecurityPositions(float positions[32][3], bool eyePos = false) {
 	int count = 0;
 
@@ -762,124 +636,25 @@ static int BM_CollectSecurityPositions(float positions[32][3], bool eyePos = fal
 	return count;
 }
 
-static int BM_CollectSecurityData(float origins[32][3], float eyes[32][3]) {
-	int count = 0;
+static bool BM_PickRandomSpawnFromList(ArrayList spawns, float outVec[3]) {
+	if (spawns == null || spawns.Length <= 0)
+		return false;
 
-	for (int i = 1; i <= MaxClients && count < 32; i++) {
-		if (!IsClientInGame(i) || IsFakeClient(i) || !IsPlayerAlive(i) || GetClientTeam(i) != TEAM_SECURITY)
-			continue;
-
-		GetClientAbsOrigin(i, origins[count]);
-		GetClientEyePosition(i, eyes[count]);
-		count++;
-	}
-
-	return count;
+	int index = GetRandomInt(0, spawns.Length - 1);
+	spawns.GetArray(index, outVec, 3);
+	return true;
 }
 
-static BotSpawnRole BM_GetBotSpawnRole(int client) {
-	if (ga_bIsBomber[client])
-		return BotSpawnRole_Bomber;
-	if (ga_bIsTank[client])
-		return BotSpawnRole_Tank;
-	return BotSpawnRole_Normal;
-}
-
-static float BM_GetRoleMinDistSq(BotSpawnRole role) {
-	float scale = g_fRoleMinDistScaleNormal;
-
-	switch (role) {
-		case BotSpawnRole_Bomber: scale = g_fRoleMinDistScaleBomber;
-		case BotSpawnRole_Tank:   scale = g_fRoleMinDistScaleTank;
-	}
-
-	float dist = g_fMinSpawnDistHuman * scale;
-	return dist * dist;
-}
-
-static float BM_GetRoleHeatCooldown(BotSpawnRole role, bool inCA) {
-	switch (role) {
-		case BotSpawnRole_Bomber: return inCA ? g_fHeatCooldownBomberCA : g_fHeatCooldownBomber;
-		case BotSpawnRole_Tank:   return inCA ? g_fHeatCooldownTankCA : g_fHeatCooldownTank;
-	}
-	return inCA ? g_fHeatCooldownNormalCA : g_fHeatCooldownNormal;
-}
-
-static float BM_ScoreSpawnCandidate(const float candidate[3], ArrayList lastUsedList, ArrayList penaltyList, int index, float humanOrigins[32][3], float humanEyes[32][3], int hcount, BotSpawnRole role, bool inCA, bool enforceMinDist) {
-	float threatNearDistSq = g_fThreatNearDist * g_fThreatNearDist;
-	float maxVisDistSq = g_fThreatVisDist * g_fThreatVisDist;
-
-	float now = GetGameTime();
-	float penaltyUntil = BM_GetMetaFloat(penaltyList, index);
-	if (penaltyUntil > now)
-		return -1000000.0;
-
-	float nearestHumanSq = 999999999.0;
-	int nearHumans = 0;
-
+static bool BM_IsSpawnSafe(const float candidate[3], float humanOrigins[32][3], int hcount, float minDistSq) {
 	for (int i = 0; i < hcount; i++) {
-		float distSq = GetVectorDistance(candidate, humanOrigins[i], true);
-		if (distSq < nearestHumanSq)
-			nearestHumanSq = distSq;
-		if (distSq <= threatNearDistSq)
-			nearHumans++;
+		if (GetVectorDistance(candidate, humanOrigins[i], true) < minDistSq)
+			return false;
 	}
 
-	float roleMinDistSq = BM_GetRoleMinDistSq(role);
-	if (hcount > 0 && enforceMinDist && nearestHumanSq < roleMinDistSq)
-		return -1000000.0;
-
-	int visibleHumans = 0;
-	for (int i = 0; i < hcount; i++) {
-		if (GetVectorDistance(candidate, humanEyes[i], true) > maxVisDistSq)
-			continue;
-
-		Handle trace = TR_TraceRayFilterEx(humanEyes[i], candidate, MASK_SOLID, RayType_EndPoint, TraceEntityFilterSolid);
-		bool visible = !TR_DidHit(trace);
-		delete trace;
-
-		if (visible) {
-			visibleHumans++;
-			if (visibleHumans >= 3)
-				break;
-		}
-	}
-
-	float nearestDist = (nearestHumanSq < 999999998.0) ? SquareRoot(nearestHumanSq) : 2500.0;
-	float score = 0.0;
-
-	switch (role) {
-		case BotSpawnRole_Bomber: {
-			score += nearestDist * g_fScoreBomberDist;
-			score -= float(nearHumans) * g_fScoreBomberNear;
-			score -= float(visibleHumans) * g_fScoreBomberVisible;
-		}
-		case BotSpawnRole_Tank: {
-			float targetDist = inCA ? g_fScoreTankTargetDistCA : g_fScoreTankTargetDist;
-			score += g_fScoreTankTargetBase - FloatAbs(nearestDist - targetDist) * g_fScoreTankTargetWeight;
-			score -= float(nearHumans) * g_fScoreTankNear;
-			score -= float(visibleHumans) * g_fScoreTankVisible;
-		}
-		default: {
-			score += nearestDist * g_fScoreNormalDist;
-			score -= float(nearHumans) * g_fScoreNormalNear;
-			score -= float(visibleHumans) * g_fScoreNormalVisible;
-		}
-	}
-
-	float lastUsed = BM_GetMetaFloat(lastUsedList, index);
-	float cooldown = BM_GetRoleHeatCooldown(role, inCA);
-	if (lastUsed > 0.0) {
-		float sinceUsed = now - lastUsed;
-		if (sinceUsed < cooldown)
-			score -= g_fHeatPenaltyBase + ((cooldown - sinceUsed) * g_fHeatPenaltyWeight);
-	}
-
-	score += GetRandomFloat(0.0, g_fHeatRandomJitter);
-	return score;
+	return true;
 }
 
-static bool BM_SelectBestSpawnForCP(int client, int cpIndex, bool inCA, float humanOrigins[32][3], float humanEyes[32][3], int hcount, bool enforceMinDist, float outVec[3], int &outIndex) {
+static bool BM_FindSafeSpawnForCP(int cpIndex, bool inCA, float humanOrigins[32][3], int hcount, float minDistSq, float outVec[3]) {
 	if (cpIndex < 0 || cpIndex >= MAX_CPS)
 		return false;
 
@@ -887,76 +662,26 @@ static bool BM_SelectBestSpawnForCP(int client, int cpIndex, bool inCA, float hu
 	if (spawns == null || spawns.Length <= 0)
 		return false;
 
-	ArrayList lastUsed = BM_EnsureSpawnMetaList(cpIndex, inCA, false);
-	ArrayList penalty  = BM_EnsureSpawnMetaList(cpIndex, inCA, true);
-	if (lastUsed == null || penalty == null)
-		return false;
+	if (hcount <= 0 || minDistSq <= 0.0)
+		return BM_PickRandomSpawnFromList(spawns, outVec);
 
-	BotSpawnRole role = BM_GetBotSpawnRole(client);
-	float bestScore = -1000001.0;
-	bool found = false;
+	int start = GetRandomInt(0, spawns.Length - 1);
 	float candidate[3];
 
-	for (int i = 0; i < spawns.Length; i++) {
-		spawns.GetArray(i, candidate, 3);
-		float score = BM_ScoreSpawnCandidate(candidate, lastUsed, penalty, i, humanOrigins, humanEyes, hcount, role, inCA, enforceMinDist);
-		if (!found || score > bestScore) {
-			bestScore = score;
-			outVec[0] = candidate[0];
-			outVec[1] = candidate[1];
-			outVec[2] = candidate[2];
-			outIndex = i;
-			found = true;
-		}
+	for (int offset = 0; offset < spawns.Length; offset++) {
+		int index = (start + offset) % spawns.Length;
+		spawns.GetArray(index, candidate, 3);
+
+		if (!BM_IsSpawnSafe(candidate, humanOrigins, hcount, minDistSq))
+			continue;
+
+		outVec[0] = candidate[0];
+		outVec[1] = candidate[1];
+		outVec[2] = candidate[2];
+		return true;
 	}
 
-	return found && bestScore > -1000000.0;
-}
-
-static void BM_MarkSpawnUsed(int cpIndex, bool inCA, int spawnIndex) {
-	ArrayList lastUsed = BM_EnsureSpawnMetaList(cpIndex, inCA, false);
-	if (lastUsed == null)
-		return;
-
-	BM_SetMetaFloat(lastUsed, spawnIndex, GetGameTime());
-}
-
-static void BM_ApplyAntiLoopPenalty(int client) {
-	if (!ga_bBotSpawnOriginValid[client] || ga_iBotLastSpawnCP[client] < 0 || ga_iBotLastSpawnIndex[client] < 0)
-		return;
-
-	float now = GetGameTime();
-	if (now - ga_fBotSpawnTime[client] > g_fAntiLoopWindow)
-		return;
-
-	float origin[3];
-	GetClientAbsOrigin(client, origin);
-	float antiLoopDistSq = g_fAntiLoopDist * g_fAntiLoopDist;
-	if (GetVectorDistance(origin, ga_fBotSpawnOrigin[client], true) > antiLoopDistSq)
-		return;
-
-	ArrayList penalty = BM_EnsureSpawnMetaList(ga_iBotLastSpawnCP[client], ga_bBotLastSpawnCA[client], true);
-	ArrayList lastUsed = BM_EnsureSpawnMetaList(ga_iBotLastSpawnCP[client], ga_bBotLastSpawnCA[client], false);
-	if (penalty == null || lastUsed == null)
-		return;
-
-	float extraPenalty = g_fAntiLoopPenalty;
-	if (ga_bIsBomber[client])
-		extraPenalty += g_fAntiLoopPenaltyBomberBonus;
-	else if (ga_bIsTank[client])
-		extraPenalty += g_fAntiLoopPenaltyTankBonus;
-
-	float penaltyUntil = BM_GetMetaFloat(penalty, ga_iBotLastSpawnIndex[client]);
-	if (penaltyUntil < now)
-		penaltyUntil = now;
-
-	penaltyUntil += extraPenalty;
-	float maxPenalty = now + g_fAntiLoopPenaltyMax;
-	if (penaltyUntil > maxPenalty)
-		penaltyUntil = maxPenalty;
-
-	BM_SetMetaFloat(penalty, ga_iBotLastSpawnIndex[client], penaltyUntil);
-	BM_SetMetaFloat(lastUsed, ga_iBotLastSpawnIndex[client], now);
+	return false;
 }
 
 static bool BM_IsBotVisibleToAnyHuman(int bot, float humanEyes[32][3], int hcount, float maxDistSq) {
@@ -1021,13 +746,9 @@ void TeleportBot(int client) {
 
 	int cp  = ClampCP(g_iActiveCP);
 	int cpN = ClampCP(g_iActiveCP + 1);
-	int chosenCp = -1;
-	int chosenIndex = -1;
-	bool chosenInCA = false;
-
 	float humanOrigins[32][3];
-	float humanEyes[32][3];
-	int hcount = BM_CollectSecurityData(humanOrigins, humanEyes);
+	int hcount = BM_CollectSecurityPositions(humanOrigins);
+	float minDistSq = g_fMinSpawnDistHuman * g_fMinSpawnDistHuman;
 
 	if (!IsCounterAttack()) {
 		bool haveCurr = HasAnySpawnsCP(cp);
@@ -1040,25 +761,19 @@ void TeleportBot(int client) {
 		if (BM_InProxGrace() || g_iActiveCP == g_iNumCPs - 1) {
 			if (haveCurr && haveNext) {
 				if (GetRandomFloat(0.0, 1.0) <= 0.8) {
-					if (BM_SelectBestSpawnForCP(client, cp, false, humanOrigins, humanEyes, hcount, false, vec, chosenIndex))
-						chosenCp = cp;
-					else if (BM_SelectBestSpawnForCP(client, cpN, false, humanOrigins, humanEyes, hcount, false, vec, chosenIndex))
-						chosenCp = cpN;
+					if (!BM_PickRandomSpawnFromList(g_CPSpawns[cp], vec))
+						BM_PickRandomSpawnFromList(g_CPSpawns[cpN], vec);
 				}
 				else {
-					if (BM_SelectBestSpawnForCP(client, cpN, false, humanOrigins, humanEyes, hcount, false, vec, chosenIndex))
-						chosenCp = cpN;
-					else if (BM_SelectBestSpawnForCP(client, cp, false, humanOrigins, humanEyes, hcount, false, vec, chosenIndex))
-						chosenCp = cp;
+					if (!BM_PickRandomSpawnFromList(g_CPSpawns[cpN], vec))
+						BM_PickRandomSpawnFromList(g_CPSpawns[cp], vec);
 				}
 			}
 			else if (haveCurr) {
-				if (BM_SelectBestSpawnForCP(client, cp, false, humanOrigins, humanEyes, hcount, false, vec, chosenIndex))
-					chosenCp = cp;
+				BM_PickRandomSpawnFromList(g_CPSpawns[cp], vec);
 			}
 			else {
-				if (BM_SelectBestSpawnForCP(client, cpN, false, humanOrigins, humanEyes, hcount, false, vec, chosenIndex))
-					chosenCp = cpN;
+				BM_PickRandomSpawnFromList(g_CPSpawns[cpN], vec);
 			}
 		}
 		else {
@@ -1066,18 +781,12 @@ void TeleportBot(int client) {
 
 			// 2) Try current CP first (if it has spawns)
 			if (haveCurr) {
-				if (BM_SelectBestSpawnForCP(client, cp, false, humanOrigins, humanEyes, hcount, true, vec, chosenIndex)) {
-					pickedAny = true;
-					chosenCp = cp;
-				}
+				pickedAny = BM_FindSafeSpawnForCP(cp, false, humanOrigins, hcount, minDistSq, vec);
 			}
 
 			// 3) Then try next CP (with proximity) if not found yet
 			if (!pickedAny && haveNext) {
-				if (BM_SelectBestSpawnForCP(client, cpN, false, humanOrigins, humanEyes, hcount, true, vec, chosenIndex)) {
-					pickedAny = true;
-					chosenCp = cpN;
-				}
+				pickedAny = BM_FindSafeSpawnForCP(cpN, false, humanOrigins, hcount, minDistSq, vec);
 			}
 
 			// 4) If still nothing, scan forward through later CPs (cpN+1 .. g_iNumCPs-1)
@@ -1086,9 +795,8 @@ void TeleportBot(int client) {
 					if (!HasAnySpawnsCP(c))
 						continue;
 
-					if (BM_SelectBestSpawnForCP(client, c, false, humanOrigins, humanEyes, hcount, true, vec, chosenIndex)) {
+					if (BM_FindSafeSpawnForCP(c, false, humanOrigins, hcount, minDistSq, vec)) {
 						pickedAny = true;
-						chosenCp = c;
 						break;
 					}
 				}
@@ -1100,9 +808,8 @@ void TeleportBot(int client) {
 					if (!HasAnySpawnsCP(c))
 						continue;
 
-					if (BM_SelectBestSpawnForCP(client, c, false, humanOrigins, humanEyes, hcount, true, vec, chosenIndex)) {
+					if (BM_FindSafeSpawnForCP(c, false, humanOrigins, hcount, minDistSq, vec)) {
 						pickedAny = true;
-						chosenCp = c;
 						break;
 					}
 				}
@@ -1114,16 +821,13 @@ void TeleportBot(int client) {
 		}
 	}
 	else {
-		// Counter-attack: use role/threat-aware scoring on CA spawns
+		// Counter-attack uses the CA spawn list for the previous objective.
 		int cpC = ClampCP(g_iActiveCP - 1);
 		if (g_CASpawns[cpC] == null || g_CASpawns[cpC].Length <= 0)
 			return;
 
-		if (!BM_SelectBestSpawnForCP(client, cpC, true, humanOrigins, humanEyes, hcount, false, vec, chosenIndex))
+		if (!BM_PickRandomSpawnFromList(g_CASpawns[cpC], vec))
 			return;
-
-		chosenCp = cpC;
-		chosenInCA = true;
 	}
 
 	if (vec[0] == 0.0 && vec[1] == 0.0 && vec[2] == 0.0)
@@ -1131,18 +835,12 @@ void TeleportBot(int client) {
 
 	TeleportEntity(client, vec, NULL_VECTOR, NULL_VECTOR);
 
-	if (chosenCp >= 0 && chosenIndex >= 0)
-		BM_MarkSpawnUsed(chosenCp, chosenInCA, chosenIndex);
-
 	ga_fBotSpawnOrigin[client][0] = vec[0];
 	ga_fBotSpawnOrigin[client][1] = vec[1];
 	ga_fBotSpawnOrigin[client][2] = vec[2];
 	ga_fBotSpawnTime[client] = GetGameTime();
 	ga_iBotNoMoveChecks[client] = 0;
 	ga_bBotSpawnOriginValid[client] = true;
-	ga_iBotLastSpawnCP[client] = chosenCp;
-	ga_iBotLastSpawnIndex[client] = chosenIndex;
-	ga_bBotLastSpawnCA[client] = chosenInCA;
 }
 
 // ------------------------------------------------------------
@@ -1331,25 +1029,9 @@ static void BM_FreeAllSpawns() {
 			delete g_CPSpawns[i];
 			g_CPSpawns[i] = null;
 		}
-		if (g_CPSpawnLastUsed[i] != null) {
-			delete g_CPSpawnLastUsed[i];
-			g_CPSpawnLastUsed[i] = null;
-		}
-		if (g_CPSpawnPenaltyUntil[i] != null) {
-			delete g_CPSpawnPenaltyUntil[i];
-			g_CPSpawnPenaltyUntil[i] = null;
-		}
 		if (g_CASpawns[i] != null) {
 			delete g_CASpawns[i];
 			g_CASpawns[i] = null;
-		}
-		if (g_CASpawnLastUsed[i] != null) {
-			delete g_CASpawnLastUsed[i];
-			g_CASpawnLastUsed[i] = null;
-		}
-		if (g_CASpawnPenaltyUntil[i] != null) {
-			delete g_CASpawnPenaltyUntil[i];
-			g_CASpawnPenaltyUntil[i] = null;
 		}
 	}
 }
@@ -1367,9 +1049,6 @@ static ArrayList BM_EnsureSpawnList(int cp, bool inCA) {
 		g_CASpawns[cp] = list;
 	else
 		g_CPSpawns[cp] = list;
-
-	BM_EnsureSpawnMetaList(cp, inCA, false);
-	BM_EnsureSpawnMetaList(cp, inCA, true);
 
 	return list;
 }
@@ -1427,15 +1106,8 @@ bool LoadSpawnsForMap(const char[] map) {
 			float v[3];
 			if (BM_ParseVec3(vec, v)) {
 				ArrayList list = BM_EnsureSpawnList(cp, inCA);
-				if (list != null) {
+				if (list != null)
 					list.PushArray(v, 3);
-					ArrayList lastUsed = BM_EnsureSpawnMetaList(cp, inCA, false);
-					ArrayList penalty = BM_EnsureSpawnMetaList(cp, inCA, true);
-					if (lastUsed != null)
-						lastUsed.Push(view_as<int>(0.0));
-					if (penalty != null)
-						penalty.Push(view_as<int>(0.0));
-				}
 			}
 		}
 	}
@@ -1710,134 +1382,6 @@ void SetupCvars() {
 	g_iTankRespawnsMax = cv_hTankRespawns.IntValue;
 	cv_hTankRespawns.AddChangeHook(OnConVarChanged);
 
-	cv_hRoleMinDistScaleNormal = CreateConVar("sm_botspawn_role_scale_normal", "1.0", "Spawn min-distance scale for normal bots.", _, true, 0.1, true, 5.0);
-	g_fRoleMinDistScaleNormal = cv_hRoleMinDistScaleNormal.FloatValue;
-	cv_hRoleMinDistScaleNormal.AddChangeHook(OnConVarChanged);
-
-	cv_hRoleMinDistScaleBomber = CreateConVar("sm_botspawn_role_scale_bomber", "1.35", "Spawn min-distance scale for bomber bots.", _, true, 0.1, true, 5.0);
-	g_fRoleMinDistScaleBomber = cv_hRoleMinDistScaleBomber.FloatValue;
-	cv_hRoleMinDistScaleBomber.AddChangeHook(OnConVarChanged);
-
-	cv_hRoleMinDistScaleTank = CreateConVar("sm_botspawn_role_scale_tank", "0.75", "Spawn min-distance scale for tank bots.", _, true, 0.1, true, 5.0);
-	g_fRoleMinDistScaleTank = cv_hRoleMinDistScaleTank.FloatValue;
-	cv_hRoleMinDistScaleTank.AddChangeHook(OnConVarChanged);
-
-	cv_hHeatCooldownNormal = CreateConVar("sm_botspawn_heat_normal", "18.0", "Spawn heat cooldown for normal bots outside counter-attack.", _, true, 0.0, true, 120.0);
-	g_fHeatCooldownNormal = cv_hHeatCooldownNormal.FloatValue;
-	cv_hHeatCooldownNormal.AddChangeHook(OnConVarChanged);
-
-	cv_hHeatCooldownNormalCA = CreateConVar("sm_botspawn_heat_normal_ca", "12.0", "Spawn heat cooldown for normal bots during counter-attack.", _, true, 0.0, true, 120.0);
-	g_fHeatCooldownNormalCA = cv_hHeatCooldownNormalCA.FloatValue;
-	cv_hHeatCooldownNormalCA.AddChangeHook(OnConVarChanged);
-
-	cv_hHeatCooldownBomber = CreateConVar("sm_botspawn_heat_bomber", "30.0", "Spawn heat cooldown for bomber bots outside counter-attack.", _, true, 0.0, true, 120.0);
-	g_fHeatCooldownBomber = cv_hHeatCooldownBomber.FloatValue;
-	cv_hHeatCooldownBomber.AddChangeHook(OnConVarChanged);
-
-	cv_hHeatCooldownBomberCA = CreateConVar("sm_botspawn_heat_bomber_ca", "20.0", "Spawn heat cooldown for bomber bots during counter-attack.", _, true, 0.0, true, 120.0);
-	g_fHeatCooldownBomberCA = cv_hHeatCooldownBomberCA.FloatValue;
-	cv_hHeatCooldownBomberCA.AddChangeHook(OnConVarChanged);
-
-	cv_hHeatCooldownTank = CreateConVar("sm_botspawn_heat_tank", "12.0", "Spawn heat cooldown for tank bots outside counter-attack.", _, true, 0.0, true, 120.0);
-	g_fHeatCooldownTank = cv_hHeatCooldownTank.FloatValue;
-	cv_hHeatCooldownTank.AddChangeHook(OnConVarChanged);
-
-	cv_hHeatCooldownTankCA = CreateConVar("sm_botspawn_heat_tank_ca", "8.0", "Spawn heat cooldown for tank bots during counter-attack.", _, true, 0.0, true, 120.0);
-	g_fHeatCooldownTankCA = cv_hHeatCooldownTankCA.FloatValue;
-	cv_hHeatCooldownTankCA.AddChangeHook(OnConVarChanged);
-
-	cv_hThreatNearDist = CreateConVar("sm_botspawn_threat_neardist", "1600.0", "Distance at which Security players start counting as nearby spawn threats.", _, true, 0.0, true, 10000.0);
-	g_fThreatNearDist = cv_hThreatNearDist.FloatValue;
-	cv_hThreatNearDist.AddChangeHook(OnConVarChanged);
-
-	cv_hThreatVisDist = CreateConVar("sm_botspawn_threat_visdist", "2950.0", "Maximum LOS test distance for spawn visibility scoring.", _, true, 0.0, true, 10000.0);
-	g_fThreatVisDist = cv_hThreatVisDist.FloatValue;
-	cv_hThreatVisDist.AddChangeHook(OnConVarChanged);
-
-	cv_hScoreNormalDist = CreateConVar("sm_botspawn_score_normal_dist", "0.40", "Distance reward weight for normal bot spawn scoring.", _, true, 0.0, true, 10.0);
-	g_fScoreNormalDist = cv_hScoreNormalDist.FloatValue;
-	cv_hScoreNormalDist.AddChangeHook(OnConVarChanged);
-
-	cv_hScoreNormalNear = CreateConVar("sm_botspawn_score_normal_near", "180.0", "Nearby-human penalty weight for normal bot spawn scoring.", _, true, 0.0, true, 1000.0);
-	g_fScoreNormalNear = cv_hScoreNormalNear.FloatValue;
-	cv_hScoreNormalNear.AddChangeHook(OnConVarChanged);
-
-	cv_hScoreNormalVisible = CreateConVar("sm_botspawn_score_normal_visible", "250.0", "Visible-human penalty weight for normal bot spawn scoring.", _, true, 0.0, true, 1000.0);
-	g_fScoreNormalVisible = cv_hScoreNormalVisible.FloatValue;
-	cv_hScoreNormalVisible.AddChangeHook(OnConVarChanged);
-
-	cv_hScoreBomberDist = CreateConVar("sm_botspawn_score_bomber_dist", "0.70", "Distance reward weight for bomber spawn scoring.", _, true, 0.0, true, 10.0);
-	g_fScoreBomberDist = cv_hScoreBomberDist.FloatValue;
-	cv_hScoreBomberDist.AddChangeHook(OnConVarChanged);
-
-	cv_hScoreBomberNear = CreateConVar("sm_botspawn_score_bomber_near", "260.0", "Nearby-human penalty weight for bomber spawn scoring.", _, true, 0.0, true, 1000.0);
-	g_fScoreBomberNear = cv_hScoreBomberNear.FloatValue;
-	cv_hScoreBomberNear.AddChangeHook(OnConVarChanged);
-
-	cv_hScoreBomberVisible = CreateConVar("sm_botspawn_score_bomber_visible", "425.0", "Visible-human penalty weight for bomber spawn scoring.", _, true, 0.0, true, 1000.0);
-	g_fScoreBomberVisible = cv_hScoreBomberVisible.FloatValue;
-	cv_hScoreBomberVisible.AddChangeHook(OnConVarChanged);
-
-	cv_hScoreTankTargetDist = CreateConVar("sm_botspawn_score_tank_targetdist", "950.0", "Preferred normal-mode distance to Security for tank spawn scoring.", _, true, 0.0, true, 10000.0);
-	g_fScoreTankTargetDist = cv_hScoreTankTargetDist.FloatValue;
-	cv_hScoreTankTargetDist.AddChangeHook(OnConVarChanged);
-
-	cv_hScoreTankTargetDistCA = CreateConVar("sm_botspawn_score_tank_targetdist_ca", "800.0", "Preferred counter-attack distance to Security for tank spawn scoring.", _, true, 0.0, true, 10000.0);
-	g_fScoreTankTargetDistCA = cv_hScoreTankTargetDistCA.FloatValue;
-	cv_hScoreTankTargetDistCA.AddChangeHook(OnConVarChanged);
-
-	cv_hScoreTankTargetBase = CreateConVar("sm_botspawn_score_tank_targetbase", "350.0", "Base score for tank target-distance scoring.", _, true, 0.0, true, 5000.0);
-	g_fScoreTankTargetBase = cv_hScoreTankTargetBase.FloatValue;
-	cv_hScoreTankTargetBase.AddChangeHook(OnConVarChanged);
-
-	cv_hScoreTankTargetWeight = CreateConVar("sm_botspawn_score_tank_targetweight", "0.25", "Distance deviation penalty for tank target-distance scoring.", _, true, 0.0, true, 10.0);
-	g_fScoreTankTargetWeight = cv_hScoreTankTargetWeight.FloatValue;
-	cv_hScoreTankTargetWeight.AddChangeHook(OnConVarChanged);
-
-	cv_hScoreTankNear = CreateConVar("sm_botspawn_score_tank_near", "110.0", "Nearby-human penalty weight for tank spawn scoring.", _, true, 0.0, true, 1000.0);
-	g_fScoreTankNear = cv_hScoreTankNear.FloatValue;
-	cv_hScoreTankNear.AddChangeHook(OnConVarChanged);
-
-	cv_hScoreTankVisible = CreateConVar("sm_botspawn_score_tank_visible", "120.0", "Visible-human penalty weight for tank spawn scoring.", _, true, 0.0, true, 1000.0);
-	g_fScoreTankVisible = cv_hScoreTankVisible.FloatValue;
-	cv_hScoreTankVisible.AddChangeHook(OnConVarChanged);
-
-	cv_hHeatPenaltyBase = CreateConVar("sm_botspawn_heat_penalty_base", "500.0", "Base score penalty when a spawn is still on heat cooldown.", _, true, 0.0, true, 5000.0);
-	g_fHeatPenaltyBase = cv_hHeatPenaltyBase.FloatValue;
-	cv_hHeatPenaltyBase.AddChangeHook(OnConVarChanged);
-
-	cv_hHeatPenaltyWeight = CreateConVar("sm_botspawn_heat_penalty_weight", "20.0", "Extra score penalty per second of remaining spawn heat cooldown.", _, true, 0.0, true, 1000.0);
-	g_fHeatPenaltyWeight = cv_hHeatPenaltyWeight.FloatValue;
-	cv_hHeatPenaltyWeight.AddChangeHook(OnConVarChanged);
-
-	cv_hHeatRandomJitter = CreateConVar("sm_botspawn_heat_jitter", "10.0", "Random score jitter added after spawn heat and threat scoring.", _, true, 0.0, true, 100.0);
-	g_fHeatRandomJitter = cv_hHeatRandomJitter.FloatValue;
-	cv_hHeatRandomJitter.AddChangeHook(OnConVarChanged);
-
-	cv_hAntiLoopWindow = CreateConVar("sm_botspawn_antiloop_window", "20.0", "Death window in seconds for anti-loop spawn penalties.", _, true, 0.0, true, 120.0);
-	g_fAntiLoopWindow = cv_hAntiLoopWindow.FloatValue;
-	cv_hAntiLoopWindow.AddChangeHook(OnConVarChanged);
-
-	cv_hAntiLoopDist = CreateConVar("sm_botspawn_antiloop_dist", "800.0", "Max distance from original spawn to count a bot death as a spawn loop.", _, true, 0.0, true, 5000.0);
-	g_fAntiLoopDist = cv_hAntiLoopDist.FloatValue;
-	cv_hAntiLoopDist.AddChangeHook(OnConVarChanged);
-
-	cv_hAntiLoopPenalty = CreateConVar("sm_botspawn_antiloop_penalty", "45.0", "Base anti-loop spawn penalty duration in seconds.", _, true, 0.0, true, 300.0);
-	g_fAntiLoopPenalty = cv_hAntiLoopPenalty.FloatValue;
-	cv_hAntiLoopPenalty.AddChangeHook(OnConVarChanged);
-
-	cv_hAntiLoopPenaltyBomberBonus = CreateConVar("sm_botspawn_antiloop_penalty_bomber", "15.0", "Extra anti-loop penalty duration for bomber bot spawn loops.", _, true, 0.0, true, 300.0);
-	g_fAntiLoopPenaltyBomberBonus = cv_hAntiLoopPenaltyBomberBonus.FloatValue;
-	cv_hAntiLoopPenaltyBomberBonus.AddChangeHook(OnConVarChanged);
-
-	cv_hAntiLoopPenaltyTankBonus = CreateConVar("sm_botspawn_antiloop_penalty_tank", "10.0", "Extra anti-loop penalty duration for tank bot spawn loops.", _, true, 0.0, true, 300.0);
-	g_fAntiLoopPenaltyTankBonus = cv_hAntiLoopPenaltyTankBonus.FloatValue;
-	cv_hAntiLoopPenaltyTankBonus.AddChangeHook(OnConVarChanged);
-
-	cv_hAntiLoopPenaltyMax = CreateConVar("sm_botspawn_antiloop_penalty_max", "120.0", "Maximum total anti-loop penalty duration in seconds for a single spawn.", _, true, 0.0, true, 600.0);
-	g_fAntiLoopPenaltyMax = cv_hAntiLoopPenaltyMax.FloatValue;
-	cv_hAntiLoopPenaltyMax.AddChangeHook(OnConVarChanged);
-
 	g_cvCAWarnRadius = CreateConVar("sm_botcawarn_radius", "350.0", "Radius around counter-attack bot spawns to warn Security players in center text (0 = disabled).", _, true, 0.0, true, 5000.0);
 	g_fCAWarnRadius = g_cvCAWarnRadius.FloatValue;
 	g_cvCAWarnRadius.AddChangeHook(OnConVarChanged);
@@ -1864,70 +1408,6 @@ public void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] n
 		g_iBomberRespawnsMax = cv_hBomberRespawns.IntValue;
 	else if (convar == cv_hTankRespawns)
 		g_iTankRespawnsMax = cv_hTankRespawns.IntValue;
-	else if (convar == cv_hRoleMinDistScaleNormal)
-		g_fRoleMinDistScaleNormal = cv_hRoleMinDistScaleNormal.FloatValue;
-	else if (convar == cv_hRoleMinDistScaleBomber)
-		g_fRoleMinDistScaleBomber = cv_hRoleMinDistScaleBomber.FloatValue;
-	else if (convar == cv_hRoleMinDistScaleTank)
-		g_fRoleMinDistScaleTank = cv_hRoleMinDistScaleTank.FloatValue;
-	else if (convar == cv_hHeatCooldownNormal)
-		g_fHeatCooldownNormal = cv_hHeatCooldownNormal.FloatValue;
-	else if (convar == cv_hHeatCooldownNormalCA)
-		g_fHeatCooldownNormalCA = cv_hHeatCooldownNormalCA.FloatValue;
-	else if (convar == cv_hHeatCooldownBomber)
-		g_fHeatCooldownBomber = cv_hHeatCooldownBomber.FloatValue;
-	else if (convar == cv_hHeatCooldownBomberCA)
-		g_fHeatCooldownBomberCA = cv_hHeatCooldownBomberCA.FloatValue;
-	else if (convar == cv_hHeatCooldownTank)
-		g_fHeatCooldownTank = cv_hHeatCooldownTank.FloatValue;
-	else if (convar == cv_hHeatCooldownTankCA)
-		g_fHeatCooldownTankCA = cv_hHeatCooldownTankCA.FloatValue;
-	else if (convar == cv_hThreatNearDist)
-		g_fThreatNearDist = cv_hThreatNearDist.FloatValue;
-	else if (convar == cv_hThreatVisDist)
-		g_fThreatVisDist = cv_hThreatVisDist.FloatValue;
-	else if (convar == cv_hScoreNormalDist)
-		g_fScoreNormalDist = cv_hScoreNormalDist.FloatValue;
-	else if (convar == cv_hScoreNormalNear)
-		g_fScoreNormalNear = cv_hScoreNormalNear.FloatValue;
-	else if (convar == cv_hScoreNormalVisible)
-		g_fScoreNormalVisible = cv_hScoreNormalVisible.FloatValue;
-	else if (convar == cv_hScoreBomberDist)
-		g_fScoreBomberDist = cv_hScoreBomberDist.FloatValue;
-	else if (convar == cv_hScoreBomberNear)
-		g_fScoreBomberNear = cv_hScoreBomberNear.FloatValue;
-	else if (convar == cv_hScoreBomberVisible)
-		g_fScoreBomberVisible = cv_hScoreBomberVisible.FloatValue;
-	else if (convar == cv_hScoreTankTargetDist)
-		g_fScoreTankTargetDist = cv_hScoreTankTargetDist.FloatValue;
-	else if (convar == cv_hScoreTankTargetDistCA)
-		g_fScoreTankTargetDistCA = cv_hScoreTankTargetDistCA.FloatValue;
-	else if (convar == cv_hScoreTankTargetBase)
-		g_fScoreTankTargetBase = cv_hScoreTankTargetBase.FloatValue;
-	else if (convar == cv_hScoreTankTargetWeight)
-		g_fScoreTankTargetWeight = cv_hScoreTankTargetWeight.FloatValue;
-	else if (convar == cv_hScoreTankNear)
-		g_fScoreTankNear = cv_hScoreTankNear.FloatValue;
-	else if (convar == cv_hScoreTankVisible)
-		g_fScoreTankVisible = cv_hScoreTankVisible.FloatValue;
-	else if (convar == cv_hHeatPenaltyBase)
-		g_fHeatPenaltyBase = cv_hHeatPenaltyBase.FloatValue;
-	else if (convar == cv_hHeatPenaltyWeight)
-		g_fHeatPenaltyWeight = cv_hHeatPenaltyWeight.FloatValue;
-	else if (convar == cv_hHeatRandomJitter)
-		g_fHeatRandomJitter = cv_hHeatRandomJitter.FloatValue;
-	else if (convar == cv_hAntiLoopWindow)
-		g_fAntiLoopWindow = cv_hAntiLoopWindow.FloatValue;
-	else if (convar == cv_hAntiLoopDist)
-		g_fAntiLoopDist = cv_hAntiLoopDist.FloatValue;
-	else if (convar == cv_hAntiLoopPenalty)
-		g_fAntiLoopPenalty = cv_hAntiLoopPenalty.FloatValue;
-	else if (convar == cv_hAntiLoopPenaltyBomberBonus)
-		g_fAntiLoopPenaltyBomberBonus = cv_hAntiLoopPenaltyBomberBonus.FloatValue;
-	else if (convar == cv_hAntiLoopPenaltyTankBonus)
-		g_fAntiLoopPenaltyTankBonus = cv_hAntiLoopPenaltyTankBonus.FloatValue;
-	else if (convar == cv_hAntiLoopPenaltyMax)
-		g_fAntiLoopPenaltyMax = cv_hAntiLoopPenaltyMax.FloatValue;
 	else if (convar == g_cvCADelay)
 		g_iCADelay = g_cvCADelay.IntValue;
 	else if (convar == g_cvCADelayFinale)
