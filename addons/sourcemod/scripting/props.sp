@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <clientprefs>
 
-#define PL_VERSION		"2.34"
+#define PL_VERSION		"2.35"
 
 #define MAXENTITIES		2048
 
@@ -1699,11 +1699,17 @@ public void OnEntityDestroyed(int entity) {
 }
 
 int GetPropOwner(int entity) {
+	if (entity <= MaxClients || entity > MAXENTITIES)
+		return -1;
+
 	if (entity > MaxClients && entity <= MAXENTITIES) {
 		int trackedOwner = ga_iTrackedPropOwner[entity];
 		if (trackedOwner >= 1 && trackedOwner <= MaxClients)
 			return trackedOwner;
 	}
+
+	if (!IsValidEntity(entity))
+		return -1;
 
 	char sName[64];
 	GetEntPropString(entity, Prop_Data, "m_iName", sName, sizeof(sName));
@@ -2577,6 +2583,9 @@ bool IsPlayerOnProp(int client) {
 		return false;
 
 	int groundEntity = GetEntPropEnt(client, Prop_Send, "m_hGroundEntity");
+	if (groundEntity <= MaxClients || groundEntity > MAXENTITIES || !IsValidEntity(groundEntity))
+		return false;
+
 	return GetPropOwner(groundEntity) > 0;
 }
 
@@ -2637,15 +2646,6 @@ public Action JC_Timer_Play(Handle timer) {
 	JC_PlayRandomFromAll();
 	JC_ScheduleNext();
 	return Plugin_Stop;
-}
-
-bool hasCorrectWeapon(const char[] sWeapon) {
-	if (StrContains(sWeapon, "weapon_defib", false) != -1
-		|| StrContains(sWeapon, "weapon_knife", false) != -1
-		|| StrContains(sWeapon, "weapon_kabar", false) != -1
-		|| StrContains(sWeapon, "weapon_katana", false) != -1)
-		return true;
-	return false;
 }
 
 static bool HasAnyHumans() {
