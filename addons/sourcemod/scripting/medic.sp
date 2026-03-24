@@ -25,6 +25,9 @@ static char g_sObjResNetClass[32];
 
 #define MAX_ENTITIES 2048
 
+// Chat command anti-spam
+#define MEDIC_CMD_COOLDOWN 10.0
+
 // ----------------------------------------------------------------------
 // ConVars + cached values
 // ----------------------------------------------------------------------
@@ -104,6 +107,8 @@ ConVar	g_cvNonMedicReviveTime = null;
 int		g_iNonMedicReviveTime;
 
 ConVar	g_cvMedpackHealthAmount = null;
+ConVar	g_cvPreRoundFirst = null;
+ConVar	g_cvPreRound = null;
 int		g_iMedpackHealthAmount;
 
 // ----------------------------------------------------------------------
@@ -164,6 +169,7 @@ bool	ga_bBeingRevivedByMedic[MAXPLAYERS + 1];
 bool	ga_bRevivedByMedic[MAXPLAYERS + 1];
 bool	ga_bPlayerSelectNewClass[MAXPLAYERS + 1];
 bool	ga_bPlayerPickSquad[MAXPLAYERS + 1];
+bool	ga_bIsMedic[MAXPLAYERS + 1];
 
 char	ga_sPlayerBGroups[MAXPLAYERS + 1][32];
 char	ga_sClientLastClassString[MAXPLAYERS + 1][64];
@@ -173,15 +179,19 @@ int		ga_iStatRevives[MAXPLAYERS + 1];
 int		ga_iStatHeals[MAXPLAYERS + 1];
 int		ga_iTotalHP[MAXPLAYERS + 1];
 
+float	ga_fNextMedicCmdTime[MAXPLAYERS + 1];
+
+ArrayList g_hTrackedHealthkits = null;
+
 // Shared colors (avoid inline array literals for older compilers)
 int		g_iColorReviveRing[4];
 int		g_iColorHealRing[4];
 
 public Plugin myinfo = {
 	name = "medic",
-	author = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & ChatGPT",
+	author = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & GPT/Codex",
 	description = "Adds the ability to revive with the Medic class and a health kit.",
-	version = "1.0.6",
+	version = "1.0.8",
 	url = ""
 };
 
@@ -211,7 +221,7 @@ public any Native_Medic_IsClientMedic(Handle plugin, int numParams)
 	if (client < 1 || client > MaxClients)
 		return false;
 
-	return (StrContains(ga_sClientLastClassString[client], "medic", false) != -1);
+	return ga_bIsMedic[client];
 }
 
 public void OnPluginStart() {
@@ -220,8 +230,6 @@ public void OnPluginStart() {
 	if (g_hFwdRagdollReady == null)
 		g_hFwdRagdollReady = CreateGlobalForward("Medic_OnRagdollReady", ET_Ignore, Param_Cell, Param_Cell);
 
-	
-	// Shared colors
 	g_iColorReviveRing[0] = 255;
 	g_iColorReviveRing[1] = 0;
 	g_iColorReviveRing[2] = 0;
@@ -234,6 +242,11 @@ public void OnPluginStart() {
 
 	for (int i = 1; i <= MaxClients; i++)
 		ClearPendingRagTeleport(i);
+
+	if (g_hTrackedHealthkits == null)
+		g_hTrackedHealthkits = new ArrayList();
+	else
+		g_hTrackedHealthkits.Clear();
 
 	if ((m_hMyWeapons = FindSendPropInfo("CBasePlayer", "m_hMyWeapons")) == -1)
 		SetFailState("Fatal Error: Unable to find property offset \"CBasePlayer::m_hMyWeapons\" !");
@@ -248,7 +261,11 @@ public void OnPluginStart() {
 
 	SetupConVars();
 
+	g_cvPreRoundFirst = FindConVar("mp_timer_preround_first");
+	g_cvPreRound = FindConVar("mp_timer_preround");
+
 	RegConsoleCmd("fatal", cmd_fatal, "Set your death to fatal");
+	RegConsoleCmd("sm_medic", Cmd_MedicStats, "Show current medic heals/HP/revives");
 
 	AddCommandListener(cmdListener, "kill");
 	AddCommandListener(ChangeLevelListener, "changelevel");
@@ -301,8 +318,7 @@ Action Timer_MapStart(Handle timer) {
 	g_bReviveActive = g_bLateLoad;
 	CreateTimer(1.0, Timer_ReviveMonitor, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 	CreateTimer(0.5, Timer_MedicMonitor, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
-	CreateTimer(0.1, Timer_NearestBody, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
-	CreateTimer(1.0, Timer_PlayerStatus, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+	CreateTimer(0.25, Timer_NearestBody, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 	return Plugin_Stop;
 }
 
@@ -313,10 +329,15 @@ public void OnMapEnd() {
 	g_bLateLoad = false;
 	g_iObjResEntity = -1;
 	g_sObjResNetClass[0] = '\0';
+
+	if (g_hTrackedHealthkits != null)
+		g_hTrackedHealthkits.Clear();
 }
 public void OnEntityDestroyed(int entity) {
 	if (entity <= MaxClients || entity > MAX_ENTITIES)
 		return;
+
+	UntrackHealthkit(entity);
 
 	if (!ga_bHealthkitInit[entity] && ga_iHealthPack_Amount[entity] == 0)
 		return;
@@ -328,7 +349,6 @@ public void OnEntityDestroyed(int entity) {
 	ga_iTimeCheckHeight[entity] = 0;
 }
 
-
 public void OnClientPostAdminCheck(int client) {
 	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
 		return;
@@ -336,35 +356,10 @@ public void OnClientPostAdminCheck(int client) {
 	ga_bHurtFatal[client] = false;
 	ClearPendingRagTeleport(client);
 	ResetMedicStats(client);
-}
-
-// Check and inform player status
-Action Timer_PlayerStatus(Handle timer) {
-	if (!g_bRoundActive) return Plugin_Continue;
-
-	char woundType[20];
-	for (int client = 1; client <= MaxClients; client++) {
-		if (!IsClientInGame(client))
-			continue;
-		if (!ga_bPlayerPickSquad[client]
-			|| IsPlayerAlive(client)
-			|| GetClientTeam(client) != TEAM_SECURITY
-			|| !g_bReviveActive
-			|| !g_bRoundActive
-			|| ga_bPlayerSelectNewClass[client])
-			continue;
-
-		if      (ga_iPlayerWoundType[client] == 0) strcopy(woundType, sizeof(woundType), "MINORLY WOUNDED");
-		else if (ga_iPlayerWoundType[client] == 1) strcopy(woundType, sizeof(woundType), "MODERATELY WOUNDED");
-		else if (ga_iPlayerWoundType[client] == 2) strcopy(woundType, sizeof(woundType), "CRITICALLY WOUNDED");
-		else                                        strcopy(woundType, sizeof(woundType), "WOUNDED");
-
-		if (ga_bHurtFatal[client])
-			PrintCenterText(client, "You were fatally killed for %i damage and must wait til next objective to spawn", ga_iClientDamageDone[client]);
-		else if (!ga_bHurtFatal[client])
-			PrintCenterText(client, "[You're %s for %d damage]..wait patiently for a medic..do NOT mic/chat spam!", woundType, ga_iClientDamageDone[client]);
-	}
-	return Plugin_Continue;
+	ga_fNextMedicCmdTime[client] = 0.0;
+	ga_bPlayerPickSquad[client] = false;
+	ga_sClientLastClassString[client][0] = '\0';
+	ga_bIsMedic[client] = false;
 }
 
 public Action Event_Spawn(Event event, const char[] name, bool dontBroadcast) {
@@ -388,6 +383,7 @@ public Action Event_PlayerConnect(Event event, const char[] name, bool dontBroad
 
 	ga_bPlayerPickSquad[client] = false;
 	ga_bHurtFatal[client] = false;
+	ga_bIsMedic[client] = false;
 	return Plugin_Continue;
 }
 
@@ -396,6 +392,8 @@ public Action Event_PlayerDisconnect(Event event, const char[] name, bool dontBr
 	if (client > 0 && client <= MaxClients) {
 		ga_bPlayerPickSquad[client] = false;
 		ga_sClientLastClassString[client][0] = '\0';
+		ga_fNextMedicCmdTime[client] = 0.0;
+		ga_bIsMedic[client] = false;
 
 		RemoveRagdoll(client);
 	}
@@ -406,8 +404,8 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 	g_bLateLoad = false;
 	g_bReviveActive = false;
 
-	int iPreRoundFirst = GetConVarInt(FindConVar("mp_timer_preround_first"));
-	int iPreRound = GetConVarInt(FindConVar("mp_timer_preround"));
+	int iPreRoundFirst = (g_cvPreRoundFirst != null) ? g_cvPreRoundFirst.IntValue : 0;
+	int iPreRound = (g_cvPreRound != null) ? g_cvPreRound.IntValue : 0;
 	if (g_bPreRoundInitial) {
 		CreateTimer(float(iPreRoundFirst), PreReviveTimer, _, TIMER_FLAG_NO_MAPCHANGE);
 		iPreRoundFirst = iPreRoundFirst + 5;
@@ -425,12 +423,10 @@ Action PreReviveTimer(Handle timer) {
 
 public Action Event_RoundEnd_Pre(Event event, const char[] name, bool dontBroadcast) {
 	for (int client = 1; client <= MaxClients; client++) {
-		if (!IsClientInGame(client)
-			|| IsFakeClient(client)
-			|| GetClientTeam(client) != TEAM_SECURITY)
+		if (!IsClientInGame(client) || IsFakeClient(client) || GetClientTeam(client) != TEAM_SECURITY)
 			continue;
 
-		if ((ga_iStatRevives[client] > 0 || ga_iStatHeals[client] > 0) && StrContains(ga_sClientLastClassString[client], "medic", false) > -1)
+		if ((ga_iStatRevives[client] > 0 || ga_iStatHeals[client] > 0) && ga_bIsMedic[client])
 			PrintToChatAll("\x070088cc%N\x01 - Heals: \x0700cc44%d\x01  HP: \x0700cc44%d\x01  Revives: \x0700cc44%d", client, ga_iStatHeals[client], ga_iTotalHP[client], ga_iStatRevives[client]);
 		ResetMedicStats(client);
 	}
@@ -439,21 +435,20 @@ public Action Event_RoundEnd_Pre(Event event, const char[] name, bool dontBroadc
 
 public Action Event_RoundEnd(Event event, const char[] name, bool dontBroadcast) {
 	g_bReviveActive = false;
-	int ent = MaxClients + 1;
-	while ((ent = FindEntityByClassname(ent, "healthkit")) != -1)
-		SafeKillIdx(ent);
+	CleanupTrackedHealthkits();
 	g_bRoundActive = false;
 	return Plugin_Continue;
 }
 
 public Action Event_PlayerPickSquad_Post(Event event, const char[] name, bool dontBroadcast) {
 	int client = GetClientOfUserId(event.GetInt("userid"));
+	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
+		return Plugin_Continue;
+
 	char class_template[64];
 	event.GetString("class_template", class_template, sizeof(class_template));
 	strcopy(ga_sClientLastClassString[client], sizeof(ga_sClientLastClassString[]), class_template);
-
-	if (client == 0 || !IsClientInGame(client) || IsFakeClient(client))
-		return Plugin_Continue;
+	UpdateClientMedicState(client);
 
 	ga_bPlayerPickSquad[client] = true;
 
@@ -561,7 +556,6 @@ public Action Event_PlayerHurt_Pre(Event event, const char[] name, bool dontBroa
 
 	return Plugin_Continue;
 }
-
 
 public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast) {
 	int victim = GetClientOfUserId(event.GetInt("userid"));
@@ -702,6 +696,103 @@ bool hasCorrectWeapon(const char[] sWeapon, bool melee = true) {
 			return true;
 	}
 	return false;
+}
+
+static void UpdateClientMedicState(int client) {
+	if (client < 1 || client > MaxClients) {
+		return;
+	}
+
+	ga_bIsMedic[client] = (StrContains(ga_sClientLastClassString[client], "medic", false) != -1);
+}
+
+static bool GetClientSupportWeaponState(int client, int &activeWeapon, bool &canPaddle, bool &canMedpack) {
+	activeWeapon = GetEntPropEnt(client, Prop_Data, "m_hActiveWeapon");
+	canPaddle = false;
+	canMedpack = false;
+
+	if (activeWeapon < 0 || !IsValidEntity(activeWeapon))
+		return false;
+
+	char sWeapon[32];
+	GetEdictClassname(activeWeapon, sWeapon, sizeof(sWeapon));
+
+	canPaddle = hasCorrectWeapon(sWeapon);
+	canMedpack = hasCorrectWeapon(sWeapon, false);
+	return true;
+}
+
+static int GetClientRagdollEntity(int client) {
+	if (client < 1 || client > MaxClients)
+		return INVALID_ENT_REFERENCE;
+
+	int ragdoll = EntRefToEntIndex(ga_iClientRagdolls[client]);
+	if (ragdoll == INVALID_ENT_REFERENCE || ragdoll <= MaxClients || !IsValidEntity(ragdoll))
+		return INVALID_ENT_REFERENCE;
+
+	return ragdoll;
+}
+
+static void GetWoundTypeString(int client, char[] woundType, int maxlen) {
+	if (ga_iPlayerWoundType[client] == 0)
+		strcopy(woundType, maxlen, "minor wound");
+	else if (ga_iPlayerWoundType[client] == 1)
+		strcopy(woundType, maxlen, "moderate wound");
+	else if (ga_iPlayerWoundType[client] == 2)
+		strcopy(woundType, maxlen, "critical wound");
+	else
+		strcopy(woundType, maxlen, "wound");
+}
+
+static void TrackHealthkit(int entity) {
+	if (g_hTrackedHealthkits == null || entity <= MaxClients || !IsValidEntity(entity))
+		return;
+
+	int entref = EntIndexToEntRef(entity);
+	if (entref == INVALID_ENT_REFERENCE)
+		return;
+
+	for (int i = 0; i < g_hTrackedHealthkits.Length; i++) {
+		if (g_hTrackedHealthkits.Get(i) == entref)
+			return;
+	}
+
+	g_hTrackedHealthkits.Push(entref);
+}
+
+static void UntrackHealthkit(int entity) {
+	if (g_hTrackedHealthkits == null || entity <= MaxClients)
+		return;
+
+	int entref = EntIndexToEntRef(entity);
+	if (entref == INVALID_ENT_REFERENCE)
+		return;
+
+	for (int i = g_hTrackedHealthkits.Length - 1; i >= 0; i--) {
+		if (g_hTrackedHealthkits.Get(i) == entref) {
+			g_hTrackedHealthkits.Erase(i);
+			return;
+		}
+	}
+}
+
+static void CleanupTrackedHealthkits() {
+	if (g_hTrackedHealthkits == null)
+		return;
+
+	for (int i = g_hTrackedHealthkits.Length - 1; i >= 0; i--) {
+		int entref = g_hTrackedHealthkits.Get(i);
+		int entity = EntRefToEntIndex(entref);
+
+		if (entity == INVALID_ENT_REFERENCE || entity <= MaxClients || !IsValidEntity(entity)) {
+			g_hTrackedHealthkits.Erase(i);
+			continue;
+		}
+
+		SafeKillRef(entref);
+	}
+
+	g_hTrackedHealthkits.Clear();
 }
 
 static bool EntHasPhysicsObject(int ent) {
@@ -848,8 +939,7 @@ Action Timer_ReviveMonitor(Handle timer) {
 			deadPlayerRagdoll,
 			ActiveWeapon;
 
-	char	sWeapon[32],
-			woundType[20];
+	char	woundType[20];
 
 	for (int alivePlayer = 1; alivePlayer <= MaxClients; alivePlayer++) {
 		if (!IsClientInGame(alivePlayer) || GetClientTeam(alivePlayer) != TEAM_SECURITY || !IsPlayerAlive(alivePlayer))
@@ -864,12 +954,12 @@ Action Timer_ReviveMonitor(Handle timer) {
 			|| GetClientTeam(alivePlayer) != GetClientTeam(deadPlayer))
 			continue;
 
-		ActiveWeapon = GetEntPropEnt(alivePlayer, Prop_Data, "m_hActiveWeapon");
-		if (ActiveWeapon < 0)
+		bool bCanHealPaddle, bCanHealMedpack;
+		if (!GetClientSupportWeaponState(alivePlayer, ActiveWeapon, bCanHealPaddle, bCanHealMedpack))
 			continue;
 
-		deadPlayerRagdoll = EntRefToEntIndex(ga_iClientRagdolls[deadPlayer]);
-		if (deadPlayerRagdoll == INVALID_ENT_REFERENCE || !IsValidEntity(deadPlayerRagdoll))
+		deadPlayerRagdoll = GetClientRagdollEntity(deadPlayer);
+		if (deadPlayerRagdoll == INVALID_ENT_REFERENCE)
 			continue;
 
 		GetClientAbsOrigin(alivePlayer, flalivePlayerPosition);
@@ -879,19 +969,14 @@ Action Timer_ReviveMonitor(Handle timer) {
 		if (fDistance > fReviveDistance || !ClientCanSeeVector(alivePlayer, ga_fRagdollPosition[deadPlayer], fReviveDistance))
 			continue;
 
-		if      (ga_iPlayerWoundType[deadPlayer] == 0) strcopy(woundType, sizeof(woundType), "minor wound");
-		else if (ga_iPlayerWoundType[deadPlayer] == 1) strcopy(woundType, sizeof(woundType), "moderate wound");
-		else if (ga_iPlayerWoundType[deadPlayer] == 2) strcopy(woundType, sizeof(woundType), "critical wound");
-		else                                           strcopy(woundType, sizeof(woundType), "wound");
-
-		GetEdictClassname(ActiveWeapon, sWeapon, sizeof(sWeapon));
+		GetWoundTypeString(deadPlayer, woundType, sizeof(woundType));
 
 		int now = GetTime();
 
-		if (StrContains(ga_sClientLastClassString[alivePlayer], "medic", false) != -1) {
+		if (ga_bIsMedic[alivePlayer]) {
 			/* I'm a medic */
 
-			if (!hasCorrectWeapon(sWeapon))
+			if (!bCanHealPaddle)
 				continue;
 
 			ga_bBeingRevivedByMedic[deadPlayer] = true;
@@ -925,7 +1010,7 @@ Action Timer_ReviveMonitor(Handle timer) {
 		} else {
 			/* I'm not a medic */
 
-			if (!hasCorrectWeapon(sWeapon, false))
+			if (!bCanHealMedpack)
 				continue;
 
 			if (ga_iReviveNonMedicRemainingTime[deadPlayer] > 0) {
@@ -966,6 +1051,26 @@ Action Timer_ReviveMonitor(Handle timer) {
 		}
 	}
 
+	char statusWoundType[20];
+	for (int client = 1; client <= MaxClients; client++) {
+		if (!IsClientInGame(client))
+			continue;
+		if (!ga_bPlayerPickSquad[client]
+			|| IsPlayerAlive(client)
+			|| GetClientTeam(client) != TEAM_SECURITY
+			|| !g_bReviveActive
+			|| ga_bPlayerSelectNewClass[client])
+			continue;
+
+		if (ga_bHurtFatal[client]) {
+			PrintCenterText(client, "You were fatally killed for %i damage and must wait til next objective to spawn", ga_iClientDamageDone[client]);
+			continue;
+		}
+
+		GetWoundTypeString(client, statusWoundType, sizeof(statusWoundType));
+		PrintCenterText(client, "[You're %s for %d damage]..wait patiently for a medic..do NOT mic/chat spam!", statusWoundType, ga_iClientDamageDone[client]);
+	}
+
 	return Plugin_Continue;
 }
 
@@ -993,8 +1098,6 @@ Action Timer_MedicMonitor(Handle timer) {
 			iHealth,
 			targetPlayer;
 
-	char	sWeapon[32];
-
 	for (int originatingPlayer = 1; originatingPlayer <= MaxClients; originatingPlayer++) {
 		char sNewHint[256];
 		sNewHint[0] = '\0';
@@ -1005,25 +1108,10 @@ Action Timer_MedicMonitor(Handle timer) {
 			continue;
 		}
 
-		ActiveWeapon = GetEntPropEnt(originatingPlayer, Prop_Data, "m_hActiveWeapon");
-		if (ActiveWeapon < 0) {
+		if (!GetClientSupportWeaponState(originatingPlayer, ActiveWeapon, bCanHealPaddle, bCanHealMedpack)) {
 			sLastHint[originatingPlayer][0] = '\0';
 			fNextHintAt[originatingPlayer] = 0.0;
 			continue;
-		}
-
-		bCanHealPaddle = false;
-		bCanHealMedpack = false;
-
-		GetEdictClassname(ActiveWeapon, sWeapon, sizeof(sWeapon));
-
-		if (hasCorrectWeapon(sWeapon)) {
-			bCanHealPaddle = true;
-			bCanHealMedpack = false;
-		}
-		if (hasCorrectWeapon(sWeapon, false)) {
-			bCanHealPaddle = false;
-			bCanHealMedpack = true;
 		}
 
 		if (!bCanHealPaddle && !bCanHealMedpack) {
@@ -1032,7 +1120,7 @@ Action Timer_MedicMonitor(Handle timer) {
 			continue;
 		}
 
-		if (StrContains(ga_sClientLastClassString[originatingPlayer], "medic", false) != -1) {
+		if (ga_bIsMedic[originatingPlayer]) {
 			/* I'm a medic */
 
 			targetPlayer = TraceClientViewEntity(originatingPlayer);
@@ -1177,7 +1265,7 @@ Action Timer_NearestBody(Handle timer) {
 		if (!IsClientInGame(alivePlayer) || GetClientTeam(alivePlayer) != TEAM_SECURITY || !IsPlayerAlive(alivePlayer))
 			continue;
 
-		if (StrContains(ga_sClientLastClassString[alivePlayer], "medic", false) != -1) {
+		if (ga_bIsMedic[alivePlayer]) {
 			/* I'm a medic */
 			flLastPlayerDistance = 0.0;
 			flShortestDistanceToPlayer = 0.0;
@@ -1196,10 +1284,8 @@ Action Timer_NearestBody(Handle timer) {
 						ga_bBeingRevivedByMedic[deadPlayer] = false;
 				}
 
-				clientRagdoll = INVALID_ENT_REFERENCE;
-				clientRagdoll = EntRefToEntIndex(ga_iClientRagdolls[deadPlayer]);
-
-				if (clientRagdoll == INVALID_ENT_REFERENCE || !IsValidEntity(clientRagdoll))
+				clientRagdoll = GetClientRagdollEntity(deadPlayer);
+				if (clientRagdoll == INVALID_ENT_REFERENCE)
 					continue;
 
 				fTempDistance = GetVectorDistance(flAlivePlayerPosition, ga_fRagdollPosition[deadPlayer]);
@@ -1240,10 +1326,8 @@ Action Timer_NearestBody(Handle timer) {
 				if (!IsClientInGame(deadPlayer) || IsPlayerAlive(deadPlayer) || ga_bHurtFatal[deadPlayer] || deadPlayer == alivePlayer || GetClientTeam(alivePlayer) != GetClientTeam(deadPlayer))
 					continue;
 
-				clientRagdoll = INVALID_ENT_REFERENCE;
-				clientRagdoll = EntRefToEntIndex(ga_iClientRagdolls[deadPlayer]);
-
-				if (clientRagdoll == INVALID_ENT_REFERENCE || !IsValidEntity(clientRagdoll))
+				clientRagdoll = GetClientRagdollEntity(deadPlayer);
+				if (clientRagdoll == INVALID_ENT_REFERENCE)
 					continue;
 
 				fTempDistance = GetVectorDistance(flAlivePlayerPosition, ga_fRagdollPosition[deadPlayer]);
@@ -1360,6 +1444,7 @@ void InitHealthkitEntity(int entity) {
 		return;
 
 	ga_bHealthkitInit[entity] = true;
+	TrackHealthkit(entity);
 
 	ga_iHealthPack_Amount[entity] = g_iMedpackHealthAmount;
 
@@ -1380,7 +1465,6 @@ void InitHealthkitEntity(int entity) {
 	SDKHook(entity, SDKHook_VPhysicsUpdate, HealthkitGroundCheck);
 	CreateTimer(0.1, HealthkitGroundCheckTimer, entref, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
-
 
 void Frame_InitHealthkit(any entref) {
 	int entity = EntRefToEntIndex(entref);
@@ -1474,8 +1558,6 @@ Action Healthkit(Handle timer, DataPack hDatapack) {
 	int		ActiveWeapon,
 			iHealth;
 
-	char	sWeapon[32];
-
 	GetEntPropVector(healthPack, Prop_Data, "m_vecAbsOrigin", fOrigin);
 	fOrigin[2] += 1.0;
 	TE_SetupBeamRingPoint(fOrigin, 1.0, Healthkit_Radius*1.95, g_iBeaconBeam, g_iBeaconHalo, 0, 30, 3.0, 4.0, 0.0, g_iColorHealRing, 1, FBEAM_HALOBEAM);
@@ -1492,14 +1574,10 @@ Action Healthkit(Handle timer, DataPack hDatapack) {
 		if (!IsClientInGame(client) || !IsPlayerAlive(client) || GetClientTeam(client) != TEAM_SECURITY)
 			continue;
 
-		if (StrContains(ga_sClientLastClassString[client], "medic", false) != -1) {
+		if (ga_bIsMedic[client]) {
 			/* I'm a medic */
-			ActiveWeapon = GetEntPropEnt(client, Prop_Data, "m_hActiveWeapon");
-			if (ActiveWeapon < 0)
-				continue;
-
-			GetEdictClassname(ActiveWeapon, sWeapon, sizeof(sWeapon));
-			if (!hasCorrectWeapon(sWeapon))
+			bool bCanHealPaddle, bCanHealMedpack;
+			if (!GetClientSupportWeaponState(client, ActiveWeapon, bCanHealPaddle, bCanHealMedpack) || !bCanHealPaddle)
 				continue;
 
 			GetClientEyePosition(client, fPlayerOrigin);
@@ -1565,13 +1643,12 @@ Action Healthkit(Handle timer, DataPack hDatapack) {
 					SetEntityHealth(client, iHealth);
 				}
 			} else {
-				ActiveWeapon = GetEntPropEnt(client, Prop_Data, "m_hActiveWeapon");
-				if (ActiveWeapon < 0)
+				bool bCanHealPaddle, bCanHealMedpack;
+				if (!GetClientSupportWeaponState(client, ActiveWeapon, bCanHealPaddle, bCanHealMedpack))
 					continue;
-				GetEdictClassname(ActiveWeapon, sWeapon, sizeof(sWeapon));
 				iHealth = GetClientHealth(client);
 
-				if (!hasCorrectWeapon(sWeapon)) {
+				if (!bCanHealPaddle) {
 					if (iHealth < g_iNonMedicHealSelfMax)
 						PrintHintText(client, "No medics nearby! Pull knife out to heal! (HP: %i)", iHealth);
 					continue;
@@ -1597,7 +1674,6 @@ Action Healthkit(Handle timer, DataPack hDatapack) {
 		}
 	}
 
-
 	return Plugin_Continue;
 }
 
@@ -1608,21 +1684,18 @@ bool Check_NearbyMedics(int client) {
 
 	int		ActiveWeapon;
 
-	char	sWeapon[32];
+	GetClientAbsOrigin(client, clientPosition);
 
 	for (int friendlyMedic = 1; friendlyMedic <= MaxClients; friendlyMedic++) {
-		if (!IsClientInGame(friendlyMedic) || !IsPlayerAlive(friendlyMedic) || client == friendlyMedic || StrContains(ga_sClientLastClassString[friendlyMedic], "medic", false) == -1)
+		if (!IsClientInGame(friendlyMedic) || !IsPlayerAlive(friendlyMedic) || client == friendlyMedic || !ga_bIsMedic[friendlyMedic])
 			continue;
 
-		ActiveWeapon = GetEntPropEnt(friendlyMedic, Prop_Data, "m_hActiveWeapon");
-		if (ActiveWeapon < 0)
+		bool bCanHealPaddle, bCanHealMedpack;
+		if (!GetClientSupportWeaponState(friendlyMedic, ActiveWeapon, bCanHealPaddle, bCanHealMedpack))
+			continue;
+		if (!bCanHealPaddle && !bCanHealMedpack)
 			continue;
 
-		GetEdictClassname(ActiveWeapon, sWeapon, sizeof(sWeapon));
-		if (!hasCorrectWeapon(sWeapon) && !hasCorrectWeapon(sWeapon, false))
-			continue;
-
-		GetClientAbsOrigin(client, clientPosition);
 		GetClientAbsOrigin(friendlyMedic, medicPosition);
 		fDistance = GetVectorDistance(medicPosition, clientPosition);
 
@@ -1634,37 +1707,29 @@ bool Check_NearbyMedics(int client) {
 
 void Check_NearbyMedicsRevive(int client, int iInjured) {
 	float	medicPosition[3],
-			fDistance;
+			fDistance,
+			injuredPosition[3];
 
 	int		ActiveWeapon;
+	char	woundType[20];
 
-	char	sWeapon[32],
-			woundType[20];
+	VecCopy(ga_fRagdollPosition[iInjured], injuredPosition);
 
 	for (int assistingMedic = 1; assistingMedic <= MaxClients; assistingMedic++) {
-		if (!IsClientInGame(assistingMedic) || !IsPlayerAlive(assistingMedic) || client == assistingMedic || StrContains(ga_sClientLastClassString[assistingMedic], "medic", false) == -1)
+		if (!IsClientInGame(assistingMedic) || !IsPlayerAlive(assistingMedic) || client == assistingMedic || !ga_bIsMedic[assistingMedic])
 			continue;
 
-		ActiveWeapon = GetEntPropEnt(assistingMedic, Prop_Data, "m_hActiveWeapon");
-		if (ActiveWeapon < 0)
+		bool bCanHealPaddle, bCanHealMedpack;
+		if (!GetClientSupportWeaponState(assistingMedic, ActiveWeapon, bCanHealPaddle, bCanHealMedpack))
 			continue;
-
-		GetEdictClassname(ActiveWeapon, sWeapon, sizeof(sWeapon));
-		if (!hasCorrectWeapon(sWeapon))
+		if (!bCanHealPaddle)
 			continue;
 
 		GetClientAbsOrigin(assistingMedic, medicPosition);
-		fDistance = GetVectorDistance(medicPosition, ga_fRagdollPosition[iInjured]);
+		fDistance = GetVectorDistance(medicPosition, injuredPosition);
 
 		if (fDistance <= 65.0) {
-			if (ga_iPlayerWoundType[iInjured] == 0)
-				strcopy(woundType, sizeof(woundType), "minor wound");
-			else if (ga_iPlayerWoundType[iInjured] == 1)
-				strcopy(woundType, sizeof(woundType), "moderate wound");
-			else if (ga_iPlayerWoundType[iInjured] == 2)
-				strcopy(woundType, sizeof(woundType), "critical wound");
-			else
-				strcopy(woundType, sizeof(woundType), "wound");
+			GetWoundTypeString(iInjured, woundType, sizeof(woundType));
 
 			ga_iStatRevives[assistingMedic]++;
 
@@ -1684,7 +1749,41 @@ public Action Event_PlayerTeam(Event event, const char[] name, bool dontBroadcas
 	if (oldTeam == TEAM_SECURITY && newTeam != TEAM_SECURITY)
 		RemoveRagdoll(client);
 
+	if (newTeam != TEAM_SECURITY)
+		ga_bIsMedic[client] = false;
+
 	return Plugin_Continue;
+}
+
+public Action Cmd_MedicStats(int client, int args) {
+	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
+		return Plugin_Handled;
+
+	float now = GetGameTime();
+	if (now < ga_fNextMedicCmdTime[client]) {
+		float remain = ga_fNextMedicCmdTime[client] - now;
+		if (remain < 1.0)
+			remain = 1.0;
+		PrintToChat(client, "\x070088cc[Medic]\x01 Please wait %.0f seconds before using !medic again.", remain);
+		return Plugin_Handled;
+	}
+	ga_fNextMedicCmdTime[client] = now + MEDIC_CMD_COOLDOWN;
+
+	bool found = false;
+	for (int i = 1; i <= MaxClients; i++) {
+		if (!IsClientInGame(i) || IsFakeClient(i) || GetClientTeam(i) != TEAM_SECURITY)
+			continue;
+
+		if ((ga_iStatRevives[i] > 0 || ga_iStatHeals[i] > 0) && ga_bIsMedic[i]) {
+			PrintToChatAll("\x070088cc%N\x01 - Heals: \x0700cc44%d\x01  HP: \x0700cc44%d\x01  Revives: \x0700cc44%d", i, ga_iStatHeals[i], ga_iTotalHP[i], ga_iStatRevives[i]);
+			found = true;
+		}
+	}
+
+	if (!found)
+		PrintToChat(client, "\x070088cc[Medic]\x01 No medic stats yet.");
+
+	return Plugin_Handled;
 }
 
 public Action cmd_fatal(int client, int args) {
