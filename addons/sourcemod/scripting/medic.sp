@@ -191,7 +191,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & GPT/Codex",
 	description = "Adds the ability to revive with the Medic class and a health kit.",
-	version = "1.0.8",
+	version = "1.0.9",
 	url = ""
 };
 
@@ -465,7 +465,7 @@ public Action Event_PlayerPickSquad_Post(Event event, const char[] name, bool do
 
 public Action Event_PlayerHurt_Pre(Event event, const char[] name, bool dontBroadcast) {
 	int victim = GetClientOfUserId(event.GetInt("userid"));
-	if (!IsClientInGame(victim) || IsFakeClient(victim))
+	if (victim < 1 || victim > MaxClients || !IsClientInGame(victim) || IsFakeClient(victim))
 		return Plugin_Continue;
 
 	if (event.GetInt("health") > 0)
@@ -621,6 +621,9 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 // Convert dead body to new ragdoll
 void Frame_ConvertDeleteRagdoll(int userid) {
 	int client = GetClientOfUserId(userid);
+	if (client < 1 || client > MaxClients)
+		return;
+
 	if (IsClientInGame(client)
 		&& g_bRoundActive
 		&& !IsPlayerAlive(client)
