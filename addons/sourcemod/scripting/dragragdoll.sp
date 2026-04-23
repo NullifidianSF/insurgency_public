@@ -11,7 +11,7 @@
 
 native bool Medic_IsClientMedic(int client);
 
-#define PLUGIN_VERSION		"0.0.24"
+#define PLUGIN_VERSION		"0.0.25"
 #define PLUGIN_DESCRIPTION	"Plugin for pulling prop_ragdoll bodies"
 
 #define MAXENTITIES 2048
@@ -122,6 +122,7 @@ float	g_fPostDropCheck2At[MAXENTITIES];
 int		ga_iDragRagRef[MAXPLAYERS + 1] = { INVALID_ENT_REFERENCE, ... };
 bool	ga_bDragging[MAXPLAYERS + 1] = { false, ... };
 bool	ga_bDragViaCmd[MAXPLAYERS + 1] = { false, ... };
+bool	ga_bDropOnUseQueued[MAXPLAYERS + 1] = { false, ... };
 int		ga_iLastButtons[MAXPLAYERS + 1] = { 0, ... };
 float	ga_fNextTraceTime[MAXPLAYERS + 1] = { 0.0, ... };
 float	ga_fNextClipCheckTime[MAXPLAYERS + 1] = { 0.0, ... };
@@ -237,6 +238,7 @@ public void OnMapStart()
 	{
 		ga_bDragging[i] = false;
 		ga_bDragViaCmd[i] = false;
+		ga_bDropOnUseQueued[i] = false;
 		ga_iDragRagRef[i] = INVALID_ENT_REFERENCE;
 	}
 }
@@ -247,6 +249,7 @@ public void OnClientDisconnect(int client)
 		StopDragging(client);
 
 	ga_bDragViaCmd[client] = false;
+	ga_bDropOnUseQueued[client] = false;
 	ga_iDragRagRef[client] = INVALID_ENT_REFERENCE;
 	ga_iLastButtons[client] = 0;
 	ga_iLastStance[client] = 0;
@@ -403,6 +406,12 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 		}
 		else
 		{
+			if ((pressed & BTN_USE) && !ga_bDropOnUseQueued[client])
+			{
+				ga_bDropOnUseQueued[client] = true;
+				RequestFrame(NF_StopDraggingOnUse, GetClientUserId(client));
+			}
+
 			if (buttons & BTN_ATTACK1)
 			{
 				StopDragging(client);
@@ -417,7 +426,9 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 				}
 				else
 				{
-					PullRagdollTowardPlayer(client, rag);
+					// Avoid moving ragdolls during the engine's PlayerUse scan.
+					if ((buttons & BTN_USE) == 0)
+						PullRagdollTowardPlayer(client, rag);
 				}
 			}
 		}
@@ -432,6 +443,20 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 		ga_iLastStance[client] = GetEntProp(client, Prop_Send, "m_iCurrentStance");
 
 	return Plugin_Continue;
+}
+
+static void NF_StopDraggingOnUse(any userid)
+{
+	int client = GetClientOfUserId(userid);
+	if (client < 1 || client > MaxClients)
+		return;
+
+	ga_bDropOnUseQueued[client] = false;
+
+	if (!IsClientInGame(client) || !IsPlayerAlive(client) || !ga_bDragging[client])
+		return;
+
+	StopDragging(client);
 }
 
 public Action cmd_drag(int client, int args)
@@ -635,6 +660,7 @@ static void StartDragging(int client, bool viaCmd)
 	ga_bDragging[client] = true;
 	g_iActiveDrags++;
 	ga_bDragViaCmd[client] = viaCmd;
+	ga_bDropOnUseQueued[client] = false;
 	ga_fNextTraceTime[client] = 0.0;
 	ga_fNextClipCheckTime[client] = 0.0;
 
@@ -644,6 +670,7 @@ static void StartDragging(int client, bool viaCmd)
 static void StopDragging(int client)
 {
 	DragSpeed_Disable(client);
+	ga_bDropOnUseQueued[client] = false;
 
 	int rag = EntRefToEntIndex(ga_iDragRagRef[client]);
 	if (rag != INVALID_ENT_REFERENCE && IsValidEntity(rag))
