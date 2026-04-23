@@ -5,7 +5,7 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PLUGIN_VERSION		"3.6"
+#define PLUGIN_VERSION		"3.8"
 
 #define MAXENTITIES			2048
 #define ENTIDX_OK(%1)	((%1) > 0 && (%1) <= MAXENTITIES)
@@ -185,14 +185,18 @@ public void OnClientDisconnect(int client)
 	}
 }
 
-public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
-{
+public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
 	g_iRoundStatus = 1;
 
-	for (int i = 0; i < ga_hMines.Length; i++)
-	{
+	for (int i = 0; i < ga_hMines.Length; i++) {
+		int mineEnt = EntRefToEntIndex(ga_hMines.Get(i));
+		if (mineEnt > MaxClients && IsValidEntity(mineEnt)) {
+			AcceptEntityInput(mineEnt, "Disable");
+			SetEntProp(mineEnt, Prop_Send, "m_nSolidType", 0);
+		}
 		SafeKillRef(ga_hMines.Get(i));
 	}
+
 	ga_hMines.Clear();
 	g_iTriggeredMines = 0;
 
@@ -1027,9 +1031,13 @@ stock void KillNowRef(int entref)
 	}
 }
 
-void SafeKillIdx(int ent)
-{
+void SafeKillIdx(int ent) {
 	if (ent <= MaxClients) return;
+	if (!IsValidEntity(ent)) return;
+
+	AcceptEntityInput(ent, "Disable");
+	SetEntProp(ent, Prop_Send, "m_nSolidType", 0);
+	
 	int ref = EntIndexToEntRef(ent);
 	if (ref == INVALID_ENT_REFERENCE) return;
 	RequestFrame(NF_KillEntity, ref);
@@ -1054,5 +1062,11 @@ void BreakNextFrame(any entref)
 {
 	int ent = EntRefToEntIndex(entref);
 	if (ent > MaxClients && IsValidEntity(ent))
+	{
+		AcceptEntityInput(ent, "Disable");
+		SetEntProp(ent, Prop_Send, "m_nSolidType", 0);
+		SetEntProp(ent, Prop_Send, "m_CollisionGroup", 0);
+
 		AcceptEntityInput(ent, "Break");
+	}
 }
