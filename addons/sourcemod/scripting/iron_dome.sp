@@ -12,10 +12,12 @@
 
 #define BTN_SPECIAL1 (1 << 17)
 #define PF_BUYZONE (1 << 7)
+#define MAX_ENTITY_INDEX 2048
 
 const int gc_iIronDome_ID = 32;
 const int gc_iMaxAllowedBlocks = 3;
 const float IRON_DOME_RANGE = 350.0;
+const float IRON_DOME_RANGE_SQ = 122500.0;
 const float PICKUP_RANGE = 90.0;
 
 bool g_bLateLoad;
@@ -27,14 +29,16 @@ int g_iRoundStatus = 0;
 int ga_iConfirmedMisc[MAXPLAYERS + 1] = { -1, ... };
 int ga_iBlocks[MAXPLAYERS + 1] = { 1, ... };
 int ga_iLastButtons[MAXPLAYERS + 1];
-
-ArrayList ga_hExplosives;
+int ga_iLastExplosiveScanTick[MAX_ENTITY_INDEX + 1];
+bool ga_bExplosiveTracked[MAX_ENTITY_INDEX + 1];
+bool ga_bExplosiveHooked[MAX_ENTITY_INDEX + 1];
+bool ga_bExplosiveIntercepted[MAX_ENTITY_INDEX + 1];
 
 public Plugin myinfo = {
 	name = "iron_dome",
 	author = "Nullifidian",
 	description = "Portable system that intercepts hostile RPGs and grenades",
-	version = "1.9",
+	version = "2.1",
 	url = ""
 };
 
@@ -47,8 +51,6 @@ public void OnPluginStart() {
 	g_iPlayerEquipGear = FindSendPropInfo("CINSPlayer", "m_EquippedGear");
 	if (g_iPlayerEquipGear == -1)
 		SetFailState("Offset \"m_EquippedGear\" not found!");
-
-	ga_hExplosives = new ArrayList();
 
 	HookEvent("player_death", Event_PlayerDeath);
 	HookEvent("round_start", Event_RoundStart, EventHookMode_PostNoCopy);
@@ -82,11 +84,11 @@ public void OnMapStart() {
 	g_iBeaconBeam = PrecacheModel("materials/sprites/laser.vmt");
 	g_iBeaconHalo = PrecacheModel("materials/sprites/glow01.vmt");
 
-	CreateTimer(0.1, TimerR_IronDome, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+	ResetTrackedExplosives();
 }
 
 public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
-	ga_hExplosives.Clear();
+	ResetTrackedExplosives();
 	g_iRoundStatus = 1;
 
 	for (int i = 1; i <= MaxClients; i++) {
@@ -98,7 +100,7 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 }
 
 public void OnClientPostAdminCheck(int client) {
-	if (client > 0 && client < MaxClients && IsClientInGame(client) && !IsFakeClient(client)) {
+	if (client > 0 && client <= MaxClients && IsClientInGame(client) && !IsFakeClient(client)) {
 		ga_iConfirmedMisc[client] = -1;
 		ga_iBlocks[client] = 1;
 		ga_iLastButtons[client] = 0;
@@ -106,7 +108,7 @@ public void OnClientPostAdminCheck(int client) {
 }
 
 public void OnClientDisconnect(int client) {
-	if (client && !IsFakeClient(client)) {
+	if (client > 0 && client <= MaxClients && !IsFakeClient(client)) {
 		ga_iConfirmedMisc[client] = -1;
 		ga_iBlocks[client] = 1;
 		ga_iLastButtons[client] = 0;
@@ -142,20 +144,13 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 }
 
 public Action Event_GrenadeDetonate(Event event, const char[] name, bool dontBroadcast) {
-	if (ga_hExplosives.Length < 1)
-		return Plugin_Continue;
-
-	int nade = event.GetInt("entityid");
-	for (int i = 0; i < ga_hExplosives.Length; i++) {
-		if (nade == EntRefToEntIndex(ga_hExplosives.Get(i))) {
-			ga_hExplosives.Erase(i);
-			break;
-		}
-	}
+	RemoveTrackedExplosiveEnt(event.GetInt("entityid"));
 	return Plugin_Continue;
 }
 
 public Action CmdListener(int client, const char[] cmd, int argc) {
+	if (client < 1 || client > MaxClients)
+		return Plugin_Continue;
 	if (!IsClientInGame(client) || GetClientTeam(client) != 2 || !IsPlayerAlive(client))
 		return Plugin_Continue;
 
@@ -180,13 +175,84 @@ public Action Event_NadeAndMissile(Event event, const char[] name, bool dontBroa
 	if (StrContains(sEnt, "grenade_m18", false) > -1)
 		return Plugin_Continue;
 
-	ga_hExplosives.Push(EntIndexToEntRef(ent));
+	TrackExplosive(ent);
+	RequestFrame(NF_ScanExplosive, EntIndexToEntRef(ent));
+	
 	return Plugin_Continue;
 }
 
-Action TimerR_IronDome(Handle timer) {
-	if (!g_iRoundStatus || ga_hExplosives.Length < 1)
-		return Plugin_Continue;
+public void OnEntityDestroyed(int entity) {
+	if (entity < 1 || entity > MAX_ENTITY_INDEX)
+		return;
+
+	ga_iLastExplosiveScanTick[entity] = 0;
+	ga_bExplosiveTracked[entity] = false;
+	ga_bExplosiveHooked[entity] = false;
+	ga_bExplosiveIntercepted[entity] = false;
+}
+
+void TrackExplosive(int ent) {
+	if (ent <= MaxClients || ent > MAX_ENTITY_INDEX || !IsValidEntity(ent))
+		return;
+	if (ga_bExplosiveIntercepted[ent])
+		return;
+
+	if (!ga_bExplosiveTracked[ent])
+		ga_bExplosiveTracked[ent] = true;
+
+	ga_bExplosiveIntercepted[ent] = false;
+
+	if (ga_bExplosiveHooked[ent])
+		return;
+
+	bool hooked = false;
+	if (SDKHookEx(ent, SDKHook_VPhysicsUpdatePost, Hook_ExplosiveUpdate))
+		hooked = true;
+	if (SDKHookEx(ent, SDKHook_ThinkPost, Hook_ExplosiveUpdate))
+		hooked = true;
+
+	ga_bExplosiveHooked[ent] = hooked;
+}
+
+public void Hook_ExplosiveUpdate(int ent) {
+	if (ent <= MaxClients || ent > MAX_ENTITY_INDEX || !ga_bExplosiveTracked[ent] || ga_bExplosiveIntercepted[ent])
+		return;
+
+	int tick = GetGameTickCount();
+	if (ga_iLastExplosiveScanTick[ent] == tick)
+		return;
+
+	ga_iLastExplosiveScanTick[ent] = tick;
+	TryInterceptExplosive(ent);
+}
+
+public void NF_ScanExplosive(any entRef) {
+	int ent = EntRefToEntIndex(entRef);
+	if (ent == INVALID_ENT_REFERENCE || !IsValidEntity(ent))
+		return;
+
+	TryInterceptExplosive(ent);
+}
+
+bool TryInterceptExplosive(int ent) {
+	if (!g_iRoundStatus || ent <= MaxClients || ent > MAX_ENTITY_INDEX || !IsValidEntity(ent))
+		return false;
+	if (ga_bExplosiveIntercepted[ent])
+		return false;
+
+	int client = FindBestIronDomeClient(ent);
+	if (client < 1)
+		return false;
+
+	return InterceptExplosive(client, ent);
+}
+
+int FindBestIronDomeClient(int ent) {
+	float vEnt[3];
+	GetEntPropVector(ent, Prop_Send, "m_vecOrigin", vEnt);
+
+	int bestClient = 0;
+	float bestDistanceSq = IRON_DOME_RANGE_SQ + 1.0;
 
 	for (int client = 1; client <= MaxClients; client++) {
 		if (ga_iConfirmedMisc[client] != gc_iIronDome_ID || ga_iBlocks[client] < 1)
@@ -197,46 +263,76 @@ Action TimerR_IronDome(Handle timer) {
 		float vClient[3];
 		GetClientAbsOrigin(client, vClient);
 
-		for (int j = ga_hExplosives.Length - 1; j >= 0; j--) {
-			int ent = EntRefToEntIndex(ga_hExplosives.Get(j));
-			if (ent == INVALID_ENT_REFERENCE || !IsValidEntity(ent)) {
-				ga_hExplosives.Erase(j);
-				continue;
-			}
-
-			float vEnt[3];
-			GetEntPropVector(ent, Prop_Send, "m_vecOrigin", vEnt);
-
-			if (GetVectorDistance(vClient, vEnt) > IRON_DOME_RANGE)
-				continue;
-
-			float vBeamStart[3];
-			vBeamStart[0] = vClient[0];
-			vBeamStart[1] = vClient[1];
-			vBeamStart[2] = vClient[2] + 25.0;
-
-			ShowSprite(vBeamStart, vEnt);
-			CreateParticle(vEnt);
-
-			EmitSoundToAll(SND_DETECT, client, SNDCHAN_AUTO, SNDLEVEL_NORMAL);
-			EmitSoundToAll(SND_EXPLODE, ent, SNDCHAN_AUTO, SNDLEVEL_NORMAL);
-
-			ga_hExplosives.Erase(j);
-			ga_iBlocks[client]--;
-
-			char cname[64];
-			if (GetEntityClassname(ent, cname, sizeof(cname)))
-				PrintToChat(client, "\x070088cc[ID]\x01 Shot down \x070088cc%s\x01 Ammo: \x070088cc%d\x01/\x070088cc%d", cname, ga_iBlocks[client], gc_iMaxAllowedBlocks);
-			else
-				PrintToChat(client, "\x070088cc[ID]\x01 Shot down explosive device \x01Ammo: \x070088cc%d\x01/\x070088cc%d", ga_iBlocks[client], gc_iMaxAllowedBlocks);
-
-			SafeKillIdx(ent);
-
-			if (ga_iBlocks[client] < 1)
-				break;
+		float distanceSq = GetVectorDistanceSquared(vClient, vEnt);
+		if (distanceSq <= IRON_DOME_RANGE_SQ && distanceSq < bestDistanceSq) {
+			bestClient = client;
+			bestDistanceSq = distanceSq;
 		}
 	}
-	return Plugin_Continue;
+
+	return bestClient;
+}
+
+bool InterceptExplosive(int client, int ent) {
+	if (ent <= MaxClients || ent > MAX_ENTITY_INDEX || !IsValidEntity(ent))
+		return false;
+	if (ga_bExplosiveIntercepted[ent])
+		return false;
+	if (!IsClientInGame(client) || !IsPlayerAlive(client))
+		return false;
+
+	ga_bExplosiveIntercepted[ent] = true;
+
+	float vClient[3], vEnt[3];
+	GetClientAbsOrigin(client, vClient);
+	GetEntPropVector(ent, Prop_Send, "m_vecOrigin", vEnt);
+
+	float vBeamStart[3];
+	vBeamStart[0] = vClient[0];
+	vBeamStart[1] = vClient[1];
+	vBeamStart[2] = vClient[2] + 25.0;
+
+	ShowSprite(vBeamStart, vEnt);
+	CreateParticle(vEnt);
+
+	EmitSoundToAll(SND_DETECT, client, SNDCHAN_AUTO, SNDLEVEL_NORMAL);
+	EmitSoundToAll(SND_EXPLODE, ent, SNDCHAN_AUTO, SNDLEVEL_NORMAL);
+
+	RemoveTrackedExplosiveEnt(ent);
+	ga_iBlocks[client]--;
+
+	char cname[64];
+	if (GetEntityClassname(ent, cname, sizeof(cname)))
+		PrintToChat(client, "\x070088cc[ID]\x01 Shot down \x070088cc%s\x01 Ammo: \x070088cc%d\x01/\x070088cc%d", cname, ga_iBlocks[client], gc_iMaxAllowedBlocks);
+	else
+		PrintToChat(client, "\x070088cc[ID]\x01 Shot down explosive device \x01Ammo: \x070088cc%d\x01/\x070088cc%d", ga_iBlocks[client], gc_iMaxAllowedBlocks);
+
+	SafeKillIdx(ent);
+	return true;
+}
+
+void RemoveTrackedExplosiveEnt(int ent) {
+	if (ent <= MaxClients || ent > MAX_ENTITY_INDEX)
+		return;
+
+	ga_bExplosiveTracked[ent] = false;
+}
+
+void ResetTrackedExplosives() {
+	for (int ent = 0; ent <= MAX_ENTITY_INDEX; ent++) {
+		ga_iLastExplosiveScanTick[ent] = 0;
+		ga_bExplosiveTracked[ent] = false;
+		ga_bExplosiveHooked[ent] = false;
+		ga_bExplosiveIntercepted[ent] = false;
+	}
+}
+
+float GetVectorDistanceSquared(const float vStart[3], const float vEnd[3]) {
+	float x = vStart[0] - vEnd[0];
+	float y = vStart[1] - vEnd[1];
+	float z = vStart[2] - vEnd[2];
+
+	return (x * x) + (y * y) + (z * z);
 }
 
 void ShowSprite(const float vStart[3], const float vEnd[3]) {
@@ -299,7 +395,7 @@ void OnButtonPress(int client, int button) {
 		return;
 
 	int target = GetClientAimTarget(client, false);
-	if (target <= MaxClients || target > 2048 || !IsValidEntity(target))
+	if (target <= MaxClients || target > MAX_ENTITY_INDEX || !IsValidEntity(target))
 		return;
 
 	char sName[64];
@@ -321,6 +417,10 @@ void OnButtonPress(int client, int button) {
 	}
 
 	EmitSoundToAll(SND_TAKE, target, SNDCHAN_AUTO, SNDLEVEL_NORMAL);
+	
+	AcceptEntityInput(target, "Disable");
+	SetEntProp(target, Prop_Send, "m_nSolidType", 0);
+	
 	SafeKillIdx(target);
 
 	ga_iBlocks[client]++;
