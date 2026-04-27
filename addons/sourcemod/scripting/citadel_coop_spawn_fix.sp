@@ -20,59 +20,70 @@
 #include <sourcemod>
 #include <sdktools>
 
-public Plugin myinfo = {
-	name = "citadel_coop_spawn_fix",
-	author = "Nullifidian",
-	description = "Disables improperly placed security spawns on citadel_coop.",
-	version = "1.1"
+#define TEAM_SECURITY 2
+#define BAD_SPAWN_COUNT 16
+
+static bool g_bAllowedMap = false;
+static const float g_fBadSpawns[BAD_SPAWN_COUNT][3] =
+{
+	{552.0, 2144.0, -670.672973},
+	{524.0, 2144.0, -670.672973},
+	{544.0, 2228.0, -670.672973},
+	{508.0, 2228.0, -670.672973},
+	{476.0, 2224.0, -670.672973},
+	{480.0, 2144.0, -670.672973},
+	{440.0, 2140.0, -670.672973},
+	{440.0, 2224.0, -670.672973},
+	{408.0, 2140.0, -670.672973},
+	{380.0, 2140.0, -670.672973},
+	{400.0, 2224.0, -670.672973},
+	{364.0, 2224.0, -670.672973},
+	{332.0, 2220.0, -670.672973},
+	{336.0, 2140.0, -670.672973},
+	{296.0, 2136.0, -670.672973},
+	{296.0, 2220.0, -670.672973}
 };
 
-public void OnMapStart() {
-	char sMapName[64];
-	GetCurrentMap(sMapName, sizeof(sMapName));
-	if (strcmp(sMapName, "citadel_coop", false) != 0) {
-		ServerCommand("sm plugins unload disabled/citadel_coop_spawn_fix");
-	}
-}
+public Plugin myinfo = {
+	name = "citadel_coop_spawn_fix",
+	author = "Nullifidian and GPT",
+	description = "Disables improperly placed security spawns on citadel_coop.",
+	version = "1.3"
+};
 
 public void OnPluginStart() {
 	HookEvent("round_start", Event_RoundStart_Pre, EventHookMode_Pre);
 }
 
+public void OnMapStart() {
+	char sMapName[64];
+	GetCurrentMap(sMapName, sizeof(sMapName));
+	g_bAllowedMap = strcmp(sMapName, "citadel_coop", false) == 0;
+	if (!g_bAllowedMap) {
+		CreateTimer(1.0, Timer_UnloadSelf, _, TIMER_FLAG_NO_MAPCHANGE);
+	}
+}
+
+public Action Timer_UnloadSelf(Handle timer) {
+	ServerCommand("sm plugins unload disabled/citadel_coop_spawn_fix");
+	return Plugin_Stop;
+}
+
 public Action Event_RoundStart_Pre(Event event, const char[] name, bool dontBroadcast) {
+	if (!g_bAllowedMap)
+		return Plugin_Continue;
+
 	DisableBadSecSpawns();
 	return Plugin_Continue;
 }
 
 void DisableBadSecSpawns() {
-	int ent = MaxClients + 1;
+	int ent = -1;
 	float vOrigin[3];
-
-	// List of bad spawnpoint locations to disable
-	char sBadSpawns[][] = {
-		"552.000000 2144.000000 -670.672973",
-		"524.000000 2144.000000 -670.672973",
-		"544.000000 2228.000000 -670.672973",
-		"508.000000 2228.000000 -670.672973",
-		"476.000000 2224.000000 -670.672973",
-		"480.000000 2144.000000 -670.672973",
-		"440.000000 2140.000000 -670.672973",
-		"440.000000 2224.000000 -670.672973",
-		"408.000000 2140.000000 -670.672973",
-		"380.000000 2140.000000 -670.672973",
-		"400.000000 2224.000000 -670.672973",
-		"364.000000 2224.000000 -670.672973",
-		"332.000000 2220.000000 -670.672973",
-		"336.000000 2140.000000 -670.672973",
-		"296.000000 2136.000000 -670.672973",
-		"296.000000 2220.000000 -670.672973"
-	};
-
-	char sBuffer[64];
 
 	while ((ent = FindEntityByClassname(ent, "ins_spawnpoint")) != -1) {
 		// Only check active security team spawnpoints
-		if (GetEntProp(ent, Prop_Data, "m_iTeamNum") != 2) {
+		if (GetEntProp(ent, Prop_Data, "m_iTeamNum") != TEAM_SECURITY) {
 			continue;
 		}
 
@@ -81,10 +92,10 @@ void DisableBadSecSpawns() {
 		}
 
 		GetEntPropVector(ent, Prop_Data, "m_vecAbsOrigin", vOrigin);
-		FormatEx(sBuffer, sizeof(sBuffer), "%f %f %f", vOrigin[0], vOrigin[1], vOrigin[2]);
-
-		for (int i = 0; i < sizeof(sBadSpawns); i++) {
-			if (strcmp(sBadSpawns[i], sBuffer) == 0) {
+		for (int i = 0; i < BAD_SPAWN_COUNT; i++) {
+			if (vOrigin[0] == g_fBadSpawns[i][0]
+			 && vOrigin[1] == g_fBadSpawns[i][1]
+			 && vOrigin[2] == g_fBadSpawns[i][2]) {
 				AcceptEntityInput(ent, "Disable");
 				break;
 			}
