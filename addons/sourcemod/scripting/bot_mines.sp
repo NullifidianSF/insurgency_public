@@ -5,7 +5,7 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PLUGIN_VERSION		"3.8"
+#define PLUGIN_VERSION		"3.9"
 
 #define MAXENTITIES			2048
 #define ENTIDX_OK(%1)	((%1) > 0 && (%1) <= MAXENTITIES)
@@ -57,6 +57,7 @@ bool g_bLateLoad;
 bool g_bTimerOn;
 bool ga_bPlayerHooked[MAXPLAYERS + 1] = {false, ...};
 bool ga_bAutoViewMine[MAXPLAYERS + 1] = {false, ...};
+bool ga_bDefusedMine[MAXENTITIES + 1] = {false, ...};
 
 ArrayList ga_hMines;
 
@@ -492,6 +493,7 @@ bool CreateMineAt(int userid, const float snapPos[3])
 		ga_fMineLastPos[iEnt][1] = snapPos[1];
 		ga_fMineLastPos[iEnt][2] = snapPos[2];
 		ga_iTouchedBy[iEnt] = 0;
+		ga_bDefusedMine[iEnt] = false;
 	}
 
 	SetEntProp(iEnt, Prop_Data, "m_takedamage", DAMAGE_YES);
@@ -553,7 +555,7 @@ public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float
 				PrintToChatAll("\x070088cc%N\x01 saved \x070088cc%N\x01's life by defusing the mine.", attacker, ga_iTouchedBy[victim]);
 			}
 
-			SafeKillIdx(victim);
+			DefuseMine(victim);
 			ga_iDefuseCount[attacker]++;
 			PrintMineStats(attacker);
 			SendDefusedMessage(attacker);
@@ -681,7 +683,7 @@ public Action Hook_OnTakeDamageBlock(int victim, int &attacker, int &inflictor, 
 	if (attacker < 1 || attacker > MaxClients || !IsClientInGame(attacker) || IsFakeClient(attacker))
 		return Plugin_Continue;
 
-	if (damagetype == DMG_SLASH)
+	if (damagetype & DMG_SLASH)
 		return Plugin_Handled;
 
 	return Plugin_Continue;
@@ -690,6 +692,7 @@ public Action Hook_OnTakeDamageBlock(int victim, int &attacker, int &inflictor, 
 public Action Hook_EndTouch(int entity, int touch)
 {
 	if (!ENTIDX_OK(entity)) return Plugin_Continue;
+	if (ga_bDefusedMine[entity]) return Plugin_Continue;
 
 	if (ENTIDX_OK(entity) && ga_iTouchedBy[entity] != touch) return Plugin_Continue;
 	if (touch < 1 || touch > MaxClients || !IsClientInGame(touch) || IsFakeClient(touch))
@@ -707,6 +710,9 @@ public Action Hook_EndTouch(int entity, int touch)
 
 void Mine_OnBreak(const char[] output, int caller, int activator, float delay)
 {
+	if (ENTIDX_OK(caller) && ga_bDefusedMine[caller])
+		return;
+
 	g_fMineBreakTime = GetGameTime();
 
 	if (ENTIDX_OK(caller))
@@ -986,6 +992,7 @@ public void OnEntityDestroyed(int ent)
 
 	ga_iTouchedBy[ent] = 0;
 	ga_fMineSoundCooldown[ent] = 0.0;
+	ga_bDefusedMine[ent] = false;
 
 	for (int i = 0; i < ga_hMines.Length; i++)
 	{
@@ -1043,6 +1050,17 @@ void SafeKillIdx(int ent) {
 	RequestFrame(NF_KillEntity, ref);
 }
 
+void DefuseMine(int ent)
+{
+	if (ent <= MaxClients) return;
+	if (!IsValidEntity(ent)) return;
+
+	ga_bDefusedMine[ent] = true;
+	UnhookSingleEntityOutput(ent, "OnBreak", Mine_OnBreak);
+	SetEntProp(ent, Prop_Data, "m_takedamage", DAMAGE_NO);
+	SafeKillIdx(ent);
+}
+
 void SafeKillRef(int entref)
 {
 	if (entref == INVALID_ENT_REFERENCE) return;
@@ -1063,6 +1081,12 @@ void BreakNextFrame(any entref)
 	int ent = EntRefToEntIndex(entref);
 	if (ent > MaxClients && IsValidEntity(ent))
 	{
+		if (ENTIDX_OK(ent) && ga_bDefusedMine[ent])
+		{
+			SafeKillIdx(ent);
+			return;
+		}
+
 		AcceptEntityInput(ent, "Disable");
 		SetEntProp(ent, Prop_Send, "m_nSolidType", 0);
 		SetEntProp(ent, Prop_Send, "m_CollisionGroup", 0);
