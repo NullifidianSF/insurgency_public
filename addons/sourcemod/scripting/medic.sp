@@ -191,7 +191,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & GPT/Codex",
 	description = "Adds the ability to revive with the Medic class and a health kit.",
-	version = "1.0.9",
+	version = "1.1.0",
 	url = ""
 };
 
@@ -206,8 +206,7 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 	return APLRes_Success;
 }
 
-public any Native_Medic_GetClientRagdollRef(Handle plugin, int numParams)
-{
+public any Native_Medic_GetClientRagdollRef(Handle plugin, int numParams) {
 	int client = GetNativeCell(1);
 	if (client < 1 || client > MaxClients)
 		return INVALID_ENT_REFERENCE;
@@ -215,8 +214,7 @@ public any Native_Medic_GetClientRagdollRef(Handle plugin, int numParams)
 	return ga_iClientRagdolls[client];
 }
 
-public any Native_Medic_IsClientMedic(Handle plugin, int numParams)
-{
+public any Native_Medic_IsClientMedic(Handle plugin, int numParams) {
 	int client = GetNativeCell(1);
 	if (client < 1 || client > MaxClients)
 		return false;
@@ -333,6 +331,7 @@ public void OnMapEnd() {
 	if (g_hTrackedHealthkits != null)
 		g_hTrackedHealthkits.Clear();
 }
+
 public void OnEntityDestroyed(int entity) {
 	if (entity <= MaxClients || entity > MAX_ENTITIES)
 		return;
@@ -641,16 +640,25 @@ void Frame_ConvertDeleteRagdoll(int userid) {
 					GetEntPropVector(clientRagdoll, Prop_Send, "m_vecRagdollOrigin", fOrigin);
 					GetEntPropVector(clientRagdoll, Prop_Send, "m_vecForce", fVelocity);
 
-					int tempRag = CreateEntityByName("prop_ragdoll");
-					if (IsValidEntity(tempRag)) {
-						ga_iClientRagdolls[client] = EntIndexToEntRef(tempRag);
-						char sBuffer[64];
-						GetClientModel(client, sBuffer, sizeof(sBuffer));
-						SetEntityModel(tempRag, sBuffer);
-						// Give custom ragdoll name for each client, this way other plugins can search for targetname to modify behavior
-						FormatEx(sBuffer, sizeof(sBuffer), "playervital_ragdoll_%i", client);
-						DispatchKeyValue(tempRag, "targetname", sBuffer);
-						DispatchKeyValue(tempRag, "body", ga_sPlayerBGroups[client]);
+					char sModel[PLATFORM_MAX_PATH];
+					GetClientModel(client, sModel, sizeof(sModel));
+
+					if (!IsValidMedicRagdollModel(sModel)) {
+						ga_bHurtFatal[client] = true;
+						ga_iPlayerWoundTime[client] = -1;
+						ga_iPlayerWoundType[client] = -1;
+						LogMessage("[Medic] Skipping revivable ragdoll for %N: invalid player model \"%s\"", client, sModel);
+					}
+					else {
+						int tempRag = CreateEntityByName("prop_ragdoll");
+						if (IsValidEntity(tempRag)) {
+							ga_iClientRagdolls[client] = EntIndexToEntRef(tempRag);
+							char sBuffer[64];
+							SetEntityModel(tempRag, sModel);
+							// Give custom ragdoll name for each client, this way other plugins can search for targetname to modify behavior
+							FormatEx(sBuffer, sizeof(sBuffer), "playervital_ragdoll_%i", client);
+							DispatchKeyValue(tempRag, "targetname", sBuffer);
+							DispatchKeyValue(tempRag, "body", ga_sPlayerBGroups[client]);
 		/*
 						Format(sBuffer, sizeof(sBuffer), "%f %f %f", g_fDeadPosition[client][0], g_fDeadPosition[client][1], g_fDeadPosition[client][2] += 15.0);
 						DispatchKeyValue(tempRag, "Origin", sBuffer);
@@ -658,31 +666,75 @@ void Frame_ConvertDeleteRagdoll(int userid) {
 						Format(sBuffer, sizeof(sBuffer), "%f %f %f", ga_fDeadAngle[client][0] += -90.0, ga_fDeadAngle[client][1], ga_fDeadAngle[client][2]);
 						DispatchKeyValue(tempRag, "Angles", sBuffer);
 		*/
-						DispatchSpawn(tempRag);
+							DispatchSpawn(tempRag);
 
-						ActivateEntity(tempRag);
+							ActivateEntity(tempRag);
 
-						//must be after DispatchSpawn
-						DispatchKeyValue(tempRag, "CollisionGroup", "17");	//COLLISION_GROUP_PUSHAWAY
+							//must be after DispatchSpawn
+							DispatchKeyValue(tempRag, "CollisionGroup", "17");	//COLLISION_GROUP_PUSHAWAY
 
-						fOrigin[2] += 50.0;
-						VecCopy(fOrigin, ga_fRagdollPosition[client]);
+							fOrigin[2] += 50.0;
+							VecCopy(fOrigin, ga_fRagdollPosition[client]);
 
-						ga_iPendingRagTeleportRef[client] = EntIndexToEntRef(tempRag);
-						ga_iPendingRagTeleportTries[client] = 0;
-						VecCopy(fOrigin, ga_fPendingRagTeleportPos[client]);
-						VecCopy(ga_fDeadAngle[client], ga_fPendingRagTeleportAng[client]);
-						VecCopy(fVelocity, ga_fPendingRagTeleportVel[client]);
+							ga_iPendingRagTeleportRef[client] = EntIndexToEntRef(tempRag);
+							ga_iPendingRagTeleportTries[client] = 0;
+							VecCopy(fOrigin, ga_fPendingRagTeleportPos[client]);
+							VecCopy(ga_fDeadAngle[client], ga_fPendingRagTeleportAng[client]);
+							VecCopy(fVelocity, ga_fPendingRagTeleportVel[client]);
 
-						RequestFrame(Frame_TeleportPendingRagdoll, userid);
-						ga_iReviveRemainingTime[client] = ga_iPlayerWoundTime[client];
-						ga_iReviveNonMedicRemainingTime[client] = g_iNonMedicReviveTime;
+							RequestFrame(Frame_TeleportPendingRagdoll, userid);
+							ga_iReviveRemainingTime[client] = ga_iPlayerWoundTime[client];
+							ga_iReviveNonMedicRemainingTime[client] = g_iNonMedicReviveTime;
+						}
 					}
 				}
 				SafeKillIdx(clientRagdoll);
 				clientRagdoll = INVALID_ENT_REFERENCE;
 		}
 	}
+}
+
+static bool IsValidMedicRagdollModel(const char[] model) {
+	if (model[0] == '\0')
+		return false;
+
+	if (!HasMdlExtension(model))
+		return false;
+
+	if (StrContains(model, "error.mdl", false) != -1)
+		return false;
+
+	if (StrEqual(model, "models/player.mdl", false))
+		return false;
+
+	if (!FileExists(model, true))
+		return false;
+
+	if (!IsModelPrecached(model))
+		return false;
+
+	return true;
+}
+
+static bool HasMdlExtension(const char[] model) {
+	int len = strlen(model);
+
+	if (len < 5)
+		return false;
+
+	if (model[len - 4] != '.')
+		return false;
+
+	if (model[len - 3] != 'm' && model[len - 3] != 'M')
+		return false;
+
+	if (model[len - 2] != 'd' && model[len - 2] != 'D')
+		return false;
+
+	if (model[len - 1] != 'l' && model[len - 1] != 'L')
+		return false;
+
+	return true;
 }
 
 bool hasCorrectWeapon(const char[] sWeapon, bool melee = true) {
