@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <clientprefs>
 
-#define PL_VERSION		"2.37"
+#define PL_VERSION		"2.38"
 
 #define MAXENTITIES		2048
 
@@ -47,6 +47,12 @@
 #define STARTBUILDPOINTS			3	// Free starting build points for all players
 
 #define PROP_ALPHA					125
+#define PROP_PREVIEW_PLACEABLE_R	80
+#define PROP_PREVIEW_PLACEABLE_G	255
+#define PROP_PREVIEW_PLACEABLE_B	80
+#define PROP_PREVIEW_BLOCKED_R		255
+#define PROP_PREVIEW_BLOCKED_G		60
+#define PROP_PREVIEW_BLOCKED_B		60
 #define PROP_ROTATE_STEP			30.0
 #define PROP_DAMAGE_TAKE			100.0	// Amount of damage the prop takes each time a bot touches it, limited by PROP_TOUCH_COOLDOWN.
 #define PROP_TOUCH_COOLDOWN			0.50
@@ -613,6 +619,24 @@ static bool CanPlaceNow(int client) {
 	return true;
 }
 
+static bool CanPreviewPlaceProp(int client, const float vPos[3], const float vel[3]) {
+	if (!IsPlayerOnGround(client))
+		return false;
+	if (vel[0] != 0.0 || vel[1] != 0.0 || vel[2] != 0.0)
+		return false;
+	if (IsCollidingWithPlayer(client, vPos))
+		return false;
+
+	return true;
+}
+
+static void UpdateHeldPropPreviewColor(int client, int ent, const float vPos[3], const float vel[3]) {
+	if (CanPreviewPlaceProp(client, vPos, vel))
+		SetEntityRenderColor(ent, PROP_PREVIEW_PLACEABLE_R, PROP_PREVIEW_PLACEABLE_G, PROP_PREVIEW_PLACEABLE_B, PROP_ALPHA);
+	else
+		SetEntityRenderColor(ent, PROP_PREVIEW_BLOCKED_R, PROP_PREVIEW_BLOCKED_G, PROP_PREVIEW_BLOCKED_B, PROP_ALPHA);
+}
+
 void HoldProp(int client) {
 	if (client < 1 || !IsClientInGame(client) || !IsPlayerAlive(client))
 		return;
@@ -703,6 +727,8 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 		ga_fLastHeldPreviewPos[client][2] = vPos[2];
 		ga_bHeldPreviewPosValid[client] = true;
 	}
+
+	UpdateHeldPropPreviewColor(client, ent, vPos, vel);
 
 	return Plugin_Continue;
 }
@@ -2004,7 +2030,7 @@ void PrecacheFiles() {
 	PrecacheModel(AMMO_ICON_SPRITE, true);
 }
 
-bool IsCollidingWithPlayer(int client, float vPos[3]) {
+bool IsCollidingWithPlayer(int client, const float vPos[3]) {
 	for (int i = 1; i <= MaxClients; i++) {
 		if (i == client || !IsClientInGame(i) || !IsPlayerAlive(i))
 			continue;
