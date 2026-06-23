@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <clientprefs>
 
-#define PL_VERSION		"2.35"
+#define PL_VERSION		"2.37"
 
 #define MAXENTITIES		2048
 
@@ -235,6 +235,8 @@ int		g_iDefaultResupplyDelayPenalty;
 int		g_iDefaultResupplyGrace;
 int		g_iDefaultResupplyGraceInitial;
 int		g_iDefaultResupplyPenaltyReset;
+bool	g_bDefaultResupplyConvarsCaptured = false;
+bool	g_bResupplyConvarsOverridden = false;
 
 ConVar	g_cvAmmoResupplyRange = null;
 ConVar	g_cvAmmoAmount = null;
@@ -557,7 +559,7 @@ public Action Event_PlayerDeath_Pre(Event event, const char[] name, bool dontBro
 
 		int inflictor = EntRefToEntIndex(ga_iLastInflictor[victim]);
 		
-		if (inflictor != INVALID_ENT_REFERENCE && IsValidEntity(inflictor)) {
+		if (IsValidNonClientEntity(inflictor)) {
 			if (GetTrackedPropId(inflictor) == MID(Prop_BarbWire)) {
 				event.SetString("weapon", "Barbed Wire");
 				return Plugin_Changed;
@@ -689,6 +691,10 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 	GetClientEyePosition(client, vPos);
 	GetPositionInFront(vPos, vAng, PROP_HOLD_DISTANCE);
 
+	// Avoid mutating nearby props during the engine's PlayerUse scan.
+	if (buttons & BTN_USE)
+		return Plugin_Continue;
+
 	if (!ga_bHeldPreviewPosValid[client]
 		|| GetVectorDistance(vPos, ga_fLastHeldPreviewPos[client], true) > gc_fHeldPropTeleportMinDeltaSqr) {
 		TeleportEntity(ent, vPos, NULL_VECTOR, NULL_VECTOR);
@@ -812,7 +818,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 								GetClientEyeAngles(client, vAng);
 								DataPack hDatapack;
 								CreateDataTimer(0.1, Timer_ForceDeployBipod, hDatapack);
-								hDatapack.WriteCell(client);
+								hDatapack.WriteCell(GetClientUserId(client));
 								hDatapack.WriteCell(EntIndexToEntRef(target));
 								hDatapack.WriteFloat(vAng[1]);
 							}
@@ -1104,6 +1110,10 @@ static void RemoveEntityRef(ArrayList list, int entity) {
 		if (EntRefToEntIndex(list.Get(i)) == entity)
 			list.Erase(i);
 	}
+}
+
+static bool IsValidNonClientEntity(int entity) {
+	return entity > MaxClients && entity <= MAXENTITIES && IsValidEntity(entity);
 }
 
 static void TrackSolidProp(int entity, int owner, PropId modelId) {
@@ -1579,8 +1589,15 @@ public Action PropOnTakeDamage(int entity, int &attacker, int &inflictor, float 
 }
 
 public Action BotOnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype) {
-	ga_iLastInflictor[victim] = EntIndexToEntRef(inflictor);
-	ga_iLastInflictorPropId[victim] = GetTrackedPropId(inflictor);
+	if (IsValidNonClientEntity(inflictor)) {
+		ga_iLastInflictor[victim] = EntIndexToEntRef(inflictor);
+		ga_iLastInflictorPropId[victim] = GetTrackedPropId(inflictor);
+	}
+	else {
+		ga_iLastInflictor[victim] = INVALID_ENT_REFERENCE;
+		ga_iLastInflictorPropId[victim] = -1;
+	}
+
 	ga_bMattressDeath[victim] = false;
 	ga_iMattressKiller[victim] = 0;
 
@@ -1610,7 +1627,7 @@ public Action PlayerOnTakeDamage(int victim, int &attacker, int &inflictor, floa
 		}
 	}
 
-	if ((damagetype & DMG_BLAST) && IsValidEntity(inflictor) && inflictor != victim) {
+	if ((damagetype & DMG_BLAST) && IsValidNonClientEntity(inflictor)) {
 		float vStart[3], vEnd[3];
 		GetClientEyePosition(victim, vStart);
 		GetEntPropVector(inflictor, Prop_Data, "m_vecAbsOrigin", vEnd);
@@ -1624,7 +1641,7 @@ public Action PlayerOnTakeDamage(int victim, int &attacker, int &inflictor, floa
 			}
 
 			int hitEnt = TR_GetEntityIndex(trace);
-			if (hitEnt != victim && hitEnt > MaxClients && IsValidEntity(hitEnt)) {
+			if (hitEnt != victim && IsValidNonClientEntity(hitEnt)) {
 				int hitPropId = GetTrackedPropId(hitEnt);
 				if (!PropIdBlocksExplosion(hitPropId)) {
 					CloseHandle(trace);
@@ -1659,7 +1676,7 @@ bool GlowLowHp(int entity, int health) {
 }
 
 public void OnEntityDestroyed(int entity) {
-	if (entity <= MaxClients)
+	if (entity <= MaxClients || entity > MAXENTITIES)
 		return;
 
 	int trackedPropId = GetTrackedPropId(entity);
@@ -1778,11 +1795,11 @@ bool WeaponWithBipod(int client) {
 
 public Action Timer_ForceDeployBipod(Handle timer, DataPack hDatapack) {
 	hDatapack.Reset();
-	int client = hDatapack.ReadCell();
+	int client = GetClientOfUserId(hDatapack.ReadCell());
 	int sandbag = EntRefToEntIndex(hDatapack.ReadCell());
 	float pivot = hDatapack.ReadFloat();
 
-	if (sandbag == INVALID_ENT_REFERENCE || !IsValidEntity(sandbag) || !IsClientInGame(client) || !IsPlayerAlive(client))
+	if (client < 1 || client > MaxClients || !IsValidNonClientEntity(sandbag) || !IsClientInGame(client) || !IsPlayerAlive(client))
 		return Plugin_Stop;
 
 	SetEntPropFloat(client, Prop_Send, "m_flPivotYaw", pivot);
@@ -1794,53 +1811,67 @@ public Action Timer_ForceDeployBipod(Handle timer, DataPack hDatapack) {
 	return Plugin_Stop;
 }
 
-public Action Timer_AmmoResupply(Handle timer) {
-	int		validAmmoCache;
+static void ResetAmmoResupplyProgress(int client) {
+	if (client < 1 || client > MaxClients)
+		return;
 
+	ga_iResupplyCounter[client] = g_iResupplyDelay;
+}
+
+public Action Timer_AmmoResupply(Handle timer) {
 	for (int client = 1; client <= MaxClients; client++) {
 		if (!IsClientInGame(client)
 			|| !IsPlayerAlive(client)
 			|| GetClientTeam(client) != TEAM_SECURITY) {
+			ResetAmmoResupplyProgress(client);
 			continue;
 		}
 
-		if (!ga_bHoldingMeleeWeapon[client])
+		if (!ga_bHoldingMeleeWeapon[client]) {
+			ResetAmmoResupplyProgress(client);
 			continue;
+		}
 
-		if (GetClientButtons(client) & BTN_RELOAD) {
-			validAmmoCache = FindValidProp_InDistance(client);
-			if (validAmmoCache == -1)
-				continue;
+		if ((GetClientButtons(client) & BTN_RELOAD) == 0) {
+			ResetAmmoResupplyProgress(client);
+			continue;
+		}
 
-			if (g_bAmmoOnce && HasUsedAmmoCache(client, validAmmoCache)) {
-				PrintHintText(client, "You are not allowed to resupply from the same ammo cache more than once!");
-				continue;
+		int validAmmoCache = FindValidProp_InDistance(client);
+		if (validAmmoCache == -1) {
+			ResetAmmoResupplyProgress(client);
+			continue;
+		}
+
+		if (g_bAmmoOnce && HasUsedAmmoCache(client, validAmmoCache)) {
+			ResetAmmoResupplyProgress(client);
+			PrintHintText(client, "You are not allowed to resupply from the same ammo cache more than once!");
+			continue;
+		}
+
+		ga_iResupplyCounter[client]--;
+
+		if (ga_iAmmoAmount[validAmmoCache] <= 0)
+			ga_iAmmoAmount[validAmmoCache] = g_iAmmoAmount;
+
+		PrintHintText(client, "Resupplying ammo in %d seconds | Supply left: %d",
+			ga_iResupplyCounter[client], ga_iAmmoAmount[validAmmoCache]);
+
+		if (ga_iResupplyCounter[client] <= 0) {
+			ResetAmmoResupplyProgress(client);
+
+			AmmoResupply_Player(client);
+
+			ga_iAmmoAmount[validAmmoCache]--;
+			if (ga_iAmmoAmount[validAmmoCache] <= 0) {
+				SafeKillIdx(validAmmoCache);
+			}
+			else {
+				MarkAmmoCacheUsed(client, validAmmoCache);
 			}
 
-			ga_iResupplyCounter[client]--;
-
-			if (ga_iAmmoAmount[validAmmoCache] <= 0)
-				ga_iAmmoAmount[validAmmoCache] = g_iAmmoAmount;
-
-			PrintHintText(client, "Resupplying ammo in %d seconds | Supply left: %d",
-				ga_iResupplyCounter[client], ga_iAmmoAmount[validAmmoCache]);
-
-			if (ga_iResupplyCounter[client] <= 0) {
-				ga_iResupplyCounter[client] = g_iResupplyDelay;
-
-				AmmoResupply_Player(client);
-
-				ga_iAmmoAmount[validAmmoCache]--;
-				if (ga_iAmmoAmount[validAmmoCache] <= 0 && validAmmoCache != -1) {
-					SafeKillIdx(validAmmoCache);
-				}
-				else {
-					MarkAmmoCacheUsed(client, validAmmoCache);
-				}
-
-				PrintHintText(client, "Rearmed! Ammo Supply left: %d", ga_iAmmoAmount[validAmmoCache]);
-				PrintToChat(client, "\x01Rearmed! Ammo Supply left: \x070088cc%d", ga_iAmmoAmount[validAmmoCache]);
-			}
+			PrintHintText(client, "Rearmed! Ammo Supply left: %d", ga_iAmmoAmount[validAmmoCache]);
+			PrintToChat(client, "\x01Rearmed! Ammo Supply left: \x070088cc%d", ga_iAmmoAmount[validAmmoCache]);
 		}
 	}
 	return Plugin_Continue;
@@ -2045,15 +2076,21 @@ public int BuyMenuHandler(Menu menu, MenuAction action, int client, int param) {
 		case MenuAction_Select: {
 			if (client < 1 || client > MaxClients)
 				return 0;
-			if (param < 0)
+			if (param < 0) {
+				ga_bShopMenuOpen[client] = false;
 				return 0;
+			}
 
 			char item[16], display[128];
 			int style;
-			if (!menu.GetItem(param, item, sizeof(item), style, display, sizeof(display)))
+			if (!menu.GetItem(param, item, sizeof(item), style, display, sizeof(display))) {
+				ga_bShopMenuOpen[client] = false;
 				return 0;
-			if (style & ITEMDRAW_SPACER || style & ITEMDRAW_DISABLED)
+			}
+			if (style & ITEMDRAW_SPACER || style & ITEMDRAW_DISABLED) {
+				ga_bShopMenuOpen[client] = false;
 				return 0;
+			}
 
 			if (strcmp(item, "1", false) == 0 || strcmp(item, "max", false) == 0) {
 				int playerTokens = GetEntProp(client, Prop_Send, "m_nAvailableTokens");
@@ -2075,8 +2112,10 @@ public int BuyMenuHandler(Menu menu, MenuAction action, int client, int param) {
 
 				OpenShopMenu(client, false);
 			}
-			else if (strcmp(item, "refund", false) == 0)
+			else if (strcmp(item, "refund", false) == 0) {
+				ga_bShopMenuOpen[client] = false;
 				OpenRefundConfirmMenu(client);
+			}
 		}
 	}
 	return 0;
@@ -2245,18 +2284,25 @@ public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, in
 	if (action == MenuAction_End)
 		delete menu;
 	else if (action == MenuAction_Select) {
-		if (param < 0)
+		if (param < 0) {
+			ga_bBuildMenuOpen[client] = false;
 			return 0;
+		}
 
 		char indexStr[8], display[96];
 		int style;
-		if (!menu.GetItem(param, indexStr, sizeof(indexStr), style, display, sizeof(display)))
+		if (!menu.GetItem(param, indexStr, sizeof(indexStr), style, display, sizeof(display))) {
+			ga_bBuildMenuOpen[client] = false;
 			return 0;
-		if (style & ITEMDRAW_DISABLED)
+		}
+		if (style & ITEMDRAW_DISABLED) {
+			ga_bBuildMenuOpen[client] = false;
 			return 0;
+		}
 
 		int selectedIndex = StringToInt(indexStr);
 		if (selectedIndex >= 0 && selectedIndex < PROP_COUNT) {
+			ga_bBuildMenuOpen[client] = false;
 			ga_iModelIndex[client] = view_as<PropId>(selectedIndex);
 
 			char modelName[64];
@@ -2287,16 +2333,21 @@ public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, in
 
 			OpenRotationMenu(client);
 		}
-		else if (selectedIndex == 99)
+		else if (selectedIndex == 99) {
+			ga_bBuildMenuOpen[client] = false;
 			OpenDeconstructConfirmMenu(client);
+		}
 		else if (selectedIndex == 98) {
+			ga_bBuildMenuOpen[client] = false;
 			if (ga_iPropHolding[client] != INVALID_ENT_REFERENCE)
 				StopHolding(client);
 
 			OpenShopMenu(client);
 		}
-		else
+		else {
+			ga_bBuildMenuOpen[client] = false;
 			PrintToChat(client, "Invalid prop selection.");
+		}
 	}
 	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients)
 		ga_bBuildMenuOpen[client] = false;
@@ -2432,6 +2483,8 @@ public int RotateStepMenuHandler(Menu menu, MenuAction action, int client, int p
 	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients) {
 		if (param == MenuCancel_ExitBack)
 			OpenRotationMenu(client);
+		else
+			ga_bPropRotateMenuOpen[client] = false;
 	}
 	return 0;
 }
@@ -2456,8 +2509,10 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 		}
 
 		int ent = EntRefToEntIndex(ga_iPropHolding[client]);
-		if (ent <= MaxClients || !IsValidEntity(ent))
+		if (ent <= MaxClients || !IsValidEntity(ent)) {
+			ga_bPropRotateMenuOpen[client] = false;
 			return 0;
+		}
 
 		float vRot[3];
 		GetEntPropVector(ent, Prop_Send, "m_angRotation", vRot);
@@ -2686,6 +2741,8 @@ static void BroadcastBuildTip() {
 }
 
 public void OnMapEnd() {
+	RestoreResupplyConvars();
+
 	JC_Stop();
 	if (g_hJammers != null) {
 		delete g_hJammers;
@@ -2744,12 +2801,7 @@ public void OnPluginEnd() {
 		g_hResupplyTriggerRefs = null;
 	}
 
-	ServerCommand("mp_player_resupply_coop_delay_base %d", g_iDefaultResupplyDelayBase);
-	ServerCommand("mp_player_resupply_coop_delay_max %d", g_iDefaultResupplyDelayMax);
-	ServerCommand("mp_player_resupply_coop_delay_penalty %d", g_iDefaultResupplyDelayPenalty);
-	ServerCommand("mp_player_resupply_coop_grace %d", g_iDefaultResupplyGrace);
-	ServerCommand("mp_player_resupply_coop_grace_initial %d", g_iDefaultResupplyGraceInitial);
-	ServerCommand("mp_player_resupply_coop_penalty_reset %d", g_iDefaultResupplyPenaltyReset);
+	RestoreResupplyConvars();
 
 	KillTipTimer();
 }
@@ -2795,28 +2847,71 @@ public void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] n
 		g_bAmmoOnce = g_cvAmmoOnce.BoolValue;
 }
 
+static bool ReadGameConVarInt(const char[] name, int &value) {
+	ConVar convar = FindConVar(name);
+	if (convar == null) {
+		LogError("Unable to find required game convar: %s", name);
+		return false;
+	}
+
+	value = convar.IntValue;
+	return true;
+}
+
+static bool SetGameConVarInt(const char[] name, int value) {
+	ConVar convar = FindConVar(name);
+	if (convar == null) {
+		LogError("Unable to find required game convar: %s", name);
+		return false;
+	}
+
+	convar.SetInt(value);
+	return true;
+}
+
 void FindAndSetResupplyConvars() {
-	g_iDefaultResupplyDelayBase = GetConVarInt(FindConVar("mp_player_resupply_coop_delay_base"));
-	ServerCommand("mp_player_resupply_coop_delay_base 0");
+	if (!g_bDefaultResupplyConvarsCaptured) {
+		bool captured = true;
+		captured = ReadGameConVarInt("mp_player_resupply_coop_delay_base", g_iDefaultResupplyDelayBase) && captured;
+		captured = ReadGameConVarInt("mp_player_resupply_coop_delay_max", g_iDefaultResupplyDelayMax) && captured;
+		captured = ReadGameConVarInt("mp_player_resupply_coop_delay_penalty", g_iDefaultResupplyDelayPenalty) && captured;
+		captured = ReadGameConVarInt("mp_player_resupply_coop_grace", g_iDefaultResupplyGrace) && captured;
+		captured = ReadGameConVarInt("mp_player_resupply_coop_grace_initial", g_iDefaultResupplyGraceInitial) && captured;
+		captured = ReadGameConVarInt("mp_player_resupply_coop_penalty_reset", g_iDefaultResupplyPenaltyReset) && captured;
 
-	g_iDefaultResupplyDelayMax = GetConVarInt(FindConVar("mp_player_resupply_coop_delay_max"));
-	ServerCommand("mp_player_resupply_coop_delay_max 0");
+		if (!captured)
+			return;
 
-	g_iDefaultResupplyDelayPenalty = GetConVarInt(FindConVar("mp_player_resupply_coop_delay_penalty"));
-	ServerCommand("mp_player_resupply_coop_delay_penalty 0");
+		g_bDefaultResupplyConvarsCaptured = true;
+	}
 
-	g_iDefaultResupplyGrace = GetConVarInt(FindConVar("mp_player_resupply_coop_grace"));
-	ServerCommand("mp_player_resupply_coop_grace 0");
+	bool overridden = false;
+	overridden = SetGameConVarInt("mp_player_resupply_coop_delay_base", 0) || overridden;
+	overridden = SetGameConVarInt("mp_player_resupply_coop_delay_max", 0) || overridden;
+	overridden = SetGameConVarInt("mp_player_resupply_coop_delay_penalty", 0) || overridden;
+	overridden = SetGameConVarInt("mp_player_resupply_coop_grace", 0) || overridden;
+	overridden = SetGameConVarInt("mp_player_resupply_coop_grace_initial", 0) || overridden;
+	overridden = SetGameConVarInt("mp_player_resupply_coop_penalty_reset", 0) || overridden;
 
-	g_iDefaultResupplyGraceInitial = GetConVarInt(FindConVar("mp_player_resupply_coop_grace_initial"));
-	ServerCommand("mp_player_resupply_coop_grace_initial 0");
+	g_bResupplyConvarsOverridden = overridden;
+}
 
-	g_iDefaultResupplyPenaltyReset = GetConVarInt(FindConVar("mp_player_resupply_coop_penalty_reset"));
-	ServerCommand("mp_player_resupply_coop_penalty_reset 0");
+void RestoreResupplyConvars() {
+	if (!g_bDefaultResupplyConvarsCaptured || !g_bResupplyConvarsOverridden)
+		return;
+
+	SetGameConVarInt("mp_player_resupply_coop_delay_base", g_iDefaultResupplyDelayBase);
+	SetGameConVarInt("mp_player_resupply_coop_delay_max", g_iDefaultResupplyDelayMax);
+	SetGameConVarInt("mp_player_resupply_coop_delay_penalty", g_iDefaultResupplyDelayPenalty);
+	SetGameConVarInt("mp_player_resupply_coop_grace", g_iDefaultResupplyGrace);
+	SetGameConVarInt("mp_player_resupply_coop_grace_initial", g_iDefaultResupplyGraceInitial);
+	SetGameConVarInt("mp_player_resupply_coop_penalty_reset", g_iDefaultResupplyPenaltyReset);
+
+	g_bResupplyConvarsOverridden = false;
 }
 
 stock void SafeKillIdx(int ent) {
-	if (ent <= MaxClients) return;
+	if (ent <= MaxClients || ent > MAXENTITIES) return;
 	int ref = EntIndexToEntRef(ent);
 	if (ref == INVALID_ENT_REFERENCE) return;
 	RequestFrame(NF_KillEntity, ref);
