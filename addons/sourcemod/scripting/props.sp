@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <clientprefs>
 
-#define PL_VERSION		"2.38"
+#define PL_VERSION		"2.44"
 
 #define MAXENTITIES		2048
 
@@ -57,6 +57,8 @@
 #define PROP_DAMAGE_TAKE			100.0	// Amount of damage the prop takes each time a bot touches it, limited by PROP_TOUCH_COOLDOWN.
 #define PROP_TOUCH_COOLDOWN			0.50
 #define PROP_GLOWHP_PERCENT			0.25
+#define PROP_HALFHP_PERCENT			0.50
+#define PROP_HALFHP_FLASH_TIME		1.00
 #define PROP_HEALTH					6000
 #define PROP_HOLD_DISTANCE			130.0
 #define PROP_LIMIT					10		// Prop limit per player
@@ -99,6 +101,17 @@ static const float JC_MinDelay = 15.0;
 static const float JC_MaxDelay = 25.0;
 
 static const float MATTRESS_FALL_WINDOW = 4.0;
+static const float MATTRESS_BASE_BOOST = 700.0;
+static const float MATTRESS_STACK_BONUS = 150.0;
+static const float MATTRESS_STACK_RADIUS = 75.0;
+static const float MATTRESS_STACK_Z_RANGE = 160.0;
+static const float MATTRESS_STACK_MIN_Z_GAP = 12.0;
+static const float MATTRESS_AUTO_REBOUNCE_BASE = 1.0;
+static const float MATTRESS_AUTO_REBOUNCE_STACK_BONUS = 0.45;
+static const float MATTRESS_ANGLE_PUSH_FRACTION = 0.25;
+static const float MATTRESS_HORIZONTAL_MAX = 250.0;
+static const float MATTRESS_HIGHLIGHT_INTERVAL = 0.25;
+static const int MATTRESS_MAX_STACK_COUNT = 4;
 
 ArrayList	g_hJammers = null;
 Handle		g_hJammerTimer = INVALID_HANDLE;
@@ -227,13 +240,17 @@ int		ga_iLastInflictorPropId[MAXPLAYERS + 1] = {-1, ...};
 bool	ga_bAmmoBagResupply[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bHeldPreviewPosValid[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bPickupQueued[MAXPLAYERS + 1] = {false, ...};
+float	ga_fNextMattressHighlightUpdate[MAXPLAYERS + 1] = {0.0, ...};
 
 int		ga_iTrackedPropOwner[MAXENTITIES + 1];
 int		ga_iTrackedPropId[MAXENTITIES + 1];
+bool	ga_bPropHalfHpWarned[MAXENTITIES + 1] = {false, ...};
 
 ArrayList g_hAmmoCacheRefs = null;
+ArrayList g_hMattressRefs = null;
 ArrayList g_hResupplyTriggerRefs = null;
 ArrayList ga_hUsedAmmoCacheRefs[MAXPLAYERS + 1];
+ArrayList ga_hHighlightedMattressRefs[MAXPLAYERS + 1];
 
 int		g_iDefaultResupplyDelayBase;
 int		g_iDefaultResupplyDelayMax;
@@ -275,6 +292,8 @@ public void OnPluginStart() {
 
 	if (g_hAmmoCacheRefs == null)
 		g_hAmmoCacheRefs = new ArrayList();
+	if (g_hMattressRefs == null)
+		g_hMattressRefs = new ArrayList();
 	if (g_hResupplyTriggerRefs == null)
 		g_hResupplyTriggerRefs = new ArrayList();
 
@@ -284,6 +303,7 @@ public void OnPluginStart() {
 		ga_iAmmoAmount[i] = 0;
 		ga_iAmmoIconHolderRef[i] = INVALID_ENT_REFERENCE;
 		ga_iAmmoIconSpriteRef[i] = INVALID_ENT_REFERENCE;
+		ga_bPropHalfHpWarned[i] = false;
 	}
 
 	g_hCookiePropRotateStep = RegClientCookie("bm_prop_rotate_step", "Props: rotation step (degrees)", CookieAccess_Private);
@@ -360,6 +380,10 @@ public void OnMapStart() {
 		delete g_hAmmoCacheRefs;
 	g_hAmmoCacheRefs = new ArrayList();
 
+	if (g_hMattressRefs != null)
+		delete g_hMattressRefs;
+	g_hMattressRefs = new ArrayList();
+
 	if (g_hResupplyTriggerRefs != null)
 		delete g_hResupplyTriggerRefs;
 	g_hResupplyTriggerRefs = new ArrayList();
@@ -371,6 +395,7 @@ public void OnMapStart() {
 		ga_iAmmoIconSpriteRef[i] = INVALID_ENT_REFERENCE;
 		ga_iTrackedPropOwner[i]  = 0;
 		ga_iTrackedPropId[i]     = -1;
+		ga_bPropHalfHpWarned[i]  = false;
 	}
 
 	if (g_hJammers != null)
@@ -472,6 +497,11 @@ public void OnClientDisconnect(int client) {
 		return;
 
 	StopHolding(client);
+
+	if (ga_hHighlightedMattressRefs[client] != null) {
+		delete ga_hHighlightedMattressRefs[client];
+		ga_hHighlightedMattressRefs[client] = null;
+	}
 
 	ArrayList list = ga_hPropPlaced[client];
 	ga_hPropPlaced[client] = null;
@@ -637,6 +667,106 @@ static void UpdateHeldPropPreviewColor(int client, int ent, const float vPos[3],
 		SetEntityRenderColor(ent, PROP_PREVIEW_BLOCKED_R, PROP_PREVIEW_BLOCKED_G, PROP_PREVIEW_BLOCKED_B, PROP_ALPHA);
 }
 
+static ArrayList EnsureHighlightedMattressList(int client) {
+	if (client < 1 || client > MaxClients)
+		return null;
+
+	if (ga_hHighlightedMattressRefs[client] == null)
+		ga_hHighlightedMattressRefs[client] = new ArrayList();
+
+	return ga_hHighlightedMattressRefs[client];
+}
+
+static void RestoreMattressRenderColor(int ent) {
+	if (!IsValidNonClientEntity(ent))
+		return;
+
+	SetEntityRenderColor(ent, 255, 255, 255, 255);
+	GlowLowHp(ent, GetEntProp(ent, Prop_Data, "m_iHealth"));
+}
+
+static bool IsMattressHighlightedByAnyClient(int ent) {
+	if (!IsValidNonClientEntity(ent))
+		return false;
+
+	for (int client = 1; client <= MaxClients; client++) {
+		if (RefListContainsEntity(ga_hHighlightedMattressRefs[client], ent))
+			return true;
+	}
+	return false;
+}
+
+static void ClearMattressStackHighlights(int client) {
+	if (client < 1 || client > MaxClients)
+		return;
+
+	ArrayList list = ga_hHighlightedMattressRefs[client];
+	if (list == null)
+		return;
+
+	for (int i = list.Length - 1; i >= 0; i--) {
+		int ent = EntRefToEntIndex(list.Get(i));
+		if (IsValidNonClientEntity(ent))
+			RestoreMattressRenderColor(ent);
+	}
+
+	list.Clear();
+	ga_fNextMattressHighlightUpdate[client] = 0.0;
+}
+
+static bool IsMattressInStackRange(const float origin[3], int ent) {
+	if (!IsValidNonClientEntity(ent) || GetTrackedPropId(ent) != MID(Prop_Mattress))
+		return false;
+
+	float pos[3];
+	GetEntPropVector(ent, Prop_Send, "m_vecOrigin", pos);
+
+	float dx = pos[0] - origin[0];
+	float dy = pos[1] - origin[1];
+	if ((dx * dx) + (dy * dy) > (MATTRESS_STACK_RADIUS * MATTRESS_STACK_RADIUS))
+		return false;
+	float zGap = FloatAbs(pos[2] - origin[2]);
+	if (zGap < MATTRESS_STACK_MIN_Z_GAP || zGap > MATTRESS_STACK_Z_RANGE)
+		return false;
+
+	return true;
+}
+
+static void UpdateMattressStackHighlights(int client, const float origin[3]) {
+	if (MID(ga_iModelIndex[client]) != MID(Prop_Mattress)) {
+		if (ga_hHighlightedMattressRefs[client] != null && ga_hHighlightedMattressRefs[client].Length > 0)
+			ClearMattressStackHighlights(client);
+		return;
+	}
+
+	float now = GetGameTime();
+	if (ga_fNextMattressHighlightUpdate[client] > now)
+		return;
+
+	ClearMattressStackHighlights(client);
+	ga_fNextMattressHighlightUpdate[client] = now + MATTRESS_HIGHLIGHT_INTERVAL;
+
+	if (g_hMattressRefs == null)
+		return;
+
+	ArrayList highlighted = EnsureHighlightedMattressList(client);
+	if (highlighted == null)
+		return;
+
+	for (int i = g_hMattressRefs.Length - 1; i >= 0; i--) {
+		int ent = EntRefToEntIndex(g_hMattressRefs.Get(i));
+		if (!IsValidNonClientEntity(ent) || GetTrackedPropId(ent) != MID(Prop_Mattress)) {
+			g_hMattressRefs.Erase(i);
+			continue;
+		}
+		if (!IsMattressInStackRange(origin, ent))
+			continue;
+
+		SetEntityRenderColor(ent, PROP_PREVIEW_PLACEABLE_R, PROP_PREVIEW_PLACEABLE_G, PROP_PREVIEW_PLACEABLE_B, 255);
+		AddUniqueEntityRef(highlighted, ent);
+	}
+}
+
 void HoldProp(int client) {
 	if (client < 1 || !IsClientInGame(client) || !IsPlayerAlive(client))
 		return;
@@ -661,6 +791,7 @@ static void TouchLaggedMovementValue(int client) {
 }
 
 void StopHolding(int client, bool now = false) {
+	ClearMattressStackHighlights(client);
 	ga_bHeldPreviewPosValid[client] = false;
 	ga_bPickupQueued[client] = false;
 
@@ -698,13 +829,17 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 
 	ga_iLastButtons[client] = buttons;
 
-	if (!ga_bHoldingMeleeWeapon[client])
+	if (!ga_bHoldingMeleeWeapon[client]) {
+		if (ga_hHighlightedMattressRefs[client] != null && ga_hHighlightedMattressRefs[client].Length > 0)
+			ClearMattressStackHighlights(client);
 		return Plugin_Continue;
+	}
 
 	int ent = EntRefToEntIndex(ga_iPropHolding[client]);
 	if (ent <= MaxClients || !IsValidEntity(ent)) {
 		ga_iPropHolding[client] = INVALID_ENT_REFERENCE;
 		ga_bHeldPreviewPosValid[client] = false;
+		ClearMattressStackHighlights(client);
 		return Plugin_Continue;
 	}
 
@@ -729,6 +864,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 	}
 
 	UpdateHeldPropPreviewColor(client, ent, vPos, vel);
+	UpdateMattressStackHighlights(client, vPos);
 
 	return Plugin_Continue;
 }
@@ -1068,6 +1204,11 @@ static void RebuildAmmoCacheIcons() {
 	else
 		g_hAmmoCacheRefs.Clear();
 
+	if (g_hMattressRefs == null)
+		g_hMattressRefs = new ArrayList();
+	else
+		g_hMattressRefs.Clear();
+
 	for (int ent = MaxClients + 1; ent <= MAXENTITIES; ent++) {
 		if (!IsValidEntity(ent))
 			continue;
@@ -1091,6 +1232,9 @@ static void RebuildAmmoCacheIcons() {
 			AddUniqueEntityRef(g_hAmmoCacheRefs, ent);
 			if (ga_iAmmoIconSpriteRef[ent] == INVALID_ENT_REFERENCE)
 				CreateIcon(ent);
+		}
+		else if (modelId == MID(Prop_Mattress)) {
+			AddUniqueEntityRef(g_hMattressRefs, ent);
 		}
 	}
 }
@@ -1151,6 +1295,8 @@ static void TrackSolidProp(int entity, int owner, PropId modelId) {
 
 	if (modelId == Prop_AmmoCacheSmall)
 		AddUniqueEntityRef(g_hAmmoCacheRefs, entity);
+	else if (modelId == Prop_Mattress)
+		AddUniqueEntityRef(g_hMattressRefs, entity);
 }
 
 static void UntrackSolidProp(int entity) {
@@ -1158,8 +1304,10 @@ static void UntrackSolidProp(int entity) {
 		return;
 
 	RemoveEntityRef(g_hAmmoCacheRefs, entity);
+	RemoveEntityRef(g_hMattressRefs, entity);
 	ga_iTrackedPropOwner[entity] = 0;
 	ga_iTrackedPropId[entity] = -1;
+	ga_bPropHalfHpWarned[entity] = false;
 }
 
 static int GetTrackedPropId(int entity) {
@@ -1387,12 +1535,29 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 
 			TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
 
+			int mattressStack = 0;
+			float mattressBoost = MATTRESS_BASE_BOOST;
+			if (modelId == Prop_Mattress) {
+				mattressStack = CountMattressStackNearPosition(vPos);
+				if (mattressStack < 1)
+					mattressStack = 1;
+				if (mattressStack > MATTRESS_MAX_STACK_COUNT)
+					mattressStack = MATTRESS_MAX_STACK_COUNT;
+				mattressBoost = GetMattressStackBoost(mattressStack);
+			}
+
 			int owner = ga_iPropOwner[client];
 			if (owner >= 1 && owner <= MaxClients && IsClientInGame(owner)) {
-				PrintCenterText(client, "%s built by: %N\nHealth: %d/%d", modelName, owner, hp, maxHealth);
+				if (mattressStack > 1)
+					PrintCenterText(client, "%s built by: %N\nHealth: %d/%d\nStack x%d - boost %.0f", modelName, owner, hp, maxHealth, mattressStack, mattressBoost);
+				else
+					PrintCenterText(client, "%s built by: %N\nHealth: %d/%d", modelName, owner, hp, maxHealth);
 				OpenRotationMenu(client);
 			} else {
-				PrintCenterText(client, "%s\nHealth: %d/%d", modelName, hp, maxHealth);
+				if (mattressStack > 1)
+					PrintCenterText(client, "%s\nHealth: %d/%d\nStack x%d - boost %.0f", modelName, hp, maxHealth, mattressStack, mattressBoost);
+				else
+					PrintCenterText(client, "%s\nHealth: %d/%d", modelName, hp, maxHealth);
 			}
 		} else {
 			TeleportEntity(prop, vPos, ga_fPropRotations[client][mid], NULL_VECTOR);
@@ -1504,6 +1669,109 @@ void DoDamageToEnt(int entity, int client) {
 	SDKHooks_TakeDamage(entity, client, client, PROP_DAMAGE_TAKE, DMG_SLASH, -1, NULL_VECTOR, NULL_VECTOR, false);
 }
 
+static int CountMattressStackNearPosition(const float origin[3], int ignoreEnt = 0) {
+	int count = 0;
+	float pos[3];
+	float radiusSqr = MATTRESS_STACK_RADIUS * MATTRESS_STACK_RADIUS;
+
+	if (g_hMattressRefs == null)
+		return 0;
+
+	for (int i = g_hMattressRefs.Length - 1; i >= 0; i--) {
+		int ent = EntRefToEntIndex(g_hMattressRefs.Get(i));
+		if (!IsValidNonClientEntity(ent) || GetTrackedPropId(ent) != MID(Prop_Mattress)) {
+			g_hMattressRefs.Erase(i);
+			continue;
+		}
+		if (ent == ignoreEnt)
+			continue;
+
+		GetEntPropVector(ent, Prop_Send, "m_vecOrigin", pos);
+		float dx = pos[0] - origin[0];
+		float dy = pos[1] - origin[1];
+		if ((dx * dx) + (dy * dy) > radiusSqr)
+			continue;
+		float zGap = FloatAbs(pos[2] - origin[2]);
+		if (zGap < MATTRESS_STACK_MIN_Z_GAP || zGap > MATTRESS_STACK_Z_RANGE)
+			continue;
+
+		count++;
+		if (count >= MATTRESS_MAX_STACK_COUNT)
+			return MATTRESS_MAX_STACK_COUNT;
+	}
+
+	return count;
+}
+
+static int CountMattressStack(int entity) {
+	if (!IsValidNonClientEntity(entity))
+		return 1;
+
+	float origin[3];
+	GetEntPropVector(entity, Prop_Send, "m_vecOrigin", origin);
+
+	int count = 1 + CountMattressStackNearPosition(origin, entity);
+	if (count > MATTRESS_MAX_STACK_COUNT)
+		count = MATTRESS_MAX_STACK_COUNT;
+
+	return count;
+}
+
+static float GetMattressStackBoost(int stackCount) {
+	if (stackCount < 1)
+		stackCount = 1;
+	if (stackCount > MATTRESS_MAX_STACK_COUNT)
+		stackCount = MATTRESS_MAX_STACK_COUNT;
+
+	return MATTRESS_BASE_BOOST + (float(stackCount - 1) * MATTRESS_STACK_BONUS);
+}
+
+static float GetMattressAutoRebounceTime(int stackCount) {
+	if (stackCount < 1)
+		stackCount = 1;
+	if (stackCount > MATTRESS_MAX_STACK_COUNT)
+		stackCount = MATTRESS_MAX_STACK_COUNT;
+
+	return MATTRESS_AUTO_REBOUNCE_BASE + (float(stackCount - 1) * MATTRESS_AUTO_REBOUNCE_STACK_BONUS);
+}
+
+static void ApplyMattressBoost(int client, int mattress, float boost) {
+	float velocity[3], ang[3], vecForward[3], vecRight[3], vecUp[3];
+	velocity[0] = 0.0;
+	velocity[1] = 0.0;
+	velocity[2] = boost;
+
+	if (IsValidNonClientEntity(mattress)) {
+		GetEntPropVector(mattress, Prop_Send, "m_angRotation", ang);
+		GetAngleVectors(ang, vecForward, vecRight, vecUp);
+
+		if (vecUp[2] < 0.0) {
+			vecUp[0] = -vecUp[0];
+			vecUp[1] = -vecUp[1];
+			vecUp[2] = -vecUp[2];
+		}
+
+		float horizontal[3];
+		horizontal[0] = vecUp[0];
+		horizontal[1] = vecUp[1];
+		horizontal[2] = 0.0;
+
+		float horizontalLen = GetVectorLength(horizontal);
+		if (horizontalLen > 0.001) {
+			NormalizeVector(horizontal, horizontal);
+
+			float horizontalSpeed = boost * MATTRESS_ANGLE_PUSH_FRACTION * horizontalLen;
+			if (horizontalSpeed > MATTRESS_HORIZONTAL_MAX)
+				horizontalSpeed = MATTRESS_HORIZONTAL_MAX;
+
+			velocity[0] = horizontal[0] * horizontalSpeed;
+			velocity[1] = horizontal[1] * horizontalSpeed;
+		}
+	}
+
+	SetEntPropVector(client, Prop_Data, "m_vecBaseVelocity", velocity);
+}
+
 public Action SHook_OnTouchMattress(int entity, int touch) {
 	if (touch < 1 || touch > MaxClients)
 		return Plugin_Continue;
@@ -1516,15 +1784,21 @@ public Action SHook_OnTouchMattress(int entity, int touch) {
 		return Plugin_Continue;
 
 	if (entity == GetEntPropEnt(touch, Prop_Send, "m_hGroundEntity") && GetEntProp(touch, Prop_Send, "m_iCurrentStance") == 0) {
+		int stackCount = CountMattressStack(entity);
+		float boost = GetMattressStackBoost(stackCount);
+
 		if (!IsFakeClient(touch)) {
 			if (GameTime - ga_fPressedJumpTime[touch] <= 1.0) {
-				ga_fPressedJumpTime[touch] = GameTime + 1.0;
-				SetEntPropVector(touch, Prop_Data, "m_vecBaseVelocity", {0.0, 0.0, 700.0});
+				ga_fPressedJumpTime[touch] = GameTime + GetMattressAutoRebounceTime(stackCount);
+				ApplyMattressBoost(touch, entity, boost);
 				PlayWireSound(entity);
+
+				if (stackCount > 1)
+					PrintCenterText(touch, "Mattress stack x%d\nLaunch boost: %.0f", stackCount, boost);
 			}
 		}
 		else {
-			SetEntPropVector(touch, Prop_Data, "m_vecBaseVelocity", {0.0, 0.0, 700.0});
+			ApplyMattressBoost(touch, entity, boost);
 			PlayWireSound(entity);
 			DoDamageToEnt(entity, touch);
 		}
@@ -1542,6 +1816,49 @@ public Action SHook_OnTouchMattress(int entity, int touch) {
 
 	ga_fLastTouchTime[touch] = GameTime + PROP_TOUCH_COOLDOWN;
 	return Plugin_Continue;
+}
+
+static bool ShouldFlashHalfHp(int entity, int currentHealth, float damage) {
+	if (!IsValidNonClientEntity(entity) || entity > MAXENTITIES || ga_bPropHalfHpWarned[entity])
+		return false;
+
+	int maxHealth = GetEntProp(entity, Prop_Data, "m_iMaxHealth");
+	if (maxHealth <= 0)
+		maxHealth = PROP_HEALTH;
+
+	if (currentHealth <= 0)
+		return false;
+	if ((float(currentHealth) / float(maxHealth)) <= PROP_HALFHP_PERCENT)
+		return false;
+
+	int predictedHealth = currentHealth - RoundToCeil(damage);
+	if (predictedHealth < 0)
+		predictedHealth = 0;
+
+	return (float(predictedHealth) / float(maxHealth)) <= PROP_HALFHP_PERCENT;
+}
+
+static void FlashPropHalfHp(int entity) {
+	if (!IsValidNonClientEntity(entity) || entity > MAXENTITIES)
+		return;
+
+	ga_bPropHalfHpWarned[entity] = true;
+	SetEntityRenderColor(entity, 255, 220, 0, 255);
+	CreateTimer(PROP_HALFHP_FLASH_TIME, Timer_RestorePropHalfHpFlash, EntIndexToEntRef(entity), TIMER_FLAG_NO_MAPCHANGE);
+}
+
+public Action Timer_RestorePropHalfHpFlash(Handle timer, int entityRef) {
+	int entity = EntRefToEntIndex(entityRef);
+	if (!IsValidNonClientEntity(entity))
+		return Plugin_Stop;
+
+	int health = GetEntProp(entity, Prop_Data, "m_iHealth");
+	if (IsMattressHighlightedByAnyClient(entity))
+		return Plugin_Stop;
+	if (!GlowLowHp(entity, health))
+		SetEntityRenderColor(entity, 255, 255, 255, 255);
+
+	return Plugin_Stop;
 }
 
 public Action SHook_OnTouchWire(int entity, int touch) {
@@ -1609,7 +1926,11 @@ public Action Timer_RemoveParticle(Handle timer, int particleRef) {
 }
 
 public Action PropOnTakeDamage(int entity, int &attacker, int &inflictor, float &damage, int &damagetype) {
-	if (GlowLowHp(entity, GetEntProp(entity, Prop_Data, "m_iHealth")))
+	int health = GetEntProp(entity, Prop_Data, "m_iHealth");
+	if (ShouldFlashHalfHp(entity, health, damage))
+		FlashPropHalfHp(entity);
+
+	if (GlowLowHp(entity, health))
 		SDKUnhook(entity, SDKHook_OnTakeDamage, PropOnTakeDamage);
 	return Plugin_Continue;
 }
@@ -2779,10 +3100,19 @@ public void OnMapEnd() {
 			delete ga_hUsedAmmoCacheRefs[i];
 			ga_hUsedAmmoCacheRefs[i] = null;
 		}
+		if (ga_hHighlightedMattressRefs[i] != null) {
+			ClearMattressStackHighlights(i);
+			delete ga_hHighlightedMattressRefs[i];
+			ga_hHighlightedMattressRefs[i] = null;
+		}
 	}
 	if (g_hAmmoCacheRefs != null) {
 		delete g_hAmmoCacheRefs;
 		g_hAmmoCacheRefs = null;
+	}
+	if (g_hMattressRefs != null) {
+		delete g_hMattressRefs;
+		g_hMattressRefs = null;
 	}
 	if (g_hResupplyTriggerRefs != null) {
 		delete g_hResupplyTriggerRefs;
@@ -2817,10 +3147,19 @@ public void OnPluginEnd() {
 			delete ga_hUsedAmmoCacheRefs[i];
 			ga_hUsedAmmoCacheRefs[i] = null;
 		}
+		if (ga_hHighlightedMattressRefs[i] != null) {
+			ClearMattressStackHighlights(i);
+			delete ga_hHighlightedMattressRefs[i];
+			ga_hHighlightedMattressRefs[i] = null;
+		}
 	}
 	if (g_hAmmoCacheRefs != null) {
 		delete g_hAmmoCacheRefs;
 		g_hAmmoCacheRefs = null;
+	}
+	if (g_hMattressRefs != null) {
+		delete g_hMattressRefs;
+		g_hMattressRefs = null;
 	}
 	if (g_hResupplyTriggerRefs != null) {
 		delete g_hResupplyTriggerRefs;
