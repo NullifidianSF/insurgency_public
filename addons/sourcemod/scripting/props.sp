@@ -102,17 +102,17 @@ static const float JC_MaxDelay = 25.0;
 
 static const float MATTRESS_FALL_WINDOW = 4.0;
 static const float MATTRESS_BASE_BOOST = 700.0;
-static const float MATTRESS_STACK_BONUS = 150.0;
+static const float MATTRESS_STACK_BONUS = 275.0;
 static const float MATTRESS_STACK_RADIUS = 75.0;
 static const float MATTRESS_STACK_Z_RANGE = 160.0;
 static const float MATTRESS_STACK_MIN_Z_GAP = 12.0;
 static const float MATTRESS_AUTO_REBOUNCE_BASE = 1.0;
-static const float MATTRESS_AUTO_REBOUNCE_STACK_BONUS = 0.45;
-static const float MATTRESS_ANGLE_PUSH_FRACTION = 0.25;
+static const float MATTRESS_AUTO_REBOUNCE_STACK_BONUS = 0.65;
+static const float MATTRESS_ANGLE_PUSH_FRACTION = 0.40;
 static const float MATTRESS_HUMAN_ANGLE_PUSH_SCALE = 1.0;
 static const float MATTRESS_HORIZONTAL_MAX = 250.0;
 static const float MATTRESS_HIGHLIGHT_INTERVAL = 0.25;
-static const int MATTRESS_MAX_STACK_COUNT = 4;
+static const int MATTRESS_MAX_STACK_COUNT = 5;
 
 ArrayList	g_hJammers = null;
 Handle		g_hJammerTimer = INVALID_HANDLE;
@@ -760,6 +760,9 @@ static void UpdateMattressStackHighlights(int client, const float origin[3]) {
 	if (highlighted == null)
 		return;
 
+	int maxContributors = MATTRESS_MAX_STACK_COUNT - 1;
+	int contributorCount = 0;
+
 	for (int i = g_hMattressRefs.Length - 1; i >= 0; i--) {
 		int ent = EntRefToEntIndex(g_hMattressRefs.Get(i));
 		if (!IsValidNonClientEntity(ent) || GetTrackedPropId(ent) != MID(Prop_Mattress)) {
@@ -771,6 +774,16 @@ static void UpdateMattressStackHighlights(int client, const float origin[3]) {
 
 		SetEntityRenderColor(ent, PROP_PREVIEW_PLACEABLE_R, PROP_PREVIEW_PLACEABLE_G, PROP_PREVIEW_PLACEABLE_B, 255);
 		AddUniqueEntityRef(highlighted, ent);
+		contributorCount++;
+		if (contributorCount >= maxContributors)
+			break;
+	}
+
+	int stackCount = contributorCount + 1;
+	if (stackCount > 1) {
+		float boost = GetMattressStackBoost(stackCount);
+		float bonus = boost - MATTRESS_BASE_BOOST;
+		PrintCenterText(client, "Mattress stack: %d/%d\nBoost: %.0f (+%.0f)", stackCount, MATTRESS_MAX_STACK_COUNT, boost, bonus);
 	}
 }
 
