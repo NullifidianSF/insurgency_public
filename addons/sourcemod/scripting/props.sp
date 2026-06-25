@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <clientprefs>
 
-#define PL_VERSION		"2.44"
+#define PL_VERSION		"2.46"
 
 #define MAXENTITIES		2048
 
@@ -109,6 +109,7 @@ static const float MATTRESS_STACK_MIN_Z_GAP = 12.0;
 static const float MATTRESS_AUTO_REBOUNCE_BASE = 1.0;
 static const float MATTRESS_AUTO_REBOUNCE_STACK_BONUS = 0.45;
 static const float MATTRESS_ANGLE_PUSH_FRACTION = 0.25;
+static const float MATTRESS_HUMAN_ANGLE_PUSH_SCALE = 1.0;
 static const float MATTRESS_HORIZONTAL_MAX = 250.0;
 static const float MATTRESS_HIGHLIGHT_INTERVAL = 0.25;
 static const int MATTRESS_MAX_STACK_COUNT = 4;
@@ -240,6 +241,7 @@ int		ga_iLastInflictorPropId[MAXPLAYERS + 1] = {-1, ...};
 bool	ga_bAmmoBagResupply[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bHeldPreviewPosValid[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bPickupQueued[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bMattressJumpArmed[MAXPLAYERS + 1] = {false, ...};
 float	ga_fNextMattressHighlightUpdate[MAXPLAYERS + 1] = {0.0, ...};
 
 int		ga_iTrackedPropOwner[MAXENTITIES + 1];
@@ -330,6 +332,7 @@ public void OnPluginStart() {
 			ga_fLastMattressLaunchTime[i] = 0.0;
 			ga_bMattressDeath[i]          = false;
 			ga_iMattressKiller[i]         = 0;
+			ga_bMattressJumpArmed[i]      = false;
 			ga_iLastInflictorPropId[i]    = -1;
 
 			ga_bAmmoBagResupply[i]       = false;
@@ -443,6 +446,7 @@ public void OnClientPostAdminCheck(int client) {
 	ga_fLastMattressLaunchTime[client] = 0.0;
 	ga_bMattressDeath[client]          = false;
 	ga_iMattressKiller[client]         = 0;
+	ga_bMattressJumpArmed[client]      = false;
 	ga_iLastInflictorPropId[client]    = -1;
 
 	ga_bAmmoBagResupply[client] = false;
@@ -492,6 +496,7 @@ public void OnClientDisconnect(int client) {
 	ga_fLastMattressLaunchTime[client] = 0.0;
 	ga_bMattressDeath[client]          = false;
 	ga_iMattressKiller[client]         = 0;
+	ga_bMattressJumpArmed[client]      = false;
 
 	if (IsFakeClient(client))
 		return;
@@ -554,6 +559,7 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 		ga_bPlacingNow[i] = false;
 		ga_fLastPlaceTime[i] = 0.0;
 		ga_bJustPlaced[i] = false;
+		ga_bMattressJumpArmed[i] = false;
 		RestoreBuildPoints(i);
 	}
 
@@ -569,6 +575,7 @@ public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadca
 
 	ga_iResupplyCounter[client] = g_iResupplyDelay;
 	ga_iLastInflictorPropId[client] = -1;
+	ga_bMattressJumpArmed[client] = false;
 	UpdateClientWeaponState(client);
 	return Plugin_Continue;
 }
@@ -936,13 +943,22 @@ static void NF_DeferredPickupExistingProp(any data) {
 	SafeKillIdx(target);
 }
 
+static bool IsPlayerGroundedOnMattress(int client) {
+	int groundEntity = GetEntPropEnt(client, Prop_Send, "m_hGroundEntity");
+	return GetTrackedPropId(groundEntity) == MID(Prop_Mattress);
+}
+
 void OnButtonPress(int client, int button, float vel[3]) {
 	if (button & BTN_JUMP) {
 		float GameTime = GetGameTime();
-		if (GameTime - ga_fPressedJumpTime[client] <= 1.0)
+		if (GameTime - ga_fPressedJumpTime[client] <= 1.0) {
 			ga_fPressedJumpTime[client] = 0.0;
-		else
+			ga_bMattressJumpArmed[client] = false;
+		}
+		else {
 			ga_fPressedJumpTime[client] = GameTime;
+			ga_bMattressJumpArmed[client] = IsPlayerGroundedOnMattress(client);
+		}
 	}
 
 	if ((button & BTN_SPRINT) || (button & BTN_SPRINT_TOGGLE) || (button & BTN_ATTACK1)) {
@@ -1735,7 +1751,18 @@ static float GetMattressAutoRebounceTime(int stackCount) {
 	return MATTRESS_AUTO_REBOUNCE_BASE + (float(stackCount - 1) * MATTRESS_AUTO_REBOUNCE_STACK_BONUS);
 }
 
-static void ApplyMattressBoost(int client, int mattress, float boost) {
+static bool IsMattressBounceContact(int mattress, int touch) {
+	if (mattress != GetEntPropEnt(touch, Prop_Send, "m_hGroundEntity"))
+		return false;
+	if (GetEntProp(touch, Prop_Send, "m_iCurrentStance") != 0)
+		return false;
+	if (IsFakeClient(touch))
+		return true;
+
+	return ga_bMattressJumpArmed[touch];
+}
+
+static void ApplyMattressBoost(int client, int mattress, float boost, float anglePushScale = 1.0) {
 	float velocity[3], ang[3], vecForward[3], vecRight[3], vecUp[3];
 	velocity[0] = 0.0;
 	velocity[1] = 0.0;
@@ -1760,7 +1787,7 @@ static void ApplyMattressBoost(int client, int mattress, float boost) {
 		if (horizontalLen > 0.001) {
 			NormalizeVector(horizontal, horizontal);
 
-			float horizontalSpeed = boost * MATTRESS_ANGLE_PUSH_FRACTION * horizontalLen;
+			float horizontalSpeed = boost * MATTRESS_ANGLE_PUSH_FRACTION * anglePushScale * horizontalLen;
 			if (horizontalSpeed > MATTRESS_HORIZONTAL_MAX)
 				horizontalSpeed = MATTRESS_HORIZONTAL_MAX;
 
@@ -1783,14 +1810,15 @@ public Action SHook_OnTouchMattress(int entity, int touch) {
 	if (ga_fLastTouchTime[touch] > GameTime)
 		return Plugin_Continue;
 
-	if (entity == GetEntPropEnt(touch, Prop_Send, "m_hGroundEntity") && GetEntProp(touch, Prop_Send, "m_iCurrentStance") == 0) {
+	if (IsMattressBounceContact(entity, touch)) {
 		int stackCount = CountMattressStack(entity);
 		float boost = GetMattressStackBoost(stackCount);
 
 		if (!IsFakeClient(touch)) {
 			if (GameTime - ga_fPressedJumpTime[touch] <= 1.0) {
 				ga_fPressedJumpTime[touch] = GameTime + GetMattressAutoRebounceTime(stackCount);
-				ApplyMattressBoost(touch, entity, boost);
+				ga_bMattressJumpArmed[touch] = true;
+				ApplyMattressBoost(touch, entity, boost, MATTRESS_HUMAN_ANGLE_PUSH_SCALE);
 				PlayWireSound(entity);
 
 				if (stackCount > 1)
