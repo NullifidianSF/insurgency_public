@@ -3,9 +3,11 @@
 
 #include <sourcemod>
 
-#define PL_VERSION "1.3"
+#define PL_VERSION "1.4"
+#define MAP_START_RECOUNT_DELAY 3.0
 
 bool g_bRecountQueued = false;
+bool g_bAllowEmptyFlag = false;
 
 char g_sFlagPath[PLATFORM_MAX_PATH];
 
@@ -27,8 +29,33 @@ public void OnPluginStart()
 public void OnMapStart()
 {
 	g_bRecountQueued = false;
-	// Re-evaluate when new map starts (handles empty server on fresh map)
+	g_bAllowEmptyFlag = false;
+
+	// Never advertise an empty server while humans are transitioning to the new map.
+	WriteEmptyFlag(false);
+	CreateTimer(MAP_START_RECOUNT_DELAY, Timer_RecountAfterMapStart, _, TIMER_FLAG_NO_MAPCHANGE);
+}
+
+public void OnMapEnd()
+{
+	g_bAllowEmptyFlag = false;
+	WriteEmptyFlag(false);
+}
+
+public Action Timer_RecountAfterMapStart(Handle timer, any data)
+{
+	g_bAllowEmptyFlag = true;
 	UpdateEmptyFlag();
+	return Plugin_Stop;
+}
+
+public void OnClientConnected(int client)
+{
+	if (IsFakeClient(client) || IsClientSourceTV(client))
+		return;
+
+	// Protect connecting humans before they reach the in-game state.
+	WriteEmptyFlag(false);
 }
 
 public void OnClientPostAdminCheck(int client)
@@ -62,13 +89,19 @@ static bool IsHumanClient(int client)
 {
 	return (client > 0
 		&& client <= MaxClients
-		&& IsClientInGame(client)
+		&& IsClientConnected(client)
 		&& !IsFakeClient(client)
 		&& !IsClientSourceTV(client));
 }
 
 static void UpdateEmptyFlag()
 {
+	if (!g_bAllowEmptyFlag)
+	{
+		WriteEmptyFlag(false);
+		return;
+	}
+
 	int humans = 0;
 	for (int i = 1; i <= MaxClients; i++)
 	{
@@ -78,12 +111,17 @@ static void UpdateEmptyFlag()
 		}
 	}
 
+	WriteEmptyFlag(humans == 0);
+}
+
+static void WriteEmptyFlag(bool empty)
+{
 	File f = OpenFile(g_sFlagPath, "w");
 	if (f != null)
 	{
 		// Your bash script checks: grep -qx "1"
 		// so write exactly "1" or "0" as a line.
-		if (humans == 0)
+		if (empty)
 		{
 			f.WriteLine("1"); // server empty → safe to restart
 		}
