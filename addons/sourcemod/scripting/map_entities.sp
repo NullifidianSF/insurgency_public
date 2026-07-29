@@ -28,14 +28,15 @@ enum {
 	ins_coastdawn_a3,
 	ins_prison_2020_new,
 	siege_coop,
-	nova_prospect
+	nova_prospect,
+	oilfield_pve
 };
 
 public Plugin myinfo = {
 	name = "map_entities",
 	author = "Nullifidian + ChatGPT",
 	description = "remove or modify entities for some maps",
-	version = "3.2"
+	version = "3.4"
 };
 
 public void OnPluginStart() {
@@ -129,14 +130,42 @@ public void OnMapStart() {
 	else if (strcmp(sMapName, "nova_prospect", false) == 0) {
 		g_iMapId = nova_prospect;
 	}
-	else if (g_bEventHooked) {
-		HookRoundStartEvent(false);
-		return;
+	else if (strcmp(sMapName, "oilfield_pve", false) == 0) {
+		g_iMapId = oilfield_pve;
+		RemoveEntities("env_sprite");
 	}
 
-	if (!g_bEventHooked) {
-		HookRoundStartEvent();
+	bool bNeedsRoundHook = MapNeedsRoundStartHook(g_iMapId);
+	if (bNeedsRoundHook != g_bEventHooked)
+		HookRoundStartEvent(bNeedsRoundHook);
+}
+
+static bool MapNeedsRoundStartHook(int mapId) {
+	switch (mapId) {
+		case embassy_coop,
+			congress_coop,
+			frequency_open_coop,
+			prospect_coop_b6,
+			congress_open_coop,
+			sinjar_coop,
+			jail_break_coop_ws,
+			crash_course,
+			ins_dog_red,
+			arcate_aof,
+			dedust1p2_aof,
+			facilityb2_coop_v1_1,
+			cs_workout_v1,
+			pipeline_coop,
+			ins_coastdawn_a3,
+			ins_prison_2020_new,
+			siege_coop,
+			nova_prospect,
+			oilfield_pve: {
+			return true;
+		}
 	}
+
+	return false;
 }
 
 public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
@@ -236,6 +265,9 @@ static void NF_ApplyRoundStartEdits(any mapIdAny) {
 		case nova_prospect: {
 			RemoveEntitiesByModel("prop_physics", "metal_panel01a");
 			RemoveEntitiesByModel("prop_physics", "oildrum001");
+		}
+		case oilfield_pve: {
+			RemoveEntities("point_spotlight");
 		}
 	}
 }
@@ -350,8 +382,15 @@ static void MoveTypeToString(MoveType mt, char[] out, int maxlen) {
 }
 
 static bool GetSendPropOffsetBits(int ent, const char[] prop, int &offs, int &bits) {
+	char netClass[64];
 	bits = 0;
-	offs = GetEntSendPropOffs(ent, prop);
+
+	if (!GetEntityNetClass(ent, netClass, sizeof(netClass))) {
+		offs = -1;
+		return false;
+	}
+
+	offs = FindSendPropInfo(netClass, prop, _, bits);
 	return (offs > 0);
 }
 
@@ -626,12 +665,15 @@ void HookRoundStartEvent(bool hook = true) {
 public Action cmd_entstats(int client, int args) {
 	StringMap counts = new StringMap();
 	int used = 0;
+	int classified = 0;
 	char cls[64];
 
 	int maxe = GetMaxEntities();
 	for (int i = 0; i < maxe; i++) {
 		if (!IsValidEntity(i))
 			continue;
+
+		used++;
 
 		if (i >= 1 && i <= MaxClients)
 			continue;
@@ -646,7 +688,7 @@ public Action cmd_entstats(int client, int args) {
 		else
 			counts.SetValue(cls, 1);
 
-		used++;
+		classified++;
 	}
 
 	StringMapSnapshot snap = counts.Snapshot();
@@ -679,11 +721,13 @@ public Action cmd_entstats(int client, int args) {
 	if (toClient) {
 		PrintToConsole(client, "=== Entity class counts (excluding players) ===");
 		PrintToConsole(client, "Used edicts: %d / %d (free: %d)", used, maxe, (maxe - used));
+		PrintToConsole(client, "Classified non-player edicts: %d", classified);
 		PrintToConsole(client, "%-5s  %-40s  %s", "#", "classname", "count");
 	}
 	else {
 		PrintToServer("=== Entity class counts (excluding players) ===");
 		PrintToServer("Used edicts: %d / %d (free: %d)", used, maxe, (maxe - used));
+		PrintToServer("Classified non-player edicts: %d", classified);
 		PrintToServer("%-5s  %-40s  %s", "#", "classname", "count");
 	}
 
@@ -726,6 +770,10 @@ public Action cmd_entdelete(int client, int args) {
 
 		if (StrContains(arg2, "model:", false) == 0) {
 			strcopy(modelFilter, sizeof(modelFilter), arg2[6]);
+			if (!modelFilter[0]) {
+				ReplyToCommand(client, "[map_entities] Model filter cannot be empty.");
+				return Plugin_Handled;
+			}
 		}
 		else {
 			strcopy(nameFilter, sizeof(nameFilter), arg2);
