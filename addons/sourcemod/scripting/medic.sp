@@ -54,6 +54,12 @@ static char g_sObjResNetClass[32];
 
 #define MAX_ENTITIES 2048
 
+enum BleedoutDeathReason {
+	BleedoutDeath_None = 0,
+	BleedoutDeath_Timeout,
+	BleedoutDeath_SecondHit
+};
+
 // Chat command anti-spam
 #define MEDIC_CMD_COOLDOWN 10.0
 
@@ -485,6 +491,8 @@ float	ga_fLastTraceAt[MAXPLAYERS + 1];
 bool	ga_bSecondHitDeathPending[MAXPLAYERS + 1];
 int		ga_iSecondHitDamage[MAXPLAYERS + 1];
 int		ga_iSecondHitHitgroup[MAXPLAYERS + 1];
+BleedoutDeathReason ga_BleedoutDeathReason[MAXPLAYERS + 1];
+bool	ga_bBleedoutDeathExplainedThisMap[MAXPLAYERS + 1];
 
 int		ga_iTimeReviveCheck[MAXPLAYERS + 1] = {-1, ...};
 int		ga_iClientDamageDone[MAXPLAYERS + 1];
@@ -543,7 +551,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & GPT/Codex",
 	description = "Adds the ability to revive with the Medic class and a health kit.",
-	version = "1.3.17",
+	version = "1.3.18",
 	url = ""
 };
 
@@ -675,8 +683,10 @@ public void OnPluginStart() {
 public void OnMapStart() {
 	PrecacheFiles();
 
-	for (int client = 1; client <= MaxClients; client++)
+	for (int client = 1; client <= MaxClients; client++) {
 		ga_bAutoThanksNotifiedThisMap[client] = false;
+		ga_bBleedoutDeathExplainedThisMap[client] = false;
+	}
 
 	CreateTimer(5.0, Timer_MapStart, _, TIMER_FLAG_NO_MAPCHANGE);
 	if (!g_bLateLoad)
@@ -760,6 +770,7 @@ public void OnEntityDestroyed(int entity) {
 
 public void OnClientPutInServer(int client) {
 	ResetBleedoutClient(client, true);
+	ga_bBleedoutDeathExplainedThisMap[client] = false;
 	SDKHook(client, SDKHook_TraceAttack, Hook_PlayerTraceAttack);
 	SDKHook(client, SDKHook_OnTakeDamage, Hook_PlayerTakeDamage);
 	ResetMedicStats(client);
@@ -963,6 +974,7 @@ public Action Hook_PlayerTakeDamage(int victim, int &attacker, int &inflictor, f
 		ga_bSecondHitDeathPending[victim] = true;
 		ga_iSecondHitDamage[victim] = RoundToCeil(damage);
 		ga_iSecondHitHitgroup[victim] = hitgroup;
+		ga_BleedoutDeathReason[victim] = BleedoutDeath_SecondHit;
 		ClearActiveBleedout(victim);
 
 		// Any later positive damage kills, even if another plugin or external heal raised the player above 1 HP.
@@ -1053,6 +1065,26 @@ static void SetWoundStateFromDamage(int client, int damage) {
 	} else {
 		ga_iPlayerWoundTime[client] = g_iCriticalReviveTime;
 		ga_iPlayerWoundType[client] = 2;
+	}
+}
+
+static void ExplainBleedoutDeathOnce(int client) {
+	BleedoutDeathReason reason = ga_BleedoutDeathReason[client];
+	ga_BleedoutDeathReason[client] = BleedoutDeath_None;
+
+	if (reason == BleedoutDeath_None
+		|| ga_bBleedoutDeathExplainedThisMap[client]
+		|| IsFakeClient(client))
+		return;
+
+	ga_bBleedoutDeathExplainedThisMap[client] = true;
+
+	if (reason == BleedoutDeath_Timeout) {
+		PrintToChat(client, "\x070088cc[Medic]\x01 No \x0700cc44tourniquet\x01 was applied before you \x07cc2200bled out\x01.");
+		PrintToChat(client, "\x01Without the bleedout system, the original \x07cc2200lethal limb hit\x01 would have killed you immediately.");
+	} else if (reason == BleedoutDeath_SecondHit) {
+		PrintToChat(client, "\x070088cc[Medic]\x01 You took \x07cc2200more damage\x01 while bleeding, which killed you.");
+		PrintToChat(client, "\x01The original lethal limb hit gave you a \x0700cc44temporary chance\x01 to be saved by a \x070088ccmedic\x01.");
 	}
 }
 
@@ -1162,6 +1194,7 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 		PrintToChat(victim, "\x01You're \x070088cc%s\x01 for \x070088cc%i\x01 damage, call a medic for revive!", woundType, ga_iClientDamageDone[victim]);
 	}
 
+	ExplainBleedoutDeathOnce(victim);
 	ga_bBleedoutDeathPending[victim] = false;
 	return Plugin_Continue;
 }
@@ -1760,6 +1793,7 @@ static void ResetBleedoutClient(int client, bool removePuddle) {
 	ga_bSecondHitDeathPending[client] = false;
 	ga_iSecondHitDamage[client] = 0;
 	ga_iSecondHitHitgroup[client] = 0;
+	ga_BleedoutDeathReason[client] = BleedoutDeath_None;
 }
 
 static void StartBleedout(int client, int hitgroup, int damage, int attackerUserId, const float damagePosition[3]) {
@@ -1779,6 +1813,7 @@ static void StartBleedout(int client, int hitgroup, int damage, int attackerUser
 	ga_bBleedoutDeathPending[client] = false;
 	ga_bBleedPuddlePending[client] = false;
 	ga_bSecondHitDeathPending[client] = false;
+	ga_BleedoutDeathReason[client] = BleedoutDeath_None;
 
 	ga_fNextBleedFadeAt[client] = ga_fBleedoutStartedAt[client];
 
@@ -1879,6 +1914,7 @@ static void ExpireBleedout(int client, int forcedFatal = -1) {
 
 	ga_bBleedoutDeathPending[client] = true;
 	ga_bBleedPuddlePending[client] = !fatal;
+	ga_BleedoutDeathReason[client] = BleedoutDeath_Timeout;
 	ClearActiveBleedout(client);
 
 	int inflictor = attacker > 0 ? attacker : 0;
