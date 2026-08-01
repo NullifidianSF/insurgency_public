@@ -551,7 +551,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & GPT/Codex",
 	description = "Adds the ability to revive with the Medic class and a health kit.",
-	version = "1.3.18",
+	version = "1.3.19",
 	url = ""
 };
 
@@ -610,7 +610,7 @@ public void OnPluginStart() {
 
 		if (IsClientInGame(i)) {
 			SDKHook(i, SDKHook_TraceAttack, Hook_PlayerTraceAttack);
-			SDKHook(i, SDKHook_OnTakeDamage, Hook_PlayerTakeDamage);
+			SDKHook(i, SDKHook_OnTakeDamageAlive, Hook_PlayerTakeDamage);
 		}
 	}
 
@@ -772,7 +772,7 @@ public void OnClientPutInServer(int client) {
 	ResetBleedoutClient(client, true);
 	ga_bBleedoutDeathExplainedThisMap[client] = false;
 	SDKHook(client, SDKHook_TraceAttack, Hook_PlayerTraceAttack);
-	SDKHook(client, SDKHook_OnTakeDamage, Hook_PlayerTakeDamage);
+	SDKHook(client, SDKHook_OnTakeDamageAlive, Hook_PlayerTakeDamage);
 	ResetMedicStats(client);
 	ResetAutoThanksClient(client);
 }
