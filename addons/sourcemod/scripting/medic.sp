@@ -60,6 +60,13 @@ enum BleedoutDeathReason {
 	BleedoutDeath_SecondHit
 };
 
+enum TourniquetApplyResult {
+	TourniquetApply_Progress = 0,
+	TourniquetApply_Completed,
+	TourniquetApply_Busy,
+	TourniquetApply_NoKitUse
+};
+
 // Chat command anti-spam
 #define MEDIC_CMD_COOLDOWN 10.0
 
@@ -355,8 +362,11 @@ float	g_fBleedoutChance;
 ConVar	g_cvBleedoutTime = null;
 float	g_fBleedoutTime;
 
-ConVar	g_cvTourniquetTime = null;
-float	g_fTourniquetTime;
+ConVar	g_cvTourniquetMedicTime = null;
+float	g_fTourniquetMedicTime;
+
+ConVar	g_cvTourniquetNonMedicTime = null;
+float	g_fTourniquetNonMedicTime;
 
 ConVar	g_cvBleedoutPuddleLifetime = null;
 float	g_fBleedoutPuddleLifetime;
@@ -463,6 +473,8 @@ bool	ga_bBleedingOut[MAXPLAYERS + 1];
 float	ga_fBleedoutEndsAt[MAXPLAYERS + 1];
 float	ga_fTourniquetRemaining[MAXPLAYERS + 1];
 float	ga_fLastTourniquetTick[MAXPLAYERS + 1];
+int		ga_iTourniquetHealerUserId[MAXPLAYERS + 1];
+bool	ga_bTourniquetHealerIsMedic[MAXPLAYERS + 1];
 float	ga_fBleedoutStartedAt[MAXPLAYERS + 1];
 float	ga_fNextBleedParticleRefresh[MAXPLAYERS + 1];
 int		ga_iBleedParticleStance[MAXPLAYERS + 1] = {-1, ...};
@@ -551,7 +563,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & GPT/Codex",
 	description = "Adds the ability to revive with the Medic class and a health kit.",
-	version = "1.3.19",
+	version = "1.3.21",
 	url = ""
 };
 
@@ -1402,6 +1414,41 @@ static bool GetClientSupportWeaponState(int client, int &activeWeapon, bool &can
 	return true;
 }
 
+static int GetFirstAidKitUses(int client, int weapon) {
+	if (client < 1 || client > MaxClients || !IsClientInGame(client)
+		|| weapon <= MaxClients || !IsValidEntity(weapon))
+		return 0;
+
+	char classname[32];
+	GetEntityClassname(weapon, classname, sizeof(classname));
+	if (!hasCorrectWeapon(classname, false))
+		return 0;
+
+	int ammoType = GetEntProp(weapon, Prop_Data, "m_iPrimaryAmmoType");
+	if (ammoType < 0)
+		return 0;
+
+	return GetEntProp(client, Prop_Data, "m_iAmmo", _, ammoType);
+}
+
+static bool ConsumeFirstAidKitUse(int client, int weapon) {
+	int uses = GetFirstAidKitUses(client, weapon);
+	if (uses <= 0)
+		return false;
+
+	int ammoType = GetEntProp(weapon, Prop_Data, "m_iPrimaryAmmoType");
+	SetEntProp(client, Prop_Send, "m_iAmmo", uses - 1, _, ammoType);
+
+	if (uses == 1) {
+		if (GetPlayerWeaponSlot(client, 0) > 0)
+			ClientCommand(client, "slot1");
+		else if (GetPlayerWeaponSlot(client, 1) > 0)
+			ClientCommand(client, "slot2");
+	}
+
+	return true;
+}
+
 static int GetClientRagdollEntity(int client) {
 	if (client < 1 || client > MaxClients)
 		return INVALID_ENT_REFERENCE;
@@ -1764,6 +1811,8 @@ static void ClearActiveBleedout(int client) {
 	ga_fBleedoutEndsAt[client] = 0.0;
 	ga_fTourniquetRemaining[client] = 0.0;
 	ga_fLastTourniquetTick[client] = 0.0;
+	ga_iTourniquetHealerUserId[client] = 0;
+	ga_bTourniquetHealerIsMedic[client] = false;
 	ga_fBleedoutStartedAt[client] = 0.0;
 	ga_fNextBleedParticleRefresh[client] = 0.0;
 	ga_iBleedParticleStance[client] = -1;
@@ -1806,7 +1855,9 @@ static void StartBleedout(int client, int hitgroup, int damage, int attackerUser
 	ga_fBleedoutEndsAt[client] = ga_fBleedoutStartedAt[client] + g_fBleedoutTime;
 	ga_fNextBleedParticleRefresh[client] = ga_fBleedoutStartedAt[client] + BLEED_PARTICLE_REFRESH_TIME;
 	ga_iBleedParticleStance[client] = GetBleedParticleStance(client);
-	ga_fTourniquetRemaining[client] = g_fTourniquetTime;
+	ga_fTourniquetRemaining[client] = g_fTourniquetMedicTime;
+	ga_iTourniquetHealerUserId[client] = 0;
+	ga_bTourniquetHealerIsMedic[client] = false;
 	ga_iBleedoutHitgroup[client] = hitgroup;
 	ga_iBleedoutDamage[client] = damage;
 	ga_iBleedoutAttackerUserId[client] = attackerUserId;
@@ -1826,7 +1877,7 @@ static void StartBleedout(int client, int hitgroup, int damage, int attackerUser
 	CreateTimer(BLEEDOUT_CALL_DELAY, Timer_PlayBleedoutCall, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
 
 	PrintCenterText(client, "ARTERIAL BLEEDING: %.1f seconds\nAny further damage will kill you", g_fBleedoutTime);
-	PrintToChat(client, "\x070088cc[Medic]\x01 ARTERIAL BLEEDING! You have \x07cc2200%.1f seconds\x01. A medic must apply a tourniquet.", g_fBleedoutTime);
+	PrintToChat(client, "\x070088cc[Medic]\x01 ARTERIAL BLEEDING! You have \x07cc2200%.1f seconds\x01. A medic or teammate with a first-aid kit must apply a tourniquet.", g_fBleedoutTime);
 }
 
 static Action Timer_PlayBleedoutCall(Handle timer, any userid) {
@@ -1862,24 +1913,27 @@ static void KeepBleedParticleActive(int client, float now) {
 		SafeKillRef(oldRef);
 }
 
-static void CompleteTourniquet(int client, int medic) {
+static void CompleteTourniquet(int client, int helper) {
 	if (client < 1 || client > MaxClients || !ga_bBleedingOut[client])
 		return;
 
-	bool validMedic = medic > 0 && medic <= MaxClients && IsClientInGame(medic)
-		&& medic != client && ga_bIsMedic[medic];
-	if (validMedic) {
-		ga_iStatBleedoutsTreated[medic]++;
-		LogToGame("\"%L\" triggered \"bleedout_treated\" against \"%L\"", medic, client);
-	}
+	bool validHelper = helper > 0 && helper <= MaxClients && IsClientInGame(helper)
+		&& helper != client;
+	bool helperIsMedic = validHelper && ga_bIsMedic[helper];
+	if (helperIsMedic)
+		ga_iStatBleedoutsTreated[helper]++;
+
+	// HLstats uses the same action for medic and non-medic treatment.
+	if (validHelper)
+		LogToGame("\"%L\" triggered \"bleedout_treated\" against \"%L\"", helper, client);
 
 	ClearActiveBleedout(client);
 	PrintCenterText(client, "TOURNIQUET SECURED\nBleeding stopped");
 	PrintToChat(client, "\x070088cc[Medic]\x01 Tourniquet secured. Bleeding stopped.");
 
-	if (validMedic) {
-		PrintHintText(medic, "Tourniquet secured on %N. Continue healing.", client);
-		PrintToChat(medic, "\x070088cc[Medic]\x01 You secured a tourniquet on \x0700cc44%N\x01.", client);
+	if (validHelper) {
+		PrintHintText(helper, "Tourniquet secured on %N. Continue healing.", client);
+		PrintToChat(helper, "\x070088cc[Medic]\x01 You secured a tourniquet on \x0700cc44%N\x01.", client);
 	}
 }
 
@@ -1939,6 +1993,10 @@ static void UpdateBleedoutStates(float now) {
 			continue;
 		}
 
+		if (ga_iTourniquetHealerUserId[client] != 0
+			&& now - ga_fLastTourniquetTick[client] > BLEEDOUT_TREAT_TICK * 1.5)
+			ResetTourniquetTreatment(client);
+
 		KeepBleedParticleActive(client, now);
 		UpdateBleedMarkers(client);
 		UpdateBleedoutFade(client, now, remaining);
@@ -1955,37 +2013,71 @@ static void PlayTourniquetPainSound(int client) {
 	EmitSoundToAll(soundPath, client, SNDCHAN_VOICE, SNDLEVEL_NORMAL, SND_NOFLAGS, 1.0);
 }
 
-static bool ApplyTourniquetTick(int medic, int client, float now) {
+static void ResetTourniquetTreatment(int client) {
+	ga_iTourniquetHealerUserId[client] = 0;
+	ga_bTourniquetHealerIsMedic[client] = false;
+	ga_fLastTourniquetTick[client] = 0.0;
+	ga_fTourniquetRemaining[client] = g_fTourniquetMedicTime;
+}
+
+static TourniquetApplyResult ApplyTourniquetTick(int helper, int client, int activeWeapon, float now) {
 	if (!ga_bBleedingOut[client])
-		return false;
+		return TourniquetApply_Progress;
+
+	bool helperIsMedic = ga_bIsMedic[helper];
+	if (!helperIsMedic && GetFirstAidKitUses(helper, activeWeapon) <= 0)
+		return TourniquetApply_NoKitUse;
+
+	int helperUserId = GetClientUserId(helper);
+	int currentHealerUserId = ga_iTourniquetHealerUserId[client];
+	bool currentTreatmentActive = currentHealerUserId != 0
+		&& ga_fLastTourniquetTick[client] > 0.0
+		&& now - ga_fLastTourniquetTick[client] <= BLEEDOUT_TREAT_TICK * 1.5;
+
+	if (currentTreatmentActive && currentHealerUserId != helperUserId) {
+		// A medic may take over a slower non-medic attempt. Otherwise the first
+		// active helper owns the treatment so progress cannot stack.
+		if (!helperIsMedic || ga_bTourniquetHealerIsMedic[client])
+			return TourniquetApply_Busy;
+	}
+
+	if (!currentTreatmentActive || currentHealerUserId != helperUserId) {
+		ga_iTourniquetHealerUserId[client] = helperUserId;
+		ga_bTourniquetHealerIsMedic[client] = helperIsMedic;
+		ga_fTourniquetRemaining[client] = helperIsMedic
+			? g_fTourniquetMedicTime
+			: g_fTourniquetNonMedicTime;
+		ga_fLastTourniquetTick[client] = now;
+
+		if (!ga_bTourniquetPainPlayed[client]) {
+			ga_bTourniquetPainPlayed[client] = true;
+			PlayTourniquetPainSound(client);
+		}
+		return TourniquetApply_Progress;
+	}
 
 	if (!ga_bTourniquetPainPlayed[client]) {
 		ga_bTourniquetPainPlayed[client] = true;
 		PlayTourniquetPainSound(client);
 	}
 
-	if (ga_fLastTourniquetTick[client] <= 0.0) {
-		ga_fLastTourniquetTick[client] = now;
-		return false;
-	}
-
 	float elapsed = now - ga_fLastTourniquetTick[client];
-	if (elapsed > BLEEDOUT_TREAT_TICK * 1.5) {
-		ga_fLastTourniquetTick[client] = now;
-		return false;
-	}
-
 	if (elapsed >= BLEEDOUT_TREAT_TICK * 0.5) {
 		ga_fLastTourniquetTick[client] = now;
 		ga_fTourniquetRemaining[client] -= BLEEDOUT_TREAT_TICK;
 	}
 
 	if (ga_fTourniquetRemaining[client] <= 0.0) {
-		CompleteTourniquet(client, medic);
-		return true;
+		if (!helperIsMedic && !ConsumeFirstAidKitUse(helper, activeWeapon)) {
+			ResetTourniquetTreatment(client);
+			return TourniquetApply_NoKitUse;
+		}
+
+		CompleteTourniquet(client, helper);
+		return TourniquetApply_Completed;
 	}
 
-	return false;
+	return TourniquetApply_Progress;
 }
 
 public Action Timer_RemoveBleedParticle(Handle timer, int particleRef) {
@@ -2717,9 +2809,11 @@ Action Timer_MedicMonitor(Handle timer) {
 				bool bInHealRange = (tDistanceSq <= fReviveDistanceSq && ClientCanSeeVector(originatingPlayer, vecTargetPlayer));
 
 				if (bInHealRange && ga_bBleedingOut[targetPlayer]) {
-					bool completed = ApplyTourniquetTick(originatingPlayer, targetPlayer, now);
-					if (completed)
+					TourniquetApplyResult result = ApplyTourniquetTick(originatingPlayer, targetPlayer, ActiveWeapon, now);
+					if (result == TourniquetApply_Completed)
 						Format(sNewHint, sizeof(sNewHint), "%N\nTourniquet secured\nContinue healing", targetPlayer);
+					else if (result == TourniquetApply_Busy)
+						Format(sNewHint, sizeof(sNewHint), "%N\nAnother teammate is applying the tourniquet", targetPlayer);
 					else {
 						Format(sNewHint, sizeof(sNewHint), "%N\nApplying tourniquet: %.1f seconds",
 							targetPlayer, ga_fTourniquetRemaining[targetPlayer]);
@@ -2790,8 +2884,21 @@ Action Timer_MedicMonitor(Handle timer) {
 				if (tDistanceSq <= fReviveDistanceSq && ClientCanSeeVector(originatingPlayer, vecTargetPlayer)) {
 					iHealth = GetClientHealth(targetPlayer);
 
-					if (ga_bBleedingOut[targetPlayer])
-						Format(sNewHint, sizeof(sNewHint), "%N\nARTERIAL BLEEDING\nA medic must apply a tourniquet", targetPlayer);
+					if (ga_bBleedingOut[targetPlayer]) {
+						TourniquetApplyResult result = ApplyTourniquetTick(originatingPlayer, targetPlayer, ActiveWeapon, now);
+						if (result == TourniquetApply_Completed)
+							Format(sNewHint, sizeof(sNewHint), "%N\nTourniquet secured\n1 first-aid kit use consumed", targetPlayer);
+						else if (result == TourniquetApply_Busy)
+							Format(sNewHint, sizeof(sNewHint), "%N\nAnother teammate is applying the tourniquet", targetPlayer);
+						else if (result == TourniquetApply_NoKitUse)
+							Format(sNewHint, sizeof(sNewHint), "%N\nNo first-aid kit uses remaining", targetPlayer);
+						else {
+							Format(sNewHint, sizeof(sNewHint), "%N\nApplying tourniquet: %.1f seconds",
+								targetPlayer, ga_fTourniquetRemaining[targetPlayer]);
+							PrintHintText(targetPlayer, "%N is applying a tourniquet: %.1f seconds",
+								originatingPlayer, ga_fTourniquetRemaining[targetPlayer]);
+						}
+					}
 					else if (iHealth < g_iNonMedicMaxHealOther) {
 						int iAmount = g_iNonMedicHealAmt;
 						int restoredHP = iAmount;
@@ -3930,10 +4037,15 @@ void SetupConVars() {
 	g_fBleedoutTime = g_cvBleedoutTime.FloatValue;
 	g_cvBleedoutTime.AddChangeHook(OnConVarChanged);
 
-	g_cvTourniquetTime = CreateConVar("sm_tourniquet_time", "3.0",
-		"Seconds of direct medic treatment needed before ordinary healing starts", _, true, 0.5, true, 30.0);
-	g_fTourniquetTime = g_cvTourniquetTime.FloatValue;
-	g_cvTourniquetTime.AddChangeHook(OnConVarChanged);
+	g_cvTourniquetMedicTime = CreateConVar("sm_tourniquet_time", "3.0",
+		"Seconds a medic must treat a teammate before the tourniquet is secured", _, true, 0.5, true, 30.0);
+	g_fTourniquetMedicTime = g_cvTourniquetMedicTime.FloatValue;
+	g_cvTourniquetMedicTime.AddChangeHook(OnConVarChanged);
+
+	g_cvTourniquetNonMedicTime = CreateConVar("sm_tourniquet_nonmedic_time", "7.0",
+		"Seconds a non-medic must treat a teammate before the tourniquet is secured", _, true, 0.5, true, 30.0);
+	g_fTourniquetNonMedicTime = g_cvTourniquetNonMedicTime.FloatValue;
+	g_cvTourniquetNonMedicTime.AddChangeHook(OnConVarChanged);
 
 	g_cvBleedoutPuddleLifetime = CreateConVar("sm_bleedout_puddle_lifetime", "30.0",
 		"Seconds the blood_bleedout puddle remains after a non-fatal bleedout death", _, true, 1.0, true, 120.0);
@@ -4053,8 +4165,10 @@ void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue
 		g_fBleedoutChance = g_cvBleedoutChance.FloatValue;
 	else if (convar == g_cvBleedoutTime)
 		g_fBleedoutTime = g_cvBleedoutTime.FloatValue;
-	else if (convar == g_cvTourniquetTime)
-		g_fTourniquetTime = g_cvTourniquetTime.FloatValue;
+	else if (convar == g_cvTourniquetMedicTime)
+		g_fTourniquetMedicTime = g_cvTourniquetMedicTime.FloatValue;
+	else if (convar == g_cvTourniquetNonMedicTime)
+		g_fTourniquetNonMedicTime = g_cvTourniquetNonMedicTime.FloatValue;
 	else if (convar == g_cvBleedoutPuddleLifetime)
 		g_fBleedoutPuddleLifetime = g_cvBleedoutPuddleLifetime.FloatValue;
 	else if (convar == g_cvBleedoutFadeEnabled)
