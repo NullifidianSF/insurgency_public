@@ -19,7 +19,7 @@ public Plugin myinfo = {
 	name		= "thirdperson",
 	author		= "Nullifidian",
 	description	= "third person view command",
-	version		= "1.9",
+	version		= "2.0.1",
 	url			= ""
 };
 
@@ -225,6 +225,7 @@ public int Handle_TpMenu(Menu menu, MenuAction action, int param1, int param2) {
 			delete menu;
 		}
 	}
+	return 0;
 }
 
 public Action Event_WeaponIronsight(Event event, const char[] name, bool dontBroadcast) {
