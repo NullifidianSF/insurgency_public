@@ -31,6 +31,7 @@ static char g_sObjResNetClass[32];
 #define BLEED_PARTICLE_REFRESH_TIME	2.0
 #define BLEEDOUT_CALL_SOUND		"player/voice/responses/security/subordinate/unsuppressed/wounded5.ogg"
 #define BLEEDOUT_CALL_DELAY		1.0
+#define BLEEDOUT_REPEAT_CALL_MIN_TIME	10.0
 #define BLEED_FADE_IN			0x0001
 #define BLEEDOUT_MARKER_MODEL	"materials/medic/tourniquet_marker.vmt"		// https://steamcommunity.com/sharedfiles/filedetails/?id=3774574642
 #define BLEEDOUT_MARKER_MIN_SCALE	0.035
@@ -563,7 +564,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & GPT/Codex",
 	description = "Adds the ability to revive with the Medic class and a health kit.",
-	version = "1.3.21",
+	version = "1.3.22",
 	url = ""
 };
 
@@ -1874,15 +1875,31 @@ static void StartBleedout(int client, int hitgroup, int damage, int attackerUser
 	CaptureBleedParticleHorizontalOffset(client, position);
 	ga_iBleedParticleRef[client] = CreateArterialBleedParticle(client, hitgroup, position);
 	UpdateBleedMarkers(client);
-	CreateTimer(BLEEDOUT_CALL_DELAY, Timer_PlayBleedoutCall, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
+	ScheduleBleedoutCall(client, BLEEDOUT_CALL_DELAY);
+	if (g_fBleedoutTime >= BLEEDOUT_REPEAT_CALL_MIN_TIME)
+		ScheduleBleedoutCall(client, g_fBleedoutTime * 0.5);
 
 	PrintCenterText(client, "ARTERIAL BLEEDING: %.1f seconds\nAny further damage will kill you", g_fBleedoutTime);
 	PrintToChat(client, "\x070088cc[Medic]\x01 ARTERIAL BLEEDING! You have \x07cc2200%.1f seconds\x01. A medic or teammate with a first-aid kit must apply a tourniquet.", g_fBleedoutTime);
 }
 
-static Action Timer_PlayBleedoutCall(Handle timer, any userid) {
+static void ScheduleBleedoutCall(int client, float delay) {
+	DataPack pack;
+	CreateDataTimer(delay, Timer_PlayBleedoutCall, pack, TIMER_FLAG_NO_MAPCHANGE);
+	pack.WriteCell(GetClientUserId(client));
+	pack.WriteFloat(ga_fBleedoutStartedAt[client]);
+}
+
+static Action Timer_PlayBleedoutCall(Handle timer, DataPack pack) {
+	pack.Reset();
+	int userid = pack.ReadCell();
+	float bleedoutStartedAt = pack.ReadFloat();
 	int client = GetClientOfUserId(userid);
-	if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client) || !ga_bBleedingOut[client])
+	if (client < 1 || client > MaxClients
+		|| !IsClientInGame(client)
+		|| !IsPlayerAlive(client)
+		|| !ga_bBleedingOut[client]
+		|| FloatAbs(ga_fBleedoutStartedAt[client] - bleedoutStartedAt) > 0.01)
 		return Plugin_Stop;
 
 	EmitSoundToAll(BLEEDOUT_CALL_SOUND, client, SNDCHAN_VOICE, SNDLEVEL_NORMAL, SND_NOFLAGS, 1.0);
