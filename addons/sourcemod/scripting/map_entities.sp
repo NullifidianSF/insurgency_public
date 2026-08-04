@@ -29,14 +29,15 @@ enum {
 	ins_prison_2020_new,
 	siege_coop,
 	nova_prospect,
-	oilfield_pve
+	oilfield_pve,
+	estates_b4_push
 };
 
 public Plugin myinfo = {
 	name = "map_entities",
 	author = "Nullifidian + ChatGPT",
 	description = "remove or modify entities for some maps",
-	version = "3.4"
+	version = "3.5"
 };
 
 public void OnPluginStart() {
@@ -134,6 +135,11 @@ public void OnMapStart() {
 		g_iMapId = oilfield_pve;
 		RemoveEntities("env_sprite");
 	}
+	else if (strcmp(sMapName, "estates_b4_push", false) == 0) {
+		g_iMapId = estates_b4_push;
+		RemoveEntities("func_door_rotating");
+		RemoveEntities("func_door");
+	}
 
 	bool bNeedsRoundHook = MapNeedsRoundStartHook(g_iMapId);
 	if (bNeedsRoundHook != g_bEventHooked)
@@ -160,7 +166,8 @@ static bool MapNeedsRoundStartHook(int mapId) {
 			ins_prison_2020_new,
 			siege_coop,
 			nova_prospect,
-			oilfield_pve: {
+			oilfield_pve,
+			estates_b4_push: {
 			return true;
 		}
 	}
@@ -268,6 +275,10 @@ static void NF_ApplyRoundStartEdits(any mapIdAny) {
 		}
 		case oilfield_pve: {
 			RemoveEntities("point_spotlight");
+		}
+		case estates_b4_push: {
+			RemoveEntities("func_door_rotating");
+			RemoveEntities("func_door");
 		}
 	}
 }
