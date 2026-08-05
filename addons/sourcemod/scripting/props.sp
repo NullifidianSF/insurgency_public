@@ -6,7 +6,8 @@
 #include <sdkhooks>
 #include <clientprefs>
 
-#define PL_VERSION		"2.46"
+#define PL_VERSION		"2.51"
+#define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 
 #define MAXENTITIES		2048
 
@@ -37,7 +38,6 @@
 #define BTN_STANCE_TOGGLE   (1 << 29)
 
 #define PF_DEPLOY_BIPOD	(1 << 1)
-#define PF_BUYZONE	(1 << 7)
 
 #define DAMAGE_NO					0
 #define DAMAGE_EVENTS_ONLY			1
@@ -100,19 +100,19 @@ static const char JC_Sounds[][] = {
 static const float JC_MinDelay = 15.0;
 static const float JC_MaxDelay = 25.0;
 
-static const float MATTRESS_FALL_WINDOW = 4.0;
-static const float MATTRESS_BASE_BOOST = 700.0;
-static const float MATTRESS_STACK_BONUS = 275.0;
-static const float MATTRESS_STACK_RADIUS = 75.0;
-static const float MATTRESS_STACK_Z_RANGE = 160.0;
-static const float MATTRESS_STACK_MIN_Z_GAP = 12.0;
-static const float MATTRESS_AUTO_REBOUNCE_BASE = 1.0;
-static const float MATTRESS_AUTO_REBOUNCE_STACK_BONUS = 0.65;
-static const float MATTRESS_ANGLE_PUSH_FRACTION = 0.40;
-static const float MATTRESS_HUMAN_ANGLE_PUSH_SCALE = 1.0;
-static const float MATTRESS_HORIZONTAL_MAX = 250.0;
-static const float MATTRESS_HIGHLIGHT_INTERVAL = 0.25;
-static const int MATTRESS_MAX_STACK_COUNT = 5;
+static const float MATTRESS_FALL_WINDOW = 4.0;					// Seconds after a mattress launch where fall damage can be credited to the mattress owner.
+static const float MATTRESS_BASE_BOOST = 700.0;					// Upward velocity from a single mattress.
+static const float MATTRESS_STACK_BONUS = 275.0;					// Extra upward velocity added for each mattress contributing to the stack.
+static const float MATTRESS_STACK_RADIUS = 75.0;					// Horizontal distance for another mattress to count as part of the stack.
+static const float MATTRESS_STACK_Z_RANGE = 160.0;				// Maximum vertical distance for another mattress to count as stacked.
+static const float MATTRESS_STACK_MIN_Z_GAP = 12.0;				// Minimum vertical gap; prevents same-height mattresses from counting as stacked.
+static const float MATTRESS_AUTO_REBOUNCE_BASE = 1.0;			// Base seconds that auto-rebounce stays armed after a mattress launch.
+static const float MATTRESS_AUTO_REBOUNCE_STACK_BONUS = 0.65;	// Extra auto-rebounce time per additional stacked mattress.
+static const float MATTRESS_ANGLE_PUSH_FRACTION = 0.40;			// Portion of launch strength converted into sideways push from mattress angle.
+static const float MATTRESS_HUMAN_ANGLE_PUSH_SCALE = 1.0;		// Multiplier for sideways angle push applied to human players.
+static const float MATTRESS_HORIZONTAL_MAX = 250.0;				// Maximum sideways velocity added by angled mattresses.
+static const float MATTRESS_HIGHLIGHT_INTERVAL = 0.25;			// Seconds between stack highlight/text updates while holding a mattress.
+static const int MATTRESS_MAX_STACK_COUNT = 5;					// Maximum mattresses counted in one stack, including the mattress being held/touched.
 
 ArrayList	g_hJammers = null;
 Handle		g_hJammerTimer = INVALID_HANDLE;
@@ -233,12 +233,10 @@ int		g_iResupplyDelay;
 bool	g_bAmmoOnce;
 
 int		ga_iResupplyCounter[MAXPLAYERS + 1];
-int		ga_iResupplyCooldown[MAXPLAYERS + 1];
 int		ga_iAmmoAmount[MAXENTITIES + 1];
 int		ga_iAmmoIconHolderRef[MAXENTITIES + 1];
 int		ga_iAmmoIconSpriteRef[MAXENTITIES + 1];
 int		ga_iLastInflictorPropId[MAXPLAYERS + 1] = {-1, ...};
-bool	ga_bAmmoBagResupply[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bHeldPreviewPosValid[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bPickupQueued[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bMattressJumpArmed[MAXPLAYERS + 1] = {false, ...};
@@ -250,18 +248,13 @@ bool	ga_bPropHalfHpWarned[MAXENTITIES + 1] = {false, ...};
 
 ArrayList g_hAmmoCacheRefs = null;
 ArrayList g_hMattressRefs = null;
-ArrayList g_hResupplyTriggerRefs = null;
 ArrayList ga_hUsedAmmoCacheRefs[MAXPLAYERS + 1];
 ArrayList ga_hHighlightedMattressRefs[MAXPLAYERS + 1];
 
-int		g_iDefaultResupplyDelayBase;
-int		g_iDefaultResupplyDelayMax;
-int		g_iDefaultResupplyDelayPenalty;
-int		g_iDefaultResupplyGrace;
-int		g_iDefaultResupplyGraceInitial;
-int		g_iDefaultResupplyPenaltyReset;
-bool	g_bDefaultResupplyConvarsCaptured = false;
-bool	g_bResupplyConvarsOverridden = false;
+Handle	g_hDirectResupply = null;
+int		g_iLastResupplyTimeOffset = -1;
+int		g_iResupplyPenaltyTimeOffset = -1;
+int		g_iResupplyCountOffset = -1;
 
 ConVar	g_cvAmmoResupplyRange = null;
 ConVar	g_cvAmmoAmount = null;
@@ -291,14 +284,12 @@ public void OnPluginStart() {
 	}
 
 	SetupConVars();
+	SetupDirectResupply();
 
 	if (g_hAmmoCacheRefs == null)
 		g_hAmmoCacheRefs = new ArrayList();
 	if (g_hMattressRefs == null)
 		g_hMattressRefs = new ArrayList();
-	if (g_hResupplyTriggerRefs == null)
-		g_hResupplyTriggerRefs = new ArrayList();
-
 	for (int i = 0; i <= MAXENTITIES; i++) {
 		ga_iTrackedPropOwner[i] = 0;
 		ga_iTrackedPropId[i] = -1;
@@ -318,7 +309,6 @@ public void OnPluginStart() {
 	HookEvent("controlpoint_captured", Event_ObjectiveDone, EventHookMode_PostNoCopy);
 
 	RegConsoleCmd("prophelp",           cmd_prophelp, "Open help menu.");
-	RegConsoleCmd("inventory_resupply", cmd_inventory_resupply);
 
 	if (g_bLateLoad) {
 		for (int i = 1; i <= MaxClients; i++) {
@@ -335,9 +325,7 @@ public void OnPluginStart() {
 			ga_bMattressJumpArmed[i]      = false;
 			ga_iLastInflictorPropId[i]    = -1;
 
-			ga_bAmmoBagResupply[i]       = false;
-			ga_iResupplyCounter[i]       = g_iResupplyDelay;
-			ga_iResupplyCooldown[i]      = 0;
+			ga_iResupplyCounter[i] = g_iResupplyDelay;
 
 			ArrayList usedAmmo = EnsureUsedAmmoCacheList(i);
 			if (usedAmmo != null)
@@ -364,7 +352,6 @@ public void OnPluginStart() {
 		}
 
 		EnsureTipTimer();
-		RebuildResupplyTriggerCache();
 		RebuildAmmoCacheIcons();
 	}
 
@@ -387,10 +374,6 @@ public void OnMapStart() {
 		delete g_hMattressRefs;
 	g_hMattressRefs = new ArrayList();
 
-	if (g_hResupplyTriggerRefs != null)
-		delete g_hResupplyTriggerRefs;
-	g_hResupplyTriggerRefs = new ArrayList();
-
 	for (int i = 0; i <= MAXENTITIES; i++) {
 		ga_fWireSoundCooldown[i] = 0.0;
 		ga_iAmmoAmount[i]        = 0;
@@ -408,14 +391,10 @@ public void OnMapStart() {
 
 	JC_ScheduleNext(15.0);
 
-	FindAndSetResupplyConvars();
-	RebuildResupplyTriggerCache();
 	CreateTimer(1.0, Timer_AmmoResupply, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 
 	for (int client = 1; client <= MaxClients; client++) {
-		ga_bAmmoBagResupply[client] = false;
 		ga_iResupplyCounter[client] = g_iResupplyDelay;
-		ga_iResupplyCooldown[client] = 0;
 
 		ArrayList usedAmmo = EnsureUsedAmmoCacheList(client);
 		if (usedAmmo != null)
@@ -449,9 +428,7 @@ public void OnClientPostAdminCheck(int client) {
 	ga_bMattressJumpArmed[client]      = false;
 	ga_iLastInflictorPropId[client]    = -1;
 
-	ga_bAmmoBagResupply[client] = false;
 	ga_iResupplyCounter[client] = g_iResupplyDelay;
-	ga_iResupplyCooldown[client] = 0;
 
 	ArrayList usedAmmo = EnsureUsedAmmoCacheList(client);
 	if (usedAmmo != null)
@@ -589,8 +566,11 @@ public Action Event_PlayerDeath_Pre(Event event, const char[] name, bool dontBro
 		if (ga_bMattressDeath[victim] && ga_iMattressKiller[victim] > 0) {
 			int killer = ga_iMattressKiller[victim];
 
-			if (IsClientInGame(killer) && GetClientTeam(killer) != GetClientTeam(victim))
+			if (IsClientInGame(killer) && GetClientTeam(killer) != GetClientTeam(victim)) {
 				event.SetInt("attacker", GetClientUserId(killer));
+				if (!IsFakeClient(killer))
+					LogToGame("\"%L\" triggered \"mattress_kill\"", killer);
+			}
 
 			event.SetString("weapon", "Mattress");
 
@@ -604,11 +584,17 @@ public Action Event_PlayerDeath_Pre(Event event, const char[] name, bool dontBro
 		
 		if (IsValidNonClientEntity(inflictor)) {
 			if (GetTrackedPropId(inflictor) == MID(Prop_BarbWire)) {
+				int killer = GetClientOfUserId(event.GetInt("attacker"));
+				if (killer > 0 && IsClientInGame(killer) && !IsFakeClient(killer) && GetClientTeam(killer) != GetClientTeam(victim))
+					LogToGame("\"%L\" triggered \"barbed_wire_kill\"", killer);
 				event.SetString("weapon", "Barbed Wire");
 				return Plugin_Changed;
 			}
 		}
 		else if (ga_iLastInflictorPropId[victim] == MID(Prop_BarbWire)) {
+			int killer = GetClientOfUserId(event.GetInt("attacker"));
+			if (killer > 0 && IsClientInGame(killer) && !IsFakeClient(killer) && GetClientTeam(killer) != GetClientTeam(victim))
+				LogToGame("\"%L\" triggered \"barbed_wire_kill\"", killer);
 			event.SetString("weapon", "Barbed Wire");
 			return Plugin_Changed;
 		}
@@ -939,6 +925,10 @@ static void NF_DeferredPickupExistingProp(any data) {
 
 	int health = GetEntProp(target, Prop_Data, "m_iHealth");
 	int propOwner = GetPropOwner(target);
+	// Keep a non-zero owner sentinel for orphaned props so repositioning them is
+	// still treated as a move, not as a newly purchased/built prop.
+	if (propOwner < 1 || propOwner > MaxClients)
+		propOwner = client;
 
 	PropId previousModel = ga_iModelIndex[client];
 	int previousOwner = ga_iPropOwner[client];
@@ -1403,17 +1393,6 @@ static void UpdateClientWeaponState(int client, int entity = -1) {
 	ga_bHoldingMeleeWeapon[client] = (entity > 0 && GetPlayerWeaponSlot(client, 2) == entity);
 }
 
-static void RebuildResupplyTriggerCache() {
-	if (g_hResupplyTriggerRefs == null)
-		g_hResupplyTriggerRefs = new ArrayList();
-	else
-		g_hResupplyTriggerRefs.Clear();
-
-	int ent = -1;
-	while ((ent = FindEntityByClassname(ent, "ins_spawnzone")) != -1)
-		AddUniqueEntityRef(g_hResupplyTriggerRefs, ent);
-}
-
 void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, bool solid = false) {
 	if (!IsPlayerOnGround(client)) {
 		PrintCenterText(client, "You cannot build a prop while falling!");
@@ -1649,6 +1628,32 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 
 		JC_AddJammer(prop);
 	}
+
+	// A moved prop is recreated internally, so only log genuinely new builds.
+	if (solid && !bMovingExisting)
+		LogPropBuild(client, modelId);
+}
+
+static void LogPropBuild(int client, PropId modelId) {
+	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
+		return;
+
+	char action[32];
+	switch (modelId) {
+		case Prop_BarbWire:          strcopy(action, sizeof(action), "build_wire");
+		case Prop_SandbagWall:       strcopy(action, sizeof(action), "build_sandbag");
+		case Prop_TWall:             strcopy(action, sizeof(action), "build_twall");
+		case Prop_HescoBasket:       strcopy(action, sizeof(action), "build_hesco");
+		case Prop_PanjStairs:        strcopy(action, sizeof(action), "build_stairs");
+		case Prop_Mattress:          strcopy(action, sizeof(action), "build_mattress");
+		case Prop_ContainerOpen2:    strcopy(action, sizeof(action), "build_container");
+		case Prop_EmbassyCenter02:   strcopy(action, sizeof(action), "build_embassy");
+		case Prop_IedJammer:         strcopy(action, sizeof(action), "build_jammer");
+		case Prop_AmmoCacheSmall:    strcopy(action, sizeof(action), "build_cache");
+		default:                     strcopy(action, sizeof(action), "build_prop");
+	}
+
+	LogToGame("\"%L\" triggered \"%s\"", client, action);
 }
 
 void ClearOldestPropIfLimitReached(int client) {
@@ -2199,13 +2204,6 @@ public Action Timer_ForceDeployBipod(Handle timer, DataPack hDatapack) {
 	return Plugin_Stop;
 }
 
-static void ResetAmmoResupplyProgress(int client) {
-	if (client < 1 || client > MaxClients)
-		return;
-
-	ga_iResupplyCounter[client] = g_iResupplyDelay;
-}
-
 public Action Timer_AmmoResupply(Handle timer) {
 	for (int client = 1; client <= MaxClients; client++) {
 		if (!IsClientInGame(client)
@@ -2237,69 +2235,61 @@ public Action Timer_AmmoResupply(Handle timer) {
 			continue;
 		}
 
-		ga_iResupplyCounter[client]--;
-
 		if (ga_iAmmoAmount[validAmmoCache] <= 0)
 			ga_iAmmoAmount[validAmmoCache] = g_iAmmoAmount;
 
+		ga_iResupplyCounter[client]--;
 		PrintHintText(client, "Resupplying ammo in %d seconds | Supply left: %d",
 			ga_iResupplyCounter[client], ga_iAmmoAmount[validAmmoCache]);
 
-		if (ga_iResupplyCounter[client] <= 0) {
-			ResetAmmoResupplyProgress(client);
+		if (ga_iResupplyCounter[client] > 0)
+			continue;
 
-			AmmoResupply_Player(client);
-
-			ga_iAmmoAmount[validAmmoCache]--;
-			if (ga_iAmmoAmount[validAmmoCache] <= 0) {
-				SafeKillIdx(validAmmoCache);
-			}
-			else {
-				MarkAmmoCacheUsed(client, validAmmoCache);
-			}
-
-			PrintHintText(client, "Rearmed! Ammo Supply left: %d", ga_iAmmoAmount[validAmmoCache]);
-			PrintToChat(client, "\x01Rearmed! Ammo Supply left: \x070088cc%d", ga_iAmmoAmount[validAmmoCache]);
+		ResetAmmoResupplyProgress(client);
+		if (!ResupplyPlayerPreservingCooldown(client)) {
+			PrintHintText(client, "Unable to rearm right now.");
+			continue;
 		}
+
+		int cacheOwner = ga_iTrackedPropOwner[validAmmoCache];
+		if (cacheOwner > 0 && cacheOwner <= MaxClients && cacheOwner != client && IsClientInGame(cacheOwner) && !IsFakeClient(cacheOwner))
+			LogToGame("\"%L\" triggered \"ammo_resupplied\" against \"%L\"", cacheOwner, client);
+
+		ga_iAmmoAmount[validAmmoCache]--;
+		if (ga_iAmmoAmount[validAmmoCache] <= 0) {
+			SafeKillIdx(validAmmoCache);
+		}
+		else {
+			MarkAmmoCacheUsed(client, validAmmoCache);
+		}
+
+		PrintHintText(client, "Rearmed! Ammo Supply left: %d", ga_iAmmoAmount[validAmmoCache]);
+		PrintToChat(client, "\x01Rearmed! Ammo Supply left: \x070088cc%d", ga_iAmmoAmount[validAmmoCache]);
 	}
 	return Plugin_Continue;
 }
 
-void AmmoResupply_Player(int client) {
-	ga_bAmmoBagResupply[client] = true;
-
-	if (GetEntProp(client, Prop_Send, "m_iPlayerFlags") & PF_BUYZONE) {
-		FakeClientCommandEx(client, "inventory_resupply");
+static void ResetAmmoResupplyProgress(int client) {
+	if (client < 1 || client > MaxClients)
 		return;
-	}
 
-	if (g_hResupplyTriggerRefs == null || g_hResupplyTriggerRefs.Length == 0)
-		RebuildResupplyTriggerCache();
-
-	for (int i = g_hResupplyTriggerRefs.Length - 1; i >= 0; i--) {
-		int trigger = EntRefToEntIndex(g_hResupplyTriggerRefs.Get(i));
-		if (trigger <= MaxClients || !IsValidEntity(trigger)) {
-			g_hResupplyTriggerRefs.Erase(i);
-			continue;
-		}
-
-		if (GetEntProp(trigger, Prop_Send, "m_bDisabled"))
-			continue;
-
-		CallStartTouch(trigger, client);
-		SetEntProp(client, Prop_Send, "m_iPlayerFlags", GetEntProp(client, Prop_Send, "m_iPlayerFlags") | PF_BUYZONE);
-		FakeClientCommandEx(client, "inventory_resupply");
-		CallEndTouch(trigger, client);
-		break;
-	}
+	ga_iResupplyCounter[client] = g_iResupplyDelay;
 }
 
-public void CallStartTouch(int trigger, int client) {
-	AcceptEntityInput(trigger, "StartTouch", client, client, 0);
-}
+bool ResupplyPlayerPreservingCooldown(int client) {
+	float lastResupplyTime = GetEntDataFloat(client, g_iLastResupplyTimeOffset);
+	float penaltyTime = GetEntDataFloat(client, g_iResupplyPenaltyTimeOffset);
+	int resupplyCount = GetEntData(client, g_iResupplyCountOffset, 4);
 
-public void CallEndTouch(int trigger, int client) {
-	AcceptEntityInput(trigger, "EndTouch", client, client, 0);
+	bool resupplied = view_as<bool>(SDKCall(g_hDirectResupply, client, true));
+
+	// Resupply(true) skips the engine gate but records a new resupply. Restore
+	// every field used by normal resupply cooldown and penalty calculations.
+	SetEntDataFloat(client, g_iLastResupplyTimeOffset, lastResupplyTime, false);
+	SetEntDataFloat(client, g_iResupplyPenaltyTimeOffset, penaltyTime, false);
+	SetEntData(client, g_iResupplyCountOffset, resupplyCount, 4, false);
+
+	return resupplied;
 }
 
 int FindValidProp_InDistance(int client) {
@@ -2335,30 +2325,6 @@ int FindValidProp_InDistance(int client) {
 	}
 
 	return bestEnt;
-}
-
-public Action cmd_inventory_resupply(int client, int args) {
-	if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
-		return Plugin_Continue;
-
-	if (ga_bAmmoBagResupply[client]) {
-		ga_bAmmoBagResupply[client] = false;
-		return Plugin_Continue;
-	}
-
-	if ((GetEntProp(client, Prop_Send, "m_iPlayerFlags") & PF_BUYZONE) == 0)
-		return Plugin_Handled;
-
-	int now = GetTime();
-	int left = ga_iResupplyCooldown[client] - now;
-
-	if (left > 0) {
-		PrintToChat(client, "You may resupply in %d second%s.", left, (left == 1) ? "" : "s");
-		return Plugin_Handled;
-	}
-
-	ga_iResupplyCooldown[client] = now + g_iDefaultResupplyDelayMax;
-	return Plugin_Continue;
 }
 
 public Action Hook_WeaponSwitch(int client, int entity) {
@@ -3129,8 +3095,6 @@ static void BroadcastBuildTip() {
 }
 
 public void OnMapEnd() {
-	RestoreResupplyConvars();
-
 	JC_Stop();
 	if (g_hJammers != null) {
 		delete g_hJammers;
@@ -3155,11 +3119,6 @@ public void OnMapEnd() {
 		delete g_hMattressRefs;
 		g_hMattressRefs = null;
 	}
-	if (g_hResupplyTriggerRefs != null) {
-		delete g_hResupplyTriggerRefs;
-		g_hResupplyTriggerRefs = null;
-	}
-
 	KillTipTimer();
 }
 
@@ -3202,12 +3161,7 @@ public void OnPluginEnd() {
 		delete g_hMattressRefs;
 		g_hMattressRefs = null;
 	}
-	if (g_hResupplyTriggerRefs != null) {
-		delete g_hResupplyTriggerRefs;
-		g_hResupplyTriggerRefs = null;
-	}
-
-	RestoreResupplyConvars();
+	delete g_hDirectResupply;
 
 	KillTipTimer();
 }
@@ -3253,67 +3207,34 @@ public void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] n
 		g_bAmmoOnce = g_cvAmmoOnce.BoolValue;
 }
 
-static bool ReadGameConVarInt(const char[] name, int &value) {
-	ConVar convar = FindConVar(name);
-	if (convar == null) {
-		LogError("Unable to find required game convar: %s", name);
-		return false;
+void SetupDirectResupply() {
+	GameData config = LoadGameConfigFile(RESUPPLY_GAMEDATA_FILE);
+	if (config == null)
+		SetFailState("Missing gamedata: addons/sourcemod/gamedata/%s.txt", RESUPPLY_GAMEDATA_FILE);
+
+	g_iLastResupplyTimeOffset = config.GetOffset("CINSPlayer::LastResupplyTime");
+	g_iResupplyPenaltyTimeOffset = config.GetOffset("CINSPlayer::ResupplyPenaltyTime");
+	g_iResupplyCountOffset = config.GetOffset("CINSPlayer::ResupplyCount");
+	if (g_iLastResupplyTimeOffset == -1
+		|| g_iResupplyPenaltyTimeOffset == -1
+		|| g_iResupplyCountOffset == -1) {
+		delete config;
+		SetFailState("Missing one or more CINSPlayer resupply offsets in %s.", RESUPPLY_GAMEDATA_FILE);
 	}
 
-	value = convar.IntValue;
-	return true;
-}
-
-static bool SetGameConVarInt(const char[] name, int value) {
-	ConVar convar = FindConVar(name);
-	if (convar == null) {
-		LogError("Unable to find required game convar: %s", name);
-		return false;
+	StartPrepSDKCall(SDKCall_Player);
+	if (!PrepSDKCall_SetFromConf(config, SDKConf_Signature, "CINSPlayer::Resupply")) {
+		delete config;
+		SetFailState("Missing CINSPlayer::Resupply signature in %s.", RESUPPLY_GAMEDATA_FILE);
 	}
 
-	convar.SetInt(value);
-	return true;
-}
+	PrepSDKCall_AddParameter(SDKType_Bool, SDKPass_Plain);
+	PrepSDKCall_SetReturnInfo(SDKType_Bool, SDKPass_Plain);
+	g_hDirectResupply = EndPrepSDKCall();
+	delete config;
 
-void FindAndSetResupplyConvars() {
-	if (!g_bDefaultResupplyConvarsCaptured) {
-		bool captured = true;
-		captured = ReadGameConVarInt("mp_player_resupply_coop_delay_base", g_iDefaultResupplyDelayBase) && captured;
-		captured = ReadGameConVarInt("mp_player_resupply_coop_delay_max", g_iDefaultResupplyDelayMax) && captured;
-		captured = ReadGameConVarInt("mp_player_resupply_coop_delay_penalty", g_iDefaultResupplyDelayPenalty) && captured;
-		captured = ReadGameConVarInt("mp_player_resupply_coop_grace", g_iDefaultResupplyGrace) && captured;
-		captured = ReadGameConVarInt("mp_player_resupply_coop_grace_initial", g_iDefaultResupplyGraceInitial) && captured;
-		captured = ReadGameConVarInt("mp_player_resupply_coop_penalty_reset", g_iDefaultResupplyPenaltyReset) && captured;
-
-		if (!captured)
-			return;
-
-		g_bDefaultResupplyConvarsCaptured = true;
-	}
-
-	bool overridden = false;
-	overridden = SetGameConVarInt("mp_player_resupply_coop_delay_base", 0) || overridden;
-	overridden = SetGameConVarInt("mp_player_resupply_coop_delay_max", 0) || overridden;
-	overridden = SetGameConVarInt("mp_player_resupply_coop_delay_penalty", 0) || overridden;
-	overridden = SetGameConVarInt("mp_player_resupply_coop_grace", 0) || overridden;
-	overridden = SetGameConVarInt("mp_player_resupply_coop_grace_initial", 0) || overridden;
-	overridden = SetGameConVarInt("mp_player_resupply_coop_penalty_reset", 0) || overridden;
-
-	g_bResupplyConvarsOverridden = overridden;
-}
-
-void RestoreResupplyConvars() {
-	if (!g_bDefaultResupplyConvarsCaptured || !g_bResupplyConvarsOverridden)
-		return;
-
-	SetGameConVarInt("mp_player_resupply_coop_delay_base", g_iDefaultResupplyDelayBase);
-	SetGameConVarInt("mp_player_resupply_coop_delay_max", g_iDefaultResupplyDelayMax);
-	SetGameConVarInt("mp_player_resupply_coop_delay_penalty", g_iDefaultResupplyDelayPenalty);
-	SetGameConVarInt("mp_player_resupply_coop_grace", g_iDefaultResupplyGrace);
-	SetGameConVarInt("mp_player_resupply_coop_grace_initial", g_iDefaultResupplyGraceInitial);
-	SetGameConVarInt("mp_player_resupply_coop_penalty_reset", g_iDefaultResupplyPenaltyReset);
-
-	g_bResupplyConvarsOverridden = false;
+	if (g_hDirectResupply == null)
+		SetFailState("Unable to prepare CINSPlayer::Resupply.");
 }
 
 stock void SafeKillIdx(int ent) {

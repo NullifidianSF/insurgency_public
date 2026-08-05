@@ -71,6 +71,12 @@ enum TourniquetApplyResult {
 // Chat command anti-spam
 #define MEDIC_CMD_COOLDOWN 10.0
 
+// Insurgency input bits. These differ from the generic Source IN_* mappings.
+#define BTN_ATTACK1		(1 << 0)
+#define BTN_USE			(1 << 6)
+#define BTN_SPRINT		(1 << 15)
+#define BTN_SPRINT_TOGGLE	(1 << 26)
+
 static const char g_sAutoThanksMessages[][] = {
 	"Thanks for the revive, %N!",
 	"I owe you one, %N!",
@@ -434,6 +440,13 @@ ConVar	g_cvPreRoundFirst = null;
 ConVar	g_cvPreRound = null;
 int		g_iMedpackHealthAmount;
 
+ConVar	g_cvTacticalDeathMarkers = null;
+bool	g_bTacticalDeathMarkers;
+ConVar	g_cvTacticalMarkerType = null;
+int		g_iTacticalMarkerType;
+ConVar	g_cvTacticalMarkerFollowDuration = null;
+float	g_fTacticalMarkerFollowDuration;
+
 // ----------------------------------------------------------------------
 // Runtime state
 // ----------------------------------------------------------------------
@@ -456,6 +469,7 @@ Handle	g_hGameConfig = null;
 // ----------------------------------------------------------------------
 int		ga_iTimeCheckHeight[MAX_ENTITIES + 1];
 int		ga_iHealthPack_Amount[MAX_ENTITIES + 1];
+int		ga_iHealthPackOwnerUserId[MAX_ENTITIES + 1];
 float	ga_fLastHeight[MAX_ENTITIES + 1];
 float	ga_fTimeCheck[MAX_ENTITIES + 1];
 bool	ga_bHealthkitInit[MAX_ENTITIES + 1];
@@ -548,6 +562,7 @@ int		ga_iStatBleedoutsTreated[MAXPLAYERS + 1];
 int		ga_iHealingSessionTarget[MAXPLAYERS + 1];
 int		ga_iHealingSessionHP[MAXPLAYERS + 1];
 float	ga_fHealingSessionLastAt[MAXPLAYERS + 1];
+float	ga_fDeployedHealSessionLastAt[MAXPLAYERS + 1][MAXPLAYERS + 1];
 
 #define HEAL_SESSION_TIMEOUT 1.0
 
@@ -564,7 +579,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & GPT/Codex",
 	description = "Adds the ability to revive with the Medic class and a health kit.",
-	version = "1.3.22",
+	version = "1.3.28",
 	url = ""
 };
 
@@ -770,6 +785,7 @@ public void OnEntityDestroyed(int entity) {
 
 	ClearDestroyedBleedParticleRefs();
 	UntrackHealthkit(entity);
+	ga_iHealthPackOwnerUserId[entity] = 0;
 
 	if (!ga_bHealthkitInit[entity] && ga_iHealthPack_Amount[entity] == 0)
 		return;
@@ -2999,12 +3015,17 @@ Action Timer_NearestBody(Handle timer) {
 	// Build the revivable-body list once per tick instead of validating every
 	// dead client again for every living player.
 	for (int deadPlayer = 1; deadPlayer <= MaxClients; deadPlayer++) {
+		int ragdoll = GetClientRagdollEntity(deadPlayer);
 		if (!IsClientInGame(deadPlayer)
 			|| IsPlayerAlive(deadPlayer)
 			|| GetClientTeam(deadPlayer) != TEAM_SECURITY
 			|| ga_bHurtFatal[deadPlayer]
-			|| GetClientRagdollEntity(deadPlayer) == INVALID_ENT_REFERENCE)
+			|| ragdoll == INVALID_ENT_REFERENCE)
 			continue;
+
+		// The ragdoll can be pushed after spawning. Keep both the existing
+		// nearest-body calculation and the tactical marker on its live position.
+		GetEntPropVector(ragdoll, Prop_Data, "m_vecAbsOrigin", ga_fRagdollPosition[deadPlayer]);
 
 		if (ga_bBeingRevivedByMedic[deadPlayer]
 			&& (now - ga_iTimeReviveCheck[deadPlayer]) >= 2)
@@ -3059,6 +3080,15 @@ Action Timer_NearestBody(Handle timer) {
 
 		if (sDeadLine[0] != '\0')
 			PrintCenterText(alivePlayer, "%s", sDeadLine);
+
+		if (g_bTacticalDeathMarkers
+			&& g_bReviveEnabled
+			&& g_bReviveActive
+			&& closestDeadPlayerWithoutMedic != 0)
+		{
+			SendTacticalMarkerToMedic(alivePlayer, ga_fRagdollPosition[closestDeadPlayerWithoutMedic],
+				g_iTacticalMarkerType, g_fTacticalMarkerFollowDuration);
+		}
 	}
 	return Plugin_Continue;
 }
@@ -3132,7 +3162,7 @@ public Action Event_GrenadeThrown(Event event, const char[] name, bool dontBroad
 	if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
 		return Plugin_Continue;
 
-	if (nade_id <= MaxClients || !IsValidEntity(nade_id))
+	if (nade_id <= MaxClients || nade_id > MAX_ENTITIES || !IsValidEntity(nade_id))
 		return Plugin_Continue;
 
 	char grenade_name[32];
@@ -3140,6 +3170,11 @@ public Action Event_GrenadeThrown(Event event, const char[] name, bool dontBroad
 
 	if (!StrEqual(grenade_name, "healthkit"))
 		return Plugin_Continue;
+
+	// Only deployed packs thrown while the owner is a medic contribute to
+	// medic statistics. User IDs prevent attribution to a reused client slot.
+	ga_iHealthPackOwnerUserId[nade_id] =
+		(ga_bIsMedic[client] && !IsFakeClient(client)) ? GetClientUserId(client) : 0;
 
 	// Your existing voice lines
 	switch (GetRandomInt(0, 3)) {
@@ -3253,6 +3288,38 @@ public Action HealthkitGroundCheckTimer(Handle timer, int entref) {
 	return Plugin_Stop;
 }
 
+static bool IsUsingDeployedHealthkit(int client) {
+	int buttons = GetClientButtons(client);
+	return (buttons & BTN_USE) != 0
+		&& (buttons & (BTN_ATTACK1 | BTN_SPRINT | BTN_SPRINT_TOGGLE)) == 0;
+}
+
+static void RecordDeployedMedpackHealing(int healthPack, int target, int restoredHP,
+		bool completedTreatment, float now) {
+	if (healthPack <= MaxClients || healthPack > MAX_ENTITIES
+		|| target < 1 || target > MaxClients || restoredHP <= 0)
+		return;
+
+	int owner = GetClientOfUserId(ga_iHealthPackOwnerUserId[healthPack]);
+	if (owner < 1 || owner > MaxClients || owner == target
+		|| !IsClientInGame(owner) || IsFakeClient(owner) || !ga_bIsMedic[owner])
+		return;
+
+	if (ga_fDeployedHealSessionLastAt[owner][target] <= 0.0
+		|| now - ga_fDeployedHealSessionLastAt[owner][target] >= HEAL_SESSION_TIMEOUT) {
+		ga_iHealingSessions[owner]++;
+		LogToGame("\"%L\" triggered \"healing_session\" against \"%L\"", owner, target);
+	}
+	ga_fDeployedHealSessionLastAt[owner][target] = now;
+	ga_iTotalHP[owner] += restoredHP;
+
+	if (completedTreatment) {
+		ga_iStatHeals[owner]++;
+		LogToGame("\"%L\" triggered \"healed\" against \"%L\"", owner, target);
+		ga_fDeployedHealSessionLastAt[owner][target] = 0.0;
+	}
+}
+
 Action Healthkit(Handle timer, DataPack hDatapack) {
 	hDatapack.Reset();
 
@@ -3274,21 +3341,15 @@ Action Healthkit(Handle timer, DataPack hDatapack) {
 	float	fOrigin[3],
 			fPlayerOrigin[3];
 
-	int		ActiveWeapon,
-			iHealth;
+	int		iHealth;
 	int nearbyMedicClients[MAXPLAYERS + 1];
 	float nearbyMedicPositions[MAXPLAYERS + 1][3];
 	int nearbyMedicCount = 0;
 
-	// Cache medics who can assist area healing once for this healthkit tick.
+	// Cache nearby medics once for this healthkit tick. Their active weapon no
+	// longer controls whether another player can use a deployed medical pack.
 	for (int friendlyMedic = 1; friendlyMedic <= MaxClients; friendlyMedic++) {
 		if (!IsClientInGame(friendlyMedic) || !IsPlayerAlive(friendlyMedic) || !ga_bIsMedic[friendlyMedic])
-			continue;
-
-		int medicWeapon;
-		bool bCanHealPaddle, bCanHealMedpack;
-		if (!GetClientSupportWeaponState(friendlyMedic, medicWeapon, bCanHealPaddle, bCanHealMedpack)
-			|| (!bCanHealPaddle && !bCanHealMedpack))
 			continue;
 
 		nearbyMedicClients[nearbyMedicCount] = friendlyMedic;
@@ -3318,14 +3379,24 @@ Action Healthkit(Handle timer, DataPack hDatapack) {
 		if (GetVectorDistanceSquared(fPlayerOrigin, fOrigin) > Healthkit_Radius * Healthkit_Radius)
 			continue;
 
+		bool medicNearby = Check_NearbyMedics(client, nearbyMedicClients, nearbyMedicPositions, nearbyMedicCount);
+		iHealth = GetClientHealth(client);
+		int startingHealth = iHealth;
+		int maximumHealth = medicNearby ? 100
+			: (ga_bIsMedic[client] ? g_iMedicHealSelfMax : g_iNonMedicHealSelfMax);
+
+		if (iHealth >= maximumHealth)
+			continue;
+
+		if (!IsUsingDeployedHealthkit(client)) {
+			PrintHintText(client, "Hold USE without attacking or sprinting to heal (HP: %i | MAX: %i)",
+				iHealth, maximumHealth);
+			continue;
+		}
+
 		if (ga_bIsMedic[client]) {
 			/* I'm a medic */
-			bool bCanHealPaddle, bCanHealMedpack;
-			if (!GetClientSupportWeaponState(client, ActiveWeapon, bCanHealPaddle, bCanHealMedpack) || !bCanHealPaddle)
-				continue;
-
-			iHealth = GetClientHealth(client);
-			if (Check_NearbyMedics(client, nearbyMedicClients, nearbyMedicPositions, nearbyMedicCount)) {
+			if (medicNearby) {
 				if (iHealth < 100) {
 					iHealth += g_iHealAmountPaddles;
 					ga_iHealthPack_Amount[healthPack] -= g_iHealAmountPaddles;
@@ -3359,8 +3430,7 @@ Action Healthkit(Handle timer, DataPack hDatapack) {
 			}
 		} else {
 			/* I'm not a medic */
-			if (Check_NearbyMedics(client, nearbyMedicClients, nearbyMedicPositions, nearbyMedicCount)) {
-				iHealth = GetClientHealth(client);
+			if (medicNearby) {
 				if (iHealth < 100) {
 					iHealth += g_iHealAmountPaddles;
 					ga_iHealthPack_Amount[healthPack] -= g_iHealAmountPaddles;
@@ -3379,17 +3449,6 @@ Action Healthkit(Handle timer, DataPack hDatapack) {
 					SetEntityHealth(client, iHealth);
 				}
 			} else {
-				bool bCanHealPaddle, bCanHealMedpack;
-				if (!GetClientSupportWeaponState(client, ActiveWeapon, bCanHealPaddle, bCanHealMedpack))
-					continue;
-				iHealth = GetClientHealth(client);
-
-				if (!bCanHealPaddle) {
-					if (iHealth < g_iNonMedicHealSelfMax)
-						PrintHintText(client, "No medics nearby! Pull knife out to heal! (HP: %i)", iHealth);
-					continue;
-				}
-
 				if (iHealth < g_iNonMedicHealSelfMax) {
 					iHealth += g_iNonMedicHealAmt;
 					ga_iHealthPack_Amount[healthPack] -= g_iNonMedicHealAmt;
@@ -3408,6 +3467,9 @@ Action Healthkit(Handle timer, DataPack hDatapack) {
 				}
 			}
 		}
+
+		RecordDeployedMedpackHealing(healthPack, client, iHealth - startingHealth,
+			iHealth >= maximumHealth, fGameTime);
 	}
 
 	return Plugin_Continue;
@@ -3687,6 +3749,34 @@ public Action Cmd_BleedTest(int client, int args) {
 	return Plugin_Handled;
 }
 
+static bool SendTacticalMarkerToMedic(int recipient, const float position[3], int markerType, float duration) {
+	if (GetUserMessageType() != UM_BitBuf
+		|| recipient < 1
+		|| recipient > MaxClients
+		|| !IsClientInGame(recipient)
+		|| IsFakeClient(recipient)
+		|| !IsPlayerAlive(recipient)
+		|| !ga_bIsMedic[recipient])
+	{
+		return false;
+	}
+
+	Handle message = StartMessageOne("CompassMarker", recipient, USERMSG_RELIABLE);
+	if (message == null)
+		return false;
+
+	float markerPosition[3];
+	VecCopy(position, markerPosition);
+	markerPosition[2] += 12.0;
+
+	BfWriteByte(message, markerType);
+	BfWriteFloat(message, duration);
+	BfWriteByte(message, 1);
+	BfWriteVecCoord(message, markerPosition);
+	EndMessage();
+	return true;
+}
+
 void CloseHealingSession(int client) {
 	if (client < 1 || client > MaxClients)
 		return;
@@ -3770,6 +3860,10 @@ void ResetMedicStats (int client) {
 	ga_iHealingSessionTarget[client] = 0;
 	ga_iHealingSessionHP[client] = 0;
 	ga_fHealingSessionLastAt[client] = 0.0;
+	for (int other = 1; other <= MaxClients; other++) {
+		ga_fDeployedHealSessionLastAt[client][other] = 0.0;
+		ga_fDeployedHealSessionLastAt[other][client] = 0.0;
+	}
 }
 
 void PlayVictimReviveSound(int client) {
@@ -4150,6 +4244,21 @@ void SetupConVars() {
 	g_cvMedpackHealthAmount = CreateConVar("sm_medpack_health_amount", "300", "Amount of health a deployed healthpack has");
 	g_iMedpackHealthAmount = g_cvMedpackHealthAmount.IntValue;
 	g_cvMedpackHealthAmount.AddChangeHook(OnConVarChanged);
+
+	g_cvTacticalDeathMarkers = CreateConVar("sm_medic_tactical_death_markers", "1",
+		"Experimental: point each living Security medic at their nearest unhandled revivable teammate; 0 - disabled, 1 - enabled");
+	g_bTacticalDeathMarkers = g_cvTacticalDeathMarkers.BoolValue;
+	g_cvTacticalDeathMarkers.AddChangeHook(OnConVarChanged);
+
+	g_cvTacticalMarkerType = CreateConVar("sm_medic_tactical_marker_type", "5",
+		"CompassMarker type used by the medic tactical-marker test", _, true, 0.0, true, 255.0);
+	g_iTacticalMarkerType = g_cvTacticalMarkerType.IntValue;
+	g_cvTacticalMarkerType.AddChangeHook(OnConVarChanged);
+
+	g_cvTacticalMarkerFollowDuration = CreateConVar("sm_medic_tactical_marker_follow_duration", "0.75",
+		"Seconds each refreshed nearest-revivable marker remains visible after its last update", _, true, 0.25, true, 5.0);
+	g_fTacticalMarkerFollowDuration = g_cvTacticalMarkerFollowDuration.FloatValue;
+	g_cvTacticalMarkerFollowDuration.AddChangeHook(OnConVarChanged);
 }
 
 void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
@@ -4228,4 +4337,10 @@ void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue
 		g_iNonMedicReviveTime = g_cvNonMedicReviveTime.IntValue;
 	else if (convar == g_cvMedpackHealthAmount)
 		g_iMedpackHealthAmount = g_cvMedpackHealthAmount.IntValue;
+	else if (convar == g_cvTacticalDeathMarkers)
+		g_bTacticalDeathMarkers = g_cvTacticalDeathMarkers.BoolValue;
+	else if (convar == g_cvTacticalMarkerType)
+		g_iTacticalMarkerType = g_cvTacticalMarkerType.IntValue;
+	else if (convar == g_cvTacticalMarkerFollowDuration)
+		g_fTacticalMarkerFollowDuration = g_cvTacticalMarkerFollowDuration.FloatValue;
 }
