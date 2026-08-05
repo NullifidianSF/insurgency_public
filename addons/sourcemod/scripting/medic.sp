@@ -375,6 +375,12 @@ float	g_fTourniquetMedicTime;
 ConVar	g_cvTourniquetNonMedicTime = null;
 float	g_fTourniquetNonMedicTime;
 
+ConVar	g_cvTourniquetInterruptGrace = null;
+float	g_fTourniquetInterruptGrace;
+
+ConVar	g_cvBleedoutPauseWhileTreated = null;
+bool	g_bBleedoutPauseWhileTreated;
+
 ConVar	g_cvBleedoutPuddleLifetime = null;
 float	g_fBleedoutPuddleLifetime;
 
@@ -488,9 +494,11 @@ bool	ga_bBleedingOut[MAXPLAYERS + 1];
 float	ga_fBleedoutEndsAt[MAXPLAYERS + 1];
 float	ga_fTourniquetRemaining[MAXPLAYERS + 1];
 float	ga_fLastTourniquetTick[MAXPLAYERS + 1];
+float	ga_fLastTourniquetApplyAt[MAXPLAYERS + 1];
 int		ga_iTourniquetHealerUserId[MAXPLAYERS + 1];
 bool	ga_bTourniquetHealerIsMedic[MAXPLAYERS + 1];
 float	ga_fBleedoutStartedAt[MAXPLAYERS + 1];
+float	ga_fLastBleedoutStateAt[MAXPLAYERS + 1];
 float	ga_fNextBleedParticleRefresh[MAXPLAYERS + 1];
 int		ga_iBleedParticleStance[MAXPLAYERS + 1] = {-1, ...};
 float	ga_fBleedParticleForwardOffset[MAXPLAYERS + 1];
@@ -579,7 +587,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & GPT/Codex",
 	description = "Adds the ability to revive with the Medic class and a health kit.",
-	version = "1.3.28",
+	version = "1.3.30",
 	url = ""
 };
 
@@ -1828,9 +1836,11 @@ static void ClearActiveBleedout(int client) {
 	ga_fBleedoutEndsAt[client] = 0.0;
 	ga_fTourniquetRemaining[client] = 0.0;
 	ga_fLastTourniquetTick[client] = 0.0;
+	ga_fLastTourniquetApplyAt[client] = 0.0;
 	ga_iTourniquetHealerUserId[client] = 0;
 	ga_bTourniquetHealerIsMedic[client] = false;
 	ga_fBleedoutStartedAt[client] = 0.0;
+	ga_fLastBleedoutStateAt[client] = 0.0;
 	ga_fNextBleedParticleRefresh[client] = 0.0;
 	ga_iBleedParticleStance[client] = -1;
 	ga_fBleedParticleForwardOffset[client] = 0.0;
@@ -1869,6 +1879,7 @@ static void StartBleedout(int client, int hitgroup, int damage, int attackerUser
 	ClearActiveBleedout(client);
 	ga_bBleedingOut[client] = true;
 	ga_fBleedoutStartedAt[client] = GetGameTime();
+	ga_fLastBleedoutStateAt[client] = ga_fBleedoutStartedAt[client];
 	ga_fBleedoutEndsAt[client] = ga_fBleedoutStartedAt[client] + g_fBleedoutTime;
 	ga_fNextBleedParticleRefresh[client] = ga_fBleedoutStartedAt[client] + BLEED_PARTICLE_REFRESH_TIME;
 	ga_iBleedParticleStance[client] = GetBleedParticleStance(client);
@@ -2020,21 +2031,40 @@ static void UpdateBleedoutStates(float now) {
 			continue;
 		}
 
+		if (ga_iTourniquetHealerUserId[client] != 0
+			&& now - ga_fLastTourniquetTick[client] > g_fTourniquetInterruptGrace)
+			ResetTourniquetTreatment(client);
+
+		float stateElapsed = now - ga_fLastBleedoutStateAt[client];
+		if (stateElapsed < 0.0)
+			stateElapsed = 0.0;
+		ga_fLastBleedoutStateAt[client] = now;
+
+		// Pause only while a helper is actually maintaining treatment. The wider
+		// interruption grace keeps progress intact but does not freeze bleedout.
+		bool bleedoutPaused = g_bBleedoutPauseWhileTreated
+			&& ga_iTourniquetHealerUserId[client] != 0
+			&& ga_fLastTourniquetApplyAt[client] > 0.0
+			&& now - ga_fLastTourniquetApplyAt[client] <= BLEEDOUT_TREAT_TICK * 1.5;
+		if (bleedoutPaused)
+			ga_fBleedoutEndsAt[client] += stateElapsed;
+
 		float remaining = ga_fBleedoutEndsAt[client] - now;
 		if (remaining <= 0.0) {
 			ExpireBleedout(client);
 			continue;
 		}
 
-		if (ga_iTourniquetHealerUserId[client] != 0
-			&& now - ga_fLastTourniquetTick[client] > BLEEDOUT_TREAT_TICK * 1.5)
-			ResetTourniquetTreatment(client);
-
 		KeepBleedParticleActive(client, now);
 		UpdateBleedMarkers(client);
 		UpdateBleedoutFade(client, now, remaining);
-		PrintCenterText(client, "ARTERIAL BLEEDING: %.1f seconds\nAny further damage will kill you\nTourniquet: %.1f seconds",
-			remaining, ga_fTourniquetRemaining[client]);
+		if (bleedoutPaused) {
+			PrintCenterText(client, "ARTERIAL BLEEDING: %.1f seconds\nBleedout paused while treated\nAny further damage will kill you\nTourniquet: %.1f seconds",
+				remaining, ga_fTourniquetRemaining[client]);
+		} else {
+			PrintCenterText(client, "ARTERIAL BLEEDING: %.1f seconds\nAny further damage will kill you\nTourniquet: %.1f seconds",
+				remaining, ga_fTourniquetRemaining[client]);
+		}
 	}
 }
 
@@ -2050,6 +2080,7 @@ static void ResetTourniquetTreatment(int client) {
 	ga_iTourniquetHealerUserId[client] = 0;
 	ga_bTourniquetHealerIsMedic[client] = false;
 	ga_fLastTourniquetTick[client] = 0.0;
+	ga_fLastTourniquetApplyAt[client] = 0.0;
 	ga_fTourniquetRemaining[client] = g_fTourniquetMedicTime;
 }
 
@@ -2065,7 +2096,7 @@ static TourniquetApplyResult ApplyTourniquetTick(int helper, int client, int act
 	int currentHealerUserId = ga_iTourniquetHealerUserId[client];
 	bool currentTreatmentActive = currentHealerUserId != 0
 		&& ga_fLastTourniquetTick[client] > 0.0
-		&& now - ga_fLastTourniquetTick[client] <= BLEEDOUT_TREAT_TICK * 1.5;
+		&& now - ga_fLastTourniquetTick[client] <= g_fTourniquetInterruptGrace;
 
 	if (currentTreatmentActive && currentHealerUserId != helperUserId) {
 		// A medic may take over a slower non-medic attempt. Otherwise the first
@@ -2081,6 +2112,7 @@ static TourniquetApplyResult ApplyTourniquetTick(int helper, int client, int act
 			? g_fTourniquetMedicTime
 			: g_fTourniquetNonMedicTime;
 		ga_fLastTourniquetTick[client] = now;
+		ga_fLastTourniquetApplyAt[client] = now;
 
 		if (!ga_bTourniquetPainPlayed[client]) {
 			ga_bTourniquetPainPlayed[client] = true;
@@ -2093,6 +2125,7 @@ static TourniquetApplyResult ApplyTourniquetTick(int helper, int client, int act
 		ga_bTourniquetPainPlayed[client] = true;
 		PlayTourniquetPainSound(client);
 	}
+	ga_fLastTourniquetApplyAt[client] = now;
 
 	float elapsed = now - ga_fLastTourniquetTick[client];
 	if (elapsed >= BLEEDOUT_TREAT_TICK * 0.5) {
@@ -4158,6 +4191,16 @@ void SetupConVars() {
 	g_fTourniquetNonMedicTime = g_cvTourniquetNonMedicTime.FloatValue;
 	g_cvTourniquetNonMedicTime.AddChangeHook(OnConVarChanged);
 
+	g_cvTourniquetInterruptGrace = CreateConVar("sm_tourniquet_interrupt_grace", "1.5",
+		"Seconds a tourniquet attempt can lose range or sight before its progress resets", _, true, 0.5, true, 10.0);
+	g_fTourniquetInterruptGrace = g_cvTourniquetInterruptGrace.FloatValue;
+	g_cvTourniquetInterruptGrace.AddChangeHook(OnConVarChanged);
+
+	g_cvBleedoutPauseWhileTreated = CreateConVar("sm_bleedout_pause_while_treated", "1",
+		"Pause the bleedout timer only while a valid tourniquet treatment is being maintained", _, true, 0.0, true, 1.0);
+	g_bBleedoutPauseWhileTreated = g_cvBleedoutPauseWhileTreated.BoolValue;
+	g_cvBleedoutPauseWhileTreated.AddChangeHook(OnConVarChanged);
+
 	g_cvBleedoutPuddleLifetime = CreateConVar("sm_bleedout_puddle_lifetime", "30.0",
 		"Seconds the blood_bleedout puddle remains after a non-fatal bleedout death", _, true, 1.0, true, 120.0);
 	g_fBleedoutPuddleLifetime = g_cvBleedoutPuddleLifetime.FloatValue;
@@ -4295,6 +4338,10 @@ void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue
 		g_fTourniquetMedicTime = g_cvTourniquetMedicTime.FloatValue;
 	else if (convar == g_cvTourniquetNonMedicTime)
 		g_fTourniquetNonMedicTime = g_cvTourniquetNonMedicTime.FloatValue;
+	else if (convar == g_cvTourniquetInterruptGrace)
+		g_fTourniquetInterruptGrace = g_cvTourniquetInterruptGrace.FloatValue;
+	else if (convar == g_cvBleedoutPauseWhileTreated)
+		g_bBleedoutPauseWhileTreated = g_cvBleedoutPauseWhileTreated.BoolValue;
 	else if (convar == g_cvBleedoutPuddleLifetime)
 		g_fBleedoutPuddleLifetime = g_cvBleedoutPuddleLifetime.FloatValue;
 	else if (convar == g_cvBleedoutFadeEnabled)
