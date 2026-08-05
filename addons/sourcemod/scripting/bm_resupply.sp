@@ -4,7 +4,7 @@
 #pragma semicolon 1
 #pragma newdecls required
 
-#define PLUGIN_VERSION "1.0.0"
+#define PLUGIN_VERSION "1.0.1"
 #define GAMEDATA_FILE "insurgency-bm.games"
 
 Handle g_hResupply = null;
@@ -63,7 +63,7 @@ public void OnPluginStart()
 	}
 
 	RegAdminCmd("sm_resupply", Command_Resupply, ADMFLAG_BAN,
-		"sm_resupply <#userid|name> - rearm a living player without consuming normal resupply cooldown");
+		"sm_resupply <target> - rearm living players without consuming normal resupply cooldown");
 }
 
 public void OnPluginEnd()
@@ -75,33 +75,42 @@ public Action Command_Resupply(int client, int args)
 {
 	if (args != 1)
 	{
-		ReplyToCommand(client, "Usage: sm_resupply <#userid|name>");
+		ReplyToCommand(client, "Usage: sm_resupply <target>  (@all and @humans supported)");
 		return Plugin_Handled;
 	}
 
 	char targetArgument[MAX_TARGET_LENGTH];
 	GetCmdArg(1, targetArgument, sizeof(targetArgument));
-	int target = FindTarget(client, targetArgument, true, true);
-	if (target <= 0)
+
+	int targets[MAXPLAYERS];
+	char targetName[MAX_TARGET_LENGTH];
+	bool targetNameIsML;
+	int targetCount = ProcessTargetString(targetArgument, client, targets, sizeof(targets),
+		COMMAND_FILTER_CONNECTED | COMMAND_FILTER_ALIVE,
+		targetName, sizeof(targetName), targetNameIsML);
+	if (targetCount <= 0)
 	{
+		ReplyToTargetError(client, targetCount);
 		return Plugin_Handled;
 	}
 
-	if (!IsClientInGame(target) || !IsPlayerAlive(target))
+	int resuppliedCount = 0;
+	for (int i = 0; i < targetCount; i++)
 	{
-		ReplyToCommand(client, "Target must be a living player.");
-		return Plugin_Handled;
+		int target = targets[i];
+		if (!ResupplyPlayerPreservingCooldown(target))
+		{
+			LogError("Unable to resupply %N.", target);
+			continue;
+		}
+
+		resuppliedCount++;
+		PrintToChat(target, "\x04[Admin]\x01 You have been resupplied.");
+		LogAction(client, target, "resupplied \"%L\"", target);
 	}
 
-	if (!ResupplyPlayerPreservingCooldown(target))
-	{
-		ReplyToCommand(client, "Unable to resupply %N.", target);
-		return Plugin_Handled;
-	}
-
-	ReplyToCommand(client, "Resupplied %N.", target);
-	PrintToChat(target, "\x04[Admin]\x01 You have been resupplied.");
-	LogAction(client, target, "resupplied \"%L\"", target);
+	ReplyToCommand(client, "Resupplied %d of %d living target%s.",
+		resuppliedCount, targetCount, targetCount == 1 ? "" : "s");
 	return Plugin_Handled;
 }
 
