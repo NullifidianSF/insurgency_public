@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <clientprefs>
 
-#define PL_VERSION		"2.51"
+#define PL_VERSION		"2.61"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 
 #define MAXENTITIES		2048
@@ -46,7 +46,7 @@
 
 #define STARTBUILDPOINTS			3	// Free starting build points for all players
 
-#define PROP_ALPHA					125
+#define PROP_ALPHA					110
 #define PROP_PREVIEW_PLACEABLE_R	80
 #define PROP_PREVIEW_PLACEABLE_G	255
 #define PROP_PREVIEW_PLACEABLE_B	80
@@ -64,6 +64,12 @@
 #define PROP_LIMIT					10		// Prop limit per player
 #define PROP_PLAYER_DISTANCE		50.0
 #define PROP_PICKUP_DISTANCE		170.0
+#define PROP_SELECTION_RADIUS_DEFAULT	250.0
+#define PROP_SELECTION_MAX_DEFAULT		5
+#define PROP_SELECTION_R			70
+#define PROP_SELECTION_G			160
+#define PROP_SELECTION_B			255
+#define PROP_BATCH_DATA_SIZE		10
 
 #define BOT_BLEED_WIREDAMAGE		10.0	// Amount of bleed damage bot takes from a barbed wire
 
@@ -239,6 +245,7 @@ int		ga_iAmmoIconSpriteRef[MAXENTITIES + 1];
 int		ga_iLastInflictorPropId[MAXPLAYERS + 1] = {-1, ...};
 bool	ga_bHeldPreviewPosValid[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bPickupQueued[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bSelectionQueued[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bMattressJumpArmed[MAXPLAYERS + 1] = {false, ...};
 float	ga_fNextMattressHighlightUpdate[MAXPLAYERS + 1] = {0.0, ...};
 
@@ -250,6 +257,12 @@ ArrayList g_hAmmoCacheRefs = null;
 ArrayList g_hMattressRefs = null;
 ArrayList ga_hUsedAmmoCacheRefs[MAXPLAYERS + 1];
 ArrayList ga_hHighlightedMattressRefs[MAXPLAYERS + 1];
+ArrayList ga_hSelectedPropRefs[MAXPLAYERS + 1];
+ArrayList ga_hSelectableFlashRefs[MAXPLAYERS + 1];
+ArrayList ga_hBatchMoveData[MAXPLAYERS + 1];
+float ga_fBatchLeadAngles[MAXPLAYERS + 1][3];
+Handle ga_hSelectableFlashTimer[MAXPLAYERS + 1] = {INVALID_HANDLE, ...};
+float ga_fNextSelectableFlash[MAXPLAYERS + 1] = {0.0, ...};
 
 Handle	g_hDirectResupply = null;
 int		g_iLastResupplyTimeOffset = -1;
@@ -260,6 +273,10 @@ ConVar	g_cvAmmoResupplyRange = null;
 ConVar	g_cvAmmoAmount = null;
 ConVar	g_cvResupplyDelay = null;
 ConVar	g_cvAmmoOnce = null;
+ConVar	g_cvPropSelectionMax = null;
+ConVar	g_cvPropSelectionRadius = null;
+int		g_iPropSelectionMax = PROP_SELECTION_MAX_DEFAULT;
+float	g_fPropSelectionRadius = PROP_SELECTION_RADIUS_DEFAULT;
 
 public Plugin myinfo = {
 	name = "props",
@@ -394,6 +411,10 @@ public void OnMapStart() {
 	CreateTimer(1.0, Timer_AmmoResupply, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 
 	for (int client = 1; client <= MaxClients; client++) {
+		ClearPropSelections(client);
+		ClearSelectablePropFlash(client);
+		ga_fNextSelectableFlash[client] = 0.0;
+		ClearBatchMove(client);
 		ga_iResupplyCounter[client] = g_iResupplyDelay;
 
 		ArrayList usedAmmo = EnsureUsedAmmoCacheList(client);
@@ -416,7 +437,12 @@ public void OnClientPostAdminCheck(int client) {
 	ga_fLastPlaceTime[client]    = 0.0;
 	ga_bJustPlaced[client]       = false;
 	ga_bPickupQueued[client]     = false;
+	ga_bSelectionQueued[client]  = false;
 	ga_bHeldPreviewPosValid[client] = false;
+	ClearPropSelections(client);
+	ClearSelectablePropFlash(client);
+	ga_fNextSelectableFlash[client] = 0.0;
+	ClearBatchMove(client);
 
 	ga_fPropRotateStep[client]    = PROP_ROTATE_STEP;
 	LoadRotateStepCookie(client);
@@ -466,6 +492,7 @@ public void OnClientDisconnect(int client) {
 
 	ga_iLastButtons[client] = 0;
 	ga_bPickupQueued[client] = false;
+	ga_bSelectionQueued[client] = false;
 	ga_bHeldPreviewPosValid[client] = false;
 	ga_iLastInflictorPropId[client] = -1;
 
@@ -479,10 +506,26 @@ public void OnClientDisconnect(int client) {
 		return;
 
 	StopHolding(client);
+	ClearPropSelections(client);
+	ClearSelectablePropFlash(client);
+	ga_fNextSelectableFlash[client] = 0.0;
+	ClearBatchMove(client);
 
 	if (ga_hHighlightedMattressRefs[client] != null) {
 		delete ga_hHighlightedMattressRefs[client];
 		ga_hHighlightedMattressRefs[client] = null;
+	}
+	if (ga_hSelectedPropRefs[client] != null) {
+		delete ga_hSelectedPropRefs[client];
+		ga_hSelectedPropRefs[client] = null;
+	}
+	if (ga_hSelectableFlashRefs[client] != null) {
+		delete ga_hSelectableFlashRefs[client];
+		ga_hSelectableFlashRefs[client] = null;
+	}
+	if (ga_hBatchMoveData[client] != null) {
+		delete ga_hBatchMoveData[client];
+		ga_hBatchMoveData[client] = null;
 	}
 
 	ArrayList list = ga_hPropPlaced[client];
@@ -537,6 +580,11 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 		ga_fLastPlaceTime[i] = 0.0;
 		ga_bJustPlaced[i] = false;
 		ga_bMattressJumpArmed[i] = false;
+		ga_bSelectionQueued[i] = false;
+		ClearPropSelections(i);
+		ClearSelectablePropFlash(i);
+		ga_fNextSelectableFlash[i] = 0.0;
+		ClearBatchMove(i);
 		RestoreBuildPoints(i);
 	}
 
@@ -601,6 +649,9 @@ public Action Event_PlayerDeath_Pre(Event event, const char[] name, bool dontBro
 		return Plugin_Continue;
 	}
 
+	ClearPropSelections(victim);
+	ClearSelectablePropFlash(victim);
+	ga_fNextSelectableFlash[victim] = 0.0;
 	StopHolding(victim);
 	return Plugin_Continue;
 }
@@ -653,8 +704,8 @@ static bool CanPreviewPlaceProp(int client, const float vPos[3], const float vel
 	return true;
 }
 
-static void UpdateHeldPropPreviewColor(int client, int ent, const float vPos[3], const float vel[3]) {
-	if (CanPreviewPlaceProp(client, vPos, vel))
+static void UpdateHeldPropPreviewColor(int client, int ent, const float vPos[3], const float vAng[3], const float vel[3]) {
+	if (CanPreviewPlaceBatch(client, vPos, vAng, vel))
 		SetEntityRenderColor(ent, PROP_PREVIEW_PLACEABLE_R, PROP_PREVIEW_PLACEABLE_G, PROP_PREVIEW_PLACEABLE_B, PROP_ALPHA);
 	else
 		SetEntityRenderColor(ent, PROP_PREVIEW_BLOCKED_R, PROP_PREVIEW_BLOCKED_G, PROP_PREVIEW_BLOCKED_B, PROP_ALPHA);
@@ -670,12 +721,263 @@ static ArrayList EnsureHighlightedMattressList(int client) {
 	return ga_hHighlightedMattressRefs[client];
 }
 
+static ArrayList EnsureSelectedPropList(int client) {
+	if (client < 1 || client > MaxClients)
+		return null;
+
+	if (ga_hSelectedPropRefs[client] == null)
+		ga_hSelectedPropRefs[client] = new ArrayList();
+
+	return ga_hSelectedPropRefs[client];
+}
+
+static bool IsPropSelectedByAnyClient(int ent) {
+	if (!IsValidNonClientEntity(ent))
+		return false;
+
+	for (int client = 1; client <= MaxClients; client++) {
+		if (RefListContainsEntity(ga_hSelectedPropRefs[client], ent))
+			return true;
+	}
+	return false;
+}
+
 static void RestoreMattressRenderColor(int ent) {
 	if (!IsValidNonClientEntity(ent))
 		return;
 
+	if (IsPropSelectedByAnyClient(ent)) {
+		SetEntityRenderColor(ent, PROP_SELECTION_R, PROP_SELECTION_G, PROP_SELECTION_B, 255);
+		return;
+	}
+
 	SetEntityRenderColor(ent, 255, 255, 255, 255);
 	GlowLowHp(ent, GetEntProp(ent, Prop_Data, "m_iHealth"));
+}
+
+static void ClearPropSelections(int client) {
+	if (client < 1 || client > MaxClients)
+		return;
+
+	ArrayList list = ga_hSelectedPropRefs[client];
+	if (list == null)
+		return;
+
+	for (int i = list.Length - 1; i >= 0; i--) {
+		int ent = EntRefToEntIndex(list.Get(i));
+		list.Erase(i);
+		if (IsValidNonClientEntity(ent))
+			RestoreMattressRenderColor(ent);
+	}
+}
+
+static void ClearSelectablePropFlash(int client) {
+	if (client < 1 || client > MaxClients)
+		return;
+
+	if (ga_hSelectableFlashTimer[client] != INVALID_HANDLE) {
+		KillTimer(ga_hSelectableFlashTimer[client]);
+		ga_hSelectableFlashTimer[client] = INVALID_HANDLE;
+	}
+
+	ArrayList list = ga_hSelectableFlashRefs[client];
+	if (list == null)
+		return;
+
+	for (int i = list.Length - 1; i >= 0; i--) {
+		int ent = EntRefToEntIndex(list.Get(i));
+		if (IsValidNonClientEntity(ent))
+			RestoreMattressRenderColor(ent);
+	}
+	list.Clear();
+}
+
+static void FlashNearbySelectableProps(int client, int selectedProp, const float selectedPos[3]) {
+	float now = GetGameTime();
+	if (ga_fNextSelectableFlash[client] > now)
+		return;
+	ga_fNextSelectableFlash[client] = now + 0.75;
+
+	ClearSelectablePropFlash(client);
+	ArrayList props = ga_hPropPlaced[client];
+	if (props == null)
+		return;
+
+	if (ga_hSelectableFlashRefs[client] == null)
+		ga_hSelectableFlashRefs[client] = new ArrayList();
+
+	for (int i = 0; i < props.Length; i++) {
+		int ent = EntRefToEntIndex(props.Get(i));
+		if (!IsValidNonClientEntity(ent) || ent == selectedProp)
+			continue;
+		if (GetTrackedPropId(ent) == MID(Prop_AmmoCacheSmall))
+			continue;
+
+		float pos[3];
+		GetEntPropVector(ent, Prop_Send, "m_vecOrigin", pos);
+		if (GetVectorDistance(pos, selectedPos, true) > (g_fPropSelectionRadius * g_fPropSelectionRadius))
+			continue;
+
+		SetEntityRenderColor(ent, 100, 190, 255, 190);
+		AddUniqueEntityRef(ga_hSelectableFlashRefs[client], ent);
+	}
+
+	if (ga_hSelectableFlashRefs[client].Length > 0)
+		ga_hSelectableFlashTimer[client] = CreateTimer(0.55, Timer_RestoreSelectablePropFlash, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
+}
+
+public Action Timer_RestoreSelectablePropFlash(Handle timer, int userId) {
+	int client = GetClientOfUserId(userId);
+	if (client < 1 || client > MaxClients)
+		return Plugin_Stop;
+
+	ga_hSelectableFlashTimer[client] = INVALID_HANDLE;
+	ArrayList list = ga_hSelectableFlashRefs[client];
+	if (list == null)
+		return Plugin_Stop;
+
+	for (int i = list.Length - 1; i >= 0; i--) {
+		int ent = EntRefToEntIndex(list.Get(i));
+		if (IsValidNonClientEntity(ent))
+			RestoreMattressRenderColor(ent);
+	}
+	list.Clear();
+	return Plugin_Stop;
+}
+
+static void ClearBatchMove(int client, bool immediate = false) {
+	if (client < 1 || client > MaxClients)
+		return;
+
+	ArrayList batch = ga_hBatchMoveData[client];
+	if (batch != null) {
+		for (int i = batch.Length - 1; i >= 0; i--) {
+			int previewRef = batch.Get(i, 7);
+			if (immediate)
+				KillNowRef(previewRef);
+			else {
+				int preview = EntRefToEntIndex(previewRef);
+				if (IsValidNonClientEntity(preview))
+					SafeKillIdx(preview);
+			}
+		}
+		batch.Clear();
+	}
+}
+
+static int CreateBatchPreview(int modelId) {
+	if (modelId < 0 || modelId >= PROP_COUNT)
+		return INVALID_ENT_REFERENCE;
+
+	int preview = CreateEntityByName("prop_dynamic_override");
+	if (preview == -1)
+		return INVALID_ENT_REFERENCE;
+
+	DispatchKeyValue(preview, "solid", "0");
+	DispatchKeyValue(preview, "disableshadows", "1");
+	DispatchKeyValue(preview, "disableshadowdepth", "1");
+	DispatchKeyValue(preview, "model", g_PropDefs[modelId].model);
+	DispatchSpawn(preview);
+	SetEntityRenderMode(preview, RENDER_TRANSCOLOR);
+	SetEntityRenderColor(preview, 255, 255, 255, PROP_ALPHA);
+	SetEntityMoveType(preview, MOVETYPE_NONE);
+	return EntIndexToEntRef(preview);
+}
+
+static bool StartBatchMovePreviews(int client) {
+	ArrayList batch = ga_hBatchMoveData[client];
+	if (batch == null || batch.Length == 0)
+		return false;
+
+	for (int i = 0; i < batch.Length; i++) {
+		int previewRef = CreateBatchPreview(batch.Get(i, 8));
+		if (previewRef == INVALID_ENT_REFERENCE) {
+			ClearBatchMove(client);
+			return false;
+		}
+
+		batch.Set(i, previewRef, 7);
+	}
+
+	PrintCenterText(client, "Moving %d props", batch.Length + 1);
+	return true;
+}
+
+static void RemoveBatchSourceProps(int client, int leader) {
+	SafeKillIdx(leader);
+
+	ArrayList batch = ga_hBatchMoveData[client];
+	if (batch == null)
+		return;
+
+	for (int i = 0; i < batch.Length; i++)
+		SafeKillRef(batch.Get(i, 0));
+}
+
+static void TransformBatchOffset(int client, const float offset[3], const float leadPosition[3], const float leadAngles[3], float position[3]) {
+	float oldForward[3], oldRight[3], oldUp[3];
+	float newForward[3], newRight[3], newUp[3];
+	GetAngleVectors(ga_fBatchLeadAngles[client], oldForward, oldRight, oldUp);
+	GetAngleVectors(leadAngles, newForward, newRight, newUp);
+
+	float localForward = (offset[0] * oldForward[0]) + (offset[1] * oldForward[1]) + (offset[2] * oldForward[2]);
+	float localRight = (offset[0] * oldRight[0]) + (offset[1] * oldRight[1]) + (offset[2] * oldRight[2]);
+	float localUp = (offset[0] * oldUp[0]) + (offset[1] * oldUp[1]) + (offset[2] * oldUp[2]);
+
+	position[0] = leadPosition[0] + (newForward[0] * localForward) + (newRight[0] * localRight) + (newUp[0] * localUp);
+	position[1] = leadPosition[1] + (newForward[1] * localForward) + (newRight[1] * localRight) + (newUp[1] * localUp);
+	position[2] = leadPosition[2] + (newForward[2] * localForward) + (newRight[2] * localRight) + (newUp[2] * localUp);
+}
+
+static bool CanPreviewPlaceBatch(int client, const float leadPosition[3], const float leadAngles[3], const float vel[3]) {
+	if (!CanPreviewPlaceProp(client, leadPosition, vel))
+		return false;
+
+	ArrayList batch = ga_hBatchMoveData[client];
+	if (batch == null || batch.Length == 0)
+		return true;
+
+	for (int i = 0; i < batch.Length; i++) {
+		float offset[3], position[3];
+		offset[0] = view_as<float>(batch.Get(i, 1));
+		offset[1] = view_as<float>(batch.Get(i, 2));
+		offset[2] = view_as<float>(batch.Get(i, 3));
+		TransformBatchOffset(client, offset, leadPosition, leadAngles, position);
+
+		if (IsCollidingWithPlayer(client, position))
+			return false;
+	}
+
+	return true;
+}
+
+static void UpdateBatchMovePreviews(int client, const float leadPosition[3], const float leadAngles[3], const float vel[3]) {
+	ArrayList batch = ga_hBatchMoveData[client];
+	if (batch == null || batch.Length == 0)
+		return;
+
+	bool placeable = CanPreviewPlaceBatch(client, leadPosition, leadAngles, vel);
+
+	for (int i = 0; i < batch.Length; i++) {
+		int preview = EntRefToEntIndex(batch.Get(i, 7));
+		if (!IsValidNonClientEntity(preview))
+			continue;
+
+		float offset[3], angles[3], position[3];
+		offset[0] = view_as<float>(batch.Get(i, 1));
+		offset[1] = view_as<float>(batch.Get(i, 2));
+		offset[2] = view_as<float>(batch.Get(i, 3));
+		angles[0] = view_as<float>(batch.Get(i, 4)) + leadAngles[0] - ga_fBatchLeadAngles[client][0];
+		angles[1] = view_as<float>(batch.Get(i, 5)) + leadAngles[1] - ga_fBatchLeadAngles[client][1];
+		angles[2] = view_as<float>(batch.Get(i, 6)) + leadAngles[2] - ga_fBatchLeadAngles[client][2];
+		TransformBatchOffset(client, offset, leadPosition, leadAngles, position);
+
+		TeleportEntity(preview, position, angles, NULL_VECTOR);
+		if (placeable)
+			SetEntityRenderColor(preview, PROP_PREVIEW_PLACEABLE_R, PROP_PREVIEW_PLACEABLE_G, PROP_PREVIEW_PLACEABLE_B, PROP_ALPHA);
+		else
+			SetEntityRenderColor(preview, PROP_PREVIEW_BLOCKED_R, PROP_PREVIEW_BLOCKED_G, PROP_PREVIEW_BLOCKED_B, PROP_ALPHA);
+	}
 }
 
 static bool IsMattressHighlightedByAnyClient(int ent) {
@@ -758,7 +1060,8 @@ static void UpdateMattressStackHighlights(int client, const float origin[3]) {
 		if (!IsMattressInStackRange(origin, ent))
 			continue;
 
-		SetEntityRenderColor(ent, PROP_PREVIEW_PLACEABLE_R, PROP_PREVIEW_PLACEABLE_G, PROP_PREVIEW_PLACEABLE_B, 255);
+		if (!IsPropSelectedByAnyClient(ent))
+			SetEntityRenderColor(ent, PROP_PREVIEW_PLACEABLE_R, PROP_PREVIEW_PLACEABLE_G, PROP_PREVIEW_PLACEABLE_B, 255);
 		AddUniqueEntityRef(highlighted, ent);
 		contributorCount++;
 		if (contributorCount >= maxContributors)
@@ -796,8 +1099,10 @@ static void TouchLaggedMovementValue(int client) {
 	SetEntDataFloat(client, g_iOffLaggedMovementValue, cur, true);
 }
 
-void StopHolding(int client, bool now = false) {
+void StopHolding(int client, bool now = false, bool keepBatchMove = false) {
 	ClearMattressStackHighlights(client);
+	if (!keepBatchMove)
+		ClearBatchMove(client);
 	ga_bHeldPreviewPosValid[client] = false;
 	ga_bPickupQueued[client] = false;
 
@@ -841,6 +1146,9 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 		return Plugin_Continue;
 	}
 
+	if ((pressed & BTN_USE) && ga_iPropHolding[client] == INVALID_ENT_REFERENCE)
+		QueuePropSelectionToggle(client);
+
 	int ent = EntRefToEntIndex(ga_iPropHolding[client]);
 	if (ent <= MaxClients || !IsValidEntity(ent)) {
 		ga_iPropHolding[client] = INVALID_ENT_REFERENCE;
@@ -869,10 +1177,176 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 		ga_bHeldPreviewPosValid[client] = true;
 	}
 
-	UpdateHeldPropPreviewColor(client, ent, vPos, vel);
+	float heldAngles[3];
+	GetEntPropVector(ent, Prop_Send, "m_angRotation", heldAngles);
+	UpdateHeldPropPreviewColor(client, ent, vPos, heldAngles, vel);
+	UpdateBatchMovePreviews(client, vPos, heldAngles, vel);
 	UpdateMattressStackHighlights(client, vPos);
 
 	return Plugin_Continue;
+}
+
+static void QueuePropSelectionToggle(int client) {
+	if (ga_bSelectionQueued[client])
+		return;
+
+	int target = GetClientAimTarget(client, false);
+	if (!IsValidNonClientEntity(target))
+		return;
+
+	DataPack pack = new DataPack();
+	pack.WriteCell(GetClientUserId(client));
+	pack.WriteCell(EntIndexToEntRef(target));
+	ga_bSelectionQueued[client] = true;
+	RequestFrame(NF_DeferredPropSelectionToggle, pack);
+}
+
+static void NF_DeferredPropSelectionToggle(any data) {
+	DataPack pack = view_as<DataPack>(data);
+	pack.Reset();
+
+	int client = GetClientOfUserId(pack.ReadCell());
+	int targetRef = pack.ReadCell();
+	delete pack;
+
+	if (client < 1 || client > MaxClients)
+		return;
+
+	ga_bSelectionQueued[client] = false;
+	if (!IsClientInGame(client) || !IsPlayerAlive(client) || IsFakeClient(client)
+		|| !ga_bHoldingMeleeWeapon[client] || ga_iPropHolding[client] != INVALID_ENT_REFERENCE)
+		return;
+
+	int target = EntRefToEntIndex(targetRef);
+	if (!IsValidNonClientEntity(target) || GetTrackedPropId(target) < 0
+		|| GetTrackedPropId(target) == MID(Prop_AmmoCacheSmall))
+		return;
+
+	if (GetPropOwner(target) != client) {
+		PrintCenterText(client, "You can only select your own props.");
+		return;
+	}
+
+	float eye[3], targetPos[3];
+	GetClientEyePosition(client, eye);
+	GetEntPropVector(target, Prop_Send, "m_vecOrigin", targetPos);
+	if (GetVectorDistance(eye, targetPos, true) > (PROP_PICKUP_DISTANCE * PROP_PICKUP_DISTANCE)) {
+		PrintCenterText(client, "Too far away to select that prop.");
+		return;
+	}
+
+	ArrayList selected = EnsureSelectedPropList(client);
+	if (selected == null)
+		return;
+
+	if (RefListContainsEntity(selected, target)) {
+		RemoveEntityRef(selected, target);
+		RestoreMattressRenderColor(target);
+		PrintCenterText(client, "Prop unselected. Selected: %d/%d", selected.Length, g_iPropSelectionMax);
+		return;
+	}
+
+	if (selected.Length >= g_iPropSelectionMax) {
+		PrintCenterText(client, "You can select up to %d props.", g_iPropSelectionMax);
+		return;
+	}
+
+	if (selected.Length > 0) {
+		int anchor = EntRefToEntIndex(selected.Get(0));
+		if (!IsValidNonClientEntity(anchor)) {
+			selected.Erase(0);
+		} else {
+			float anchorPos[3];
+			GetEntPropVector(anchor, Prop_Send, "m_vecOrigin", anchorPos);
+			if (GetVectorDistance(anchorPos, targetPos, true) > (g_fPropSelectionRadius * g_fPropSelectionRadius)) {
+				PrintCenterText(client, "Selected props must be within %.0f units of the first prop.", g_fPropSelectionRadius);
+				return;
+			}
+		}
+	}
+
+	AddUniqueEntityRef(selected, target);
+	SetEntityRenderColor(target, PROP_SELECTION_R, PROP_SELECTION_G, PROP_SELECTION_B, 255);
+	if (selected.Length == 1)
+		FlashNearbySelectableProps(client, target, targetPos);
+	PrintCenterText(client, "Prop selected. Selected: %d/%d", selected.Length, g_iPropSelectionMax);
+}
+
+static bool PrepareBatchMove(int client, int leader) {
+	ClearBatchMove(client);
+
+	ArrayList selected = ga_hSelectedPropRefs[client];
+	if (selected == null || selected.Length < 2 || !RefListContainsEntity(selected, leader))
+		return false;
+
+	float leadOrigin[3];
+	GetEntPropVector(leader, Prop_Send, "m_vecOrigin", leadOrigin);
+	GetEntPropVector(leader, Prop_Send, "m_angRotation", ga_fBatchLeadAngles[client]);
+	if (ga_hBatchMoveData[client] == null)
+		ga_hBatchMoveData[client] = new ArrayList(PROP_BATCH_DATA_SIZE);
+	for (int i = selected.Length - 1; i >= 0; i--) {
+		int ent = EntRefToEntIndex(selected.Get(i));
+		if (!IsValidNonClientEntity(ent) || GetPropOwner(ent) != client) {
+			selected.Erase(i);
+			continue;
+		}
+		if (ent == leader)
+			continue;
+
+		float origin[3], angles[3];
+		GetEntPropVector(ent, Prop_Send, "m_vecOrigin", origin);
+		GetEntPropVector(ent, Prop_Send, "m_angRotation", angles);
+		int modelId = GetTrackedPropId(ent);
+		int health = GetEntProp(ent, Prop_Data, "m_iHealth");
+
+		int data[PROP_BATCH_DATA_SIZE];
+		data[0] = EntIndexToEntRef(ent);
+		data[1] = view_as<int>(origin[0] - leadOrigin[0]);
+		data[2] = view_as<int>(origin[1] - leadOrigin[1]);
+		data[3] = view_as<int>(origin[2] - leadOrigin[2]);
+		data[4] = view_as<int>(angles[0]);
+		data[5] = view_as<int>(angles[1]);
+		data[6] = view_as<int>(angles[2]);
+		data[7] = INVALID_ENT_REFERENCE;
+		data[8] = modelId;
+		data[9] = health;
+		ga_hBatchMoveData[client].PushArray(data, sizeof(data));
+	}
+
+	return ga_hBatchMoveData[client].Length > 0;
+}
+
+static void FinishBatchMove(int client, const float leadPosition[3], const float leadAngles[3]) {
+	ArrayList batch = ga_hBatchMoveData[client];
+	if (batch == null || batch.Length == 0)
+		return;
+
+	PropId previousModel = ga_iModelIndex[client];
+	int previousOwner = ga_iPropOwner[client];
+
+	for (int i = 0; i < batch.Length; i++) {
+		int modelId = batch.Get(i, 8);
+		if (modelId < 0 || modelId >= PROP_COUNT)
+			continue;
+
+		float offset[3], angles[3], position[3];
+		offset[0] = view_as<float>(batch.Get(i, 1));
+		offset[1] = view_as<float>(batch.Get(i, 2));
+		offset[2] = view_as<float>(batch.Get(i, 3));
+		angles[0] = view_as<float>(batch.Get(i, 4)) + leadAngles[0] - ga_fBatchLeadAngles[client][0];
+		angles[1] = view_as<float>(batch.Get(i, 5)) + leadAngles[1] - ga_fBatchLeadAngles[client][1];
+		angles[2] = view_as<float>(batch.Get(i, 6)) + leadAngles[2] - ga_fBatchLeadAngles[client][2];
+		TransformBatchOffset(client, offset, leadPosition, leadAngles, position);
+
+		int health = batch.Get(i, 9);
+		ga_iModelIndex[client] = view_as<PropId>(modelId);
+		ga_iPropOwner[client] = client;
+		CreateProp(client, position, angles, health, true);
+	}
+
+	ga_iModelIndex[client] = previousModel;
+	ga_iPropOwner[client] = previousOwner;
+	ClearBatchMove(client);
 }
 
 static void QueueExistingPropPickup(int client, int target) {
@@ -932,18 +1406,33 @@ static void NF_DeferredPickupExistingProp(any data) {
 
 	PropId previousModel = ga_iModelIndex[client];
 	int previousOwner = ga_iPropOwner[client];
+	bool movingBatch = PrepareBatchMove(client, target);
 
 	ga_iModelIndex[client] = view_as<PropId>(modelId);
 	ga_iPropOwner[client] = propOwner;
-	CreateProp(client, vPos, vAng, health);
-
-	if (ga_iPropHolding[client] == INVALID_ENT_REFERENCE) {
+	if (!CreateProp(client, vPos, vAng, health)) {
+		ClearBatchMove(client);
 		ga_iModelIndex[client] = previousModel;
 		ga_iPropOwner[client] = previousOwner;
 		return;
 	}
 
-	SafeKillIdx(target);
+	if (ga_iPropHolding[client] == INVALID_ENT_REFERENCE) {
+		ClearBatchMove(client);
+		ga_iModelIndex[client] = previousModel;
+		ga_iPropOwner[client] = previousOwner;
+		return;
+	}
+
+	ClearPropSelections(client);
+	if (movingBatch)
+		movingBatch = StartBatchMovePreviews(client);
+	if (!movingBatch) {
+		ClearBatchMove(client);
+		SafeKillIdx(target);
+	}
+	else
+		RemoveBatchSourceProps(client, target);
 }
 
 static bool IsPlayerGroundedOnMattress(int client) {
@@ -1109,8 +1598,10 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			GetClientEyePosition(client, vPos);
 			GetPositionInFront(vPos, vAng, PROP_HOLD_DISTANCE);
 
-			if (IsCollidingWithPlayer(client, vPos)) {
-				PrintCenterText(client, "Too close to another player.");
+			float heldAngles[3];
+			GetEntPropVector(ent, Prop_Send, "m_angRotation", heldAngles);
+			if (!CanPreviewPlaceBatch(client, vPos, heldAngles, vel)) {
+				PrintCenterText(client, "The prop group is too close to another player.");
 				EndPlaceLock(client);
 				return;
 			}
@@ -1123,8 +1614,13 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			GetEntPropVector(ent, Prop_Send, "m_angRotation", vAng);
 
 			int health = GetEntProp(ent, Prop_Data, "m_iHealth");
-			StopHolding(client);
-			CreateProp(client, vPos, vAng, health, true);
+			bool movingBatch = ga_hBatchMoveData[client] != null && ga_hBatchMoveData[client].Length > 0;
+			StopHolding(client, false, movingBatch);
+			bool placed = CreateProp(client, vPos, vAng, health, true);
+			if (placed && movingBatch)
+				FinishBatchMove(client, vPos, vAng);
+			else
+				ClearBatchMove(client);
 
 			EndPlaceLock(client);
 
@@ -1393,10 +1889,10 @@ static void UpdateClientWeaponState(int client, int entity = -1) {
 	ga_bHoldingMeleeWeapon[client] = (entity > 0 && GetPlayerWeaponSlot(client, 2) == entity);
 }
 
-void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, bool solid = false) {
+bool CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, bool solid = false) {
 	if (!IsPlayerOnGround(client)) {
 		PrintCenterText(client, "You cannot build a prop while falling!");
-		return;
+		return false;
 	}
 
 	bool bMovingExisting = (ga_iPropOwner[client] > 0);
@@ -1408,21 +1904,21 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 	if (!ga_iPropOwner[client] && !HasEnoughResources(client, buildCost)) {
 		if (solid) {
 			PrintCenterText(client, "You don't have enough resources to build. Press 'Cycle Firemode' to open the shop menu.");
-			return;
+			return false;
 		} else if (SetModelIndex(client)) {
 			modelId = ga_iModelIndex[client];
 			mid = MID(modelId);
 			buildCost = g_PropDefs[mid].cost;
 		} else {
 			PrintCenterText(client, "You don't have enough resources to build. Press 'Cycle Firemode' to open the shop menu.");
-			return;
+			return false;
 		}
 	}
 
 	int prop = CreateEntityByName("prop_dynamic_override");
 	if (prop == -1) {
 		PrintCenterText(client, "Failed to create prop.");
-		return;
+		return false;
 	}
 
 	bool bDoAmmoGlowAndIcon = false;
@@ -1442,7 +1938,7 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 				if (!HasEnoughResources(client, buildCostActual)) {
 					PrintCenterText(client, "Not enough resources.");
 					SafeKillIdx(prop);
-					return;
+					return false;
 				}
 				ga_iPlayerBuildPoints[client] -= buildCostActual;
 			}
@@ -1632,6 +2128,8 @@ void CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 	// A moved prop is recreated internally, so only log genuinely new builds.
 	if (solid && !bMovingExisting)
 		LogPropBuild(client, modelId);
+
+	return true;
 }
 
 static void LogPropBuild(int client, PropId modelId) {
@@ -2148,6 +2646,8 @@ public Action Panel_HelpInfo(int client) {
 	DrawPanelText(panel, sPropLimit);
 	DrawPanelText(panel, " ");
 	DrawPanelText(panel, "Aim = To place/move prop");
+	DrawPanelText(panel, "Use on your prop = Select it (blue)");
+	DrawPanelText(panel, "Move a selected prop = Move the group");
 	DrawPanelText(panel, "Bipod = Build menu");
 	DrawPanelText(panel, "Cycle Firemode = Shop menu");
 	DrawPanelText(panel, " ");
@@ -2336,6 +2836,7 @@ public Action Hook_WeaponSwitch(int client, int entity) {
 	}
 	else {
 		ga_bHoldingMeleeWeapon[client] = false;
+		ClearPropSelections(client);
 		StopHolding(client);
 	}
 	return Plugin_Continue;
@@ -2914,10 +3415,14 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 		}
 		PrintCenterText(client, "Rotation: Yaw: %.1f°, Pitch: %.1f°, Roll: %.1f°\nHealth: %d/%d", vRot[1], vRot[0], vRot[2], hp, maxHealth);
 
-		int mid = MID(ga_iModelIndex[client]);
-		ga_fPropRotations[client][mid][0] = vRot[0];
-		ga_fPropRotations[client][mid][1] = vRot[1];
-		ga_fPropRotations[client][mid][2] = vRot[2];
+		// A mass move rotates the current group only. Do not make its lead prop
+		// change the saved default rotation for later single prop builds.
+		if (ga_hBatchMoveData[client] == null || ga_hBatchMoveData[client].Length == 0) {
+			int mid = MID(ga_iModelIndex[client]);
+			ga_fPropRotations[client][mid][0] = vRot[0];
+			ga_fPropRotations[client][mid][1] = vRot[1];
+			ga_fPropRotations[client][mid][2] = vRot[2];
+		}
 
 		OpenRotationMenu(client);
 	}
@@ -3110,6 +3615,21 @@ public void OnMapEnd() {
 			delete ga_hHighlightedMattressRefs[i];
 			ga_hHighlightedMattressRefs[i] = null;
 		}
+		if (ga_hSelectedPropRefs[i] != null) {
+			ClearPropSelections(i);
+			delete ga_hSelectedPropRefs[i];
+			ga_hSelectedPropRefs[i] = null;
+		}
+		ClearSelectablePropFlash(i);
+		ga_fNextSelectableFlash[i] = 0.0;
+		if (ga_hSelectableFlashRefs[i] != null) {
+			delete ga_hSelectableFlashRefs[i];
+			ga_hSelectableFlashRefs[i] = null;
+		}
+		if (ga_hBatchMoveData[i] != null) {
+			delete ga_hBatchMoveData[i];
+			ga_hBatchMoveData[i] = null;
+		}
 	}
 	if (g_hAmmoCacheRefs != null) {
 		delete g_hAmmoCacheRefs;
@@ -3126,6 +3646,11 @@ public void OnPluginEnd() {
 	for (int i = 1; i <= MaxClients; i++) {
 		if (!IsClientInGame(i) || IsFakeClient(i))
 			continue;
+
+		// Deferred entity cleanup will not run after a plugin reload.
+		KillNowRef(ga_iPropHolding[i]);
+		ga_iPropHolding[i] = INVALID_ENT_REFERENCE;
+		ClearBatchMove(i, true);
 
 		RefundAllSupply(i, true, true);
 
@@ -3151,6 +3676,11 @@ public void OnPluginEnd() {
 			ClearMattressStackHighlights(i);
 			delete ga_hHighlightedMattressRefs[i];
 			ga_hHighlightedMattressRefs[i] = null;
+		}
+		ClearSelectablePropFlash(i);
+		if (ga_hSelectableFlashRefs[i] != null) {
+			delete ga_hSelectableFlashRefs[i];
+			ga_hSelectableFlashRefs[i] = null;
 		}
 	}
 	if (g_hAmmoCacheRefs != null) {
@@ -3190,6 +3720,16 @@ void SetupConVars() {
 		"If 1, players may only resupply once per ammo cache");
 	g_bAmmoOnce = g_cvAmmoOnce.BoolValue;
 	g_cvAmmoOnce.AddChangeHook(OnConVarChanged);
+
+	g_cvPropSelectionMax = CreateConVar("sm_props_selection_max", "5",
+		"Maximum number of owned props a player can move as one group", _, true, 1.0, true, float(PROP_LIMIT));
+	g_iPropSelectionMax = g_cvPropSelectionMax.IntValue;
+	g_cvPropSelectionMax.AddChangeHook(OnConVarChanged);
+
+	g_cvPropSelectionRadius = CreateConVar("sm_props_selection_radius", "250",
+		"Maximum distance between the first selected prop and other selected props", _, true, 50.0, true, 1000.0);
+	g_fPropSelectionRadius = g_cvPropSelectionRadius.FloatValue;
+	g_cvPropSelectionRadius.AddChangeHook(OnConVarChanged);
 }
 
 public void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
@@ -3205,6 +3745,10 @@ public void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] n
 		g_iResupplyDelay = g_cvResupplyDelay.IntValue;
 	else if (convar == g_cvAmmoOnce)
 		g_bAmmoOnce = g_cvAmmoOnce.BoolValue;
+	else if (convar == g_cvPropSelectionMax)
+		g_iPropSelectionMax = g_cvPropSelectionMax.IntValue;
+	else if (convar == g_cvPropSelectionRadius)
+		g_fPropSelectionRadius = g_cvPropSelectionRadius.FloatValue;
 }
 
 void SetupDirectResupply() {
