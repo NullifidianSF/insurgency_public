@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <clientprefs>
 
-#define PL_VERSION		"2.61"
+#define PL_VERSION		"2.63"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 
 #define MAXENTITIES		2048
@@ -1316,6 +1316,34 @@ static bool PrepareBatchMove(int client, int leader) {
 	return ga_hBatchMoveData[client].Length > 0;
 }
 
+static bool IsOtherPlayerStandingOnProp(int mover, int prop) {
+	for (int client = 1; client <= MaxClients; client++) {
+		if (client == mover || !IsClientInGame(client) || IsFakeClient(client) || !IsPlayerAlive(client))
+			continue;
+		if (GetEntPropEnt(client, Prop_Send, "m_hGroundEntity") == prop)
+			return true;
+	}
+
+	return false;
+}
+
+static bool IsOtherPlayerStandingOnBatch(int mover, int leader) {
+	if (IsOtherPlayerStandingOnProp(mover, leader))
+		return true;
+
+	ArrayList batch = ga_hBatchMoveData[mover];
+	if (batch == null)
+		return false;
+
+	for (int i = 0; i < batch.Length; i++) {
+		int prop = EntRefToEntIndex(batch.Get(i, 0));
+		if (IsValidNonClientEntity(prop) && IsOtherPlayerStandingOnProp(mover, prop))
+			return true;
+	}
+
+	return false;
+}
+
 static void FinishBatchMove(int client, const float leadPosition[3], const float leadAngles[3]) {
 	ArrayList batch = ga_hBatchMoveData[client];
 	if (batch == null || batch.Length == 0)
@@ -1407,6 +1435,11 @@ static void NF_DeferredPickupExistingProp(any data) {
 	PropId previousModel = ga_iModelIndex[client];
 	int previousOwner = ga_iPropOwner[client];
 	bool movingBatch = PrepareBatchMove(client, target);
+	if (movingBatch && IsOtherPlayerStandingOnBatch(client, target)) {
+		ClearBatchMove(client);
+		PrintCenterText(client, "You cannot move the group while a player is standing on it.");
+		return;
+	}
 
 	ga_iModelIndex[client] = view_as<PropId>(modelId);
 	ga_iPropOwner[client] = propOwner;
