@@ -5,8 +5,9 @@
 #include <sdktools>
 #include <sdkhooks>
 #include <clientprefs>
+#include <dbi>
 
-#define PL_VERSION		"2.63"
+#define PL_VERSION		"2.68"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 
 #define MAXENTITIES		2048
@@ -70,6 +71,16 @@
 #define PROP_SELECTION_G			160
 #define PROP_SELECTION_B			255
 #define PROP_BATCH_DATA_SIZE		10
+
+#define BLUEPRINT_SLOT_COUNT		5
+#define BLUEPRINT_MIN_PROPS		2
+#define BLUEPRINT_MAX_PROPS		PROP_SELECTION_MAX_DEFAULT
+#define BLUEPRINT_NAME_MAX_CHARS	32
+#define BLUEPRINT_NAME_LENGTH		(BLUEPRINT_NAME_MAX_CHARS * 4 + 1)
+#define BLUEPRINT_RECORD_LENGTH	512
+#define BLUEPRINT_LAYOUT_LENGTH	(BLUEPRINT_RECORD_LENGTH * BLUEPRINT_MAX_PROPS)
+#define BLUEPRINT_SAVE_COOLDOWN	1.5
+#define BLUEPRINT_LOAD_COOLDOWN	0.5
 
 #define BOT_BLEED_WIREDAMAGE		10.0	// Amount of bleed damage bot takes from a barbed wire
 
@@ -264,6 +275,21 @@ float ga_fBatchLeadAngles[MAXPLAYERS + 1][3];
 Handle ga_hSelectableFlashTimer[MAXPLAYERS + 1] = {INVALID_HANDLE, ...};
 float ga_fNextSelectableFlash[MAXPLAYERS + 1] = {0.0, ...};
 
+Database g_hBlueprintDb = null;
+ArrayList ga_hBlueprintProps[MAXPLAYERS + 1][BLUEPRINT_SLOT_COUNT];
+char ga_sBlueprintName[MAXPLAYERS + 1][BLUEPRINT_SLOT_COUNT][BLUEPRINT_NAME_LENGTH];
+bool ga_bBlueprintsLoaded[MAXPLAYERS + 1] = {false, ...};
+bool ga_bBlueprintsLoading[MAXPLAYERS + 1] = {false, ...};
+ArrayList ga_hPendingBlueprintProps[MAXPLAYERS + 1];
+int ga_iPendingBlueprintSlot[MAXPLAYERS + 1] = {-1, ...};
+Handle ga_hPendingBlueprintNameTimer[MAXPLAYERS + 1] = {INVALID_HANDLE, ...};
+float ga_fNextBlueprintSave[MAXPLAYERS + 1] = {0.0, ...};
+float ga_fNextBlueprintLoad[MAXPLAYERS + 1] = {0.0, ...};
+
+bool ga_bHoldingBlueprint[MAXPLAYERS + 1] = {false, ...};
+ArrayList ga_hBlueprintHoldData[MAXPLAYERS + 1];
+float ga_fBlueprintLeadAngles[MAXPLAYERS + 1][3];
+
 Handle	g_hDirectResupply = null;
 int		g_iLastResupplyTimeOffset = -1;
 int		g_iResupplyPenaltyTimeOffset = -1;
@@ -302,6 +328,7 @@ public void OnPluginStart() {
 
 	SetupConVars();
 	SetupDirectResupply();
+	SetupBlueprintDatabase();
 
 	if (g_hAmmoCacheRefs == null)
 		g_hAmmoCacheRefs = new ArrayList();
@@ -326,6 +353,8 @@ public void OnPluginStart() {
 	HookEvent("controlpoint_captured", Event_ObjectiveDone, EventHookMode_PostNoCopy);
 
 	RegConsoleCmd("prophelp",           cmd_prophelp, "Open help menu.");
+	AddCommandListener(Command_BlueprintNameSay, "say");
+	AddCommandListener(Command_BlueprintNameSay, "say_team");
 
 	if (g_bLateLoad) {
 		for (int i = 1; i <= MaxClients; i++) {
@@ -366,6 +395,7 @@ public void OnPluginStart() {
 			SDKHook(i, SDKHook_WeaponSwitchPost, Hook_WeaponSwitch);
 			UpdateClientWeaponState(i);
 			SetModelIndex(i);
+			LoadClientBlueprints(i);
 		}
 
 		EnsureTipTimer();
@@ -443,6 +473,7 @@ public void OnClientPostAdminCheck(int client) {
 	ClearSelectablePropFlash(client);
 	ga_fNextSelectableFlash[client] = 0.0;
 	ClearBatchMove(client);
+	ClearClientBlueprints(client);
 
 	ga_fPropRotateStep[client]    = PROP_ROTATE_STEP;
 	LoadRotateStepCookie(client);
@@ -475,6 +506,7 @@ public void OnClientPostAdminCheck(int client) {
 		ga_bBipodForced[client] = false;
 		ga_bFirstTimeJoinedSquad[client] = true;
 		UpdateClientWeaponState(client);
+		LoadClientBlueprints(client);
 	}
 	else SDKHook(client, SDKHook_OnTakeDamage, BotOnTakeDamage);
 }
@@ -510,6 +542,7 @@ public void OnClientDisconnect(int client) {
 	ClearSelectablePropFlash(client);
 	ga_fNextSelectableFlash[client] = 0.0;
 	ClearBatchMove(client);
+	ClearClientBlueprints(client);
 
 	if (ga_hHighlightedMattressRefs[client] != null) {
 		delete ga_hHighlightedMattressRefs[client];
@@ -573,7 +606,7 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 		if (!IsClientInGame(i) || IsFakeClient(i))
 			continue;
 
-		ga_iPropHolding[i] = INVALID_ENT_REFERENCE;
+		StopHolding(i);
 		ga_iPropOwner[i] = 0;
 		ga_bPlayerRefund[i] = false;
 		ga_bPlacingNow[i] = false;
@@ -865,6 +898,24 @@ static void ClearBatchMove(int client, bool immediate = false) {
 	}
 }
 
+static void ClearBlueprintHold(int client, bool immediate = false) {
+	if (client < 1 || client > MaxClients)
+		return;
+
+	ArrayList list = ga_hBlueprintHoldData[client];
+	if (list != null) {
+		for (int i = list.Length - 1; i >= 0; i--) {
+			int previewRef = list.Get(i, 7);
+			if (immediate)
+				KillNowRef(previewRef);
+			else
+				SafeKillRef(previewRef);
+		}
+		list.Clear();
+	}
+	ga_bHoldingBlueprint[client] = false;
+}
+
 static int CreateBatchPreview(int modelId) {
 	if (modelId < 0 || modelId >= PROP_COUNT)
 		return INVALID_ENT_REFERENCE;
@@ -917,7 +968,10 @@ static void RemoveBatchSourceProps(int client, int leader) {
 static void TransformBatchOffset(int client, const float offset[3], const float leadPosition[3], const float leadAngles[3], float position[3]) {
 	float oldForward[3], oldRight[3], oldUp[3];
 	float newForward[3], newRight[3], newUp[3];
-	GetAngleVectors(ga_fBatchLeadAngles[client], oldForward, oldRight, oldUp);
+	if (ga_bHoldingBlueprint[client])
+		GetAngleVectors(ga_fBlueprintLeadAngles[client], oldForward, oldRight, oldUp);
+	else
+		GetAngleVectors(ga_fBatchLeadAngles[client], oldForward, oldRight, oldUp);
 	GetAngleVectors(leadAngles, newForward, newRight, newUp);
 
 	float localForward = (offset[0] * oldForward[0]) + (offset[1] * oldForward[1]) + (offset[2] * oldForward[2]);
@@ -933,7 +987,7 @@ static bool CanPreviewPlaceBatch(int client, const float leadPosition[3], const 
 	if (!CanPreviewPlaceProp(client, leadPosition, vel))
 		return false;
 
-	ArrayList batch = ga_hBatchMoveData[client];
+	ArrayList batch = ga_bHoldingBlueprint[client] ? ga_hBlueprintHoldData[client] : ga_hBatchMoveData[client];
 	if (batch == null || batch.Length == 0)
 		return true;
 
@@ -952,7 +1006,7 @@ static bool CanPreviewPlaceBatch(int client, const float leadPosition[3], const 
 }
 
 static void UpdateBatchMovePreviews(int client, const float leadPosition[3], const float leadAngles[3], const float vel[3]) {
-	ArrayList batch = ga_hBatchMoveData[client];
+	ArrayList batch = ga_bHoldingBlueprint[client] ? ga_hBlueprintHoldData[client] : ga_hBatchMoveData[client];
 	if (batch == null || batch.Length == 0)
 		return;
 
@@ -967,9 +1021,19 @@ static void UpdateBatchMovePreviews(int client, const float leadPosition[3], con
 		offset[0] = view_as<float>(batch.Get(i, 1));
 		offset[1] = view_as<float>(batch.Get(i, 2));
 		offset[2] = view_as<float>(batch.Get(i, 3));
-		angles[0] = view_as<float>(batch.Get(i, 4)) + leadAngles[0] - ga_fBatchLeadAngles[client][0];
-		angles[1] = view_as<float>(batch.Get(i, 5)) + leadAngles[1] - ga_fBatchLeadAngles[client][1];
-		angles[2] = view_as<float>(batch.Get(i, 6)) + leadAngles[2] - ga_fBatchLeadAngles[client][2];
+		float baseAngles[3];
+		if (ga_bHoldingBlueprint[client]) {
+			baseAngles[0] = ga_fBlueprintLeadAngles[client][0];
+			baseAngles[1] = ga_fBlueprintLeadAngles[client][1];
+			baseAngles[2] = ga_fBlueprintLeadAngles[client][2];
+		} else {
+			baseAngles[0] = ga_fBatchLeadAngles[client][0];
+			baseAngles[1] = ga_fBatchLeadAngles[client][1];
+			baseAngles[2] = ga_fBatchLeadAngles[client][2];
+		}
+		angles[0] = view_as<float>(batch.Get(i, 4)) + leadAngles[0] - baseAngles[0];
+		angles[1] = view_as<float>(batch.Get(i, 5)) + leadAngles[1] - baseAngles[1];
+		angles[2] = view_as<float>(batch.Get(i, 6)) + leadAngles[2] - baseAngles[2];
 		TransformBatchOffset(client, offset, leadPosition, leadAngles, position);
 
 		TeleportEntity(preview, position, angles, NULL_VECTOR);
@@ -1099,10 +1163,12 @@ static void TouchLaggedMovementValue(int client) {
 	SetEntDataFloat(client, g_iOffLaggedMovementValue, cur, true);
 }
 
-void StopHolding(int client, bool now = false, bool keepBatchMove = false) {
+void StopHolding(int client, bool now = false, bool keepGroupPreview = false) {
 	ClearMattressStackHighlights(client);
-	if (!keepBatchMove)
+	if (!keepGroupPreview) {
 		ClearBatchMove(client);
+		ClearBlueprintHold(client);
+	}
 	ga_bHeldPreviewPosValid[client] = false;
 	ga_bPickupQueued[client] = false;
 
@@ -1638,6 +1704,16 @@ void OnButtonPress(int client, int button, float vel[3]) {
 				EndPlaceLock(client);
 				return;
 			}
+			bool movingBatch = ga_hBatchMoveData[client] != null && ga_hBatchMoveData[client].Length > 0;
+			bool holdingBlueprint = ga_bHoldingBlueprint[client];
+			if (holdingBlueprint) {
+				int blueprintCost = GetBlueprintHoldCost(client);
+				if (blueprintCost < 0 || (g_iAllFree == 0 && !HasEnoughResources(client, blueprintCost))) {
+					PrintCenterText(client, "You can no longer afford this blueprint.");
+					EndPlaceLock(client);
+					return;
+				}
+			}
 
 			ga_bJustPlaced[client] = true;
 
@@ -1647,13 +1723,16 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			GetEntPropVector(ent, Prop_Send, "m_angRotation", vAng);
 
 			int health = GetEntProp(ent, Prop_Data, "m_iHealth");
-			bool movingBatch = ga_hBatchMoveData[client] != null && ga_hBatchMoveData[client].Length > 0;
-			StopHolding(client, false, movingBatch);
+			StopHolding(client, false, movingBatch || holdingBlueprint);
 			bool placed = CreateProp(client, vPos, vAng, health, true);
-			if (placed && movingBatch)
+			if (placed && holdingBlueprint)
+				FinishBlueprintPlacement(client, vPos, vAng);
+			else if (placed && movingBatch)
 				FinishBatchMove(client, vPos, vAng);
-			else
+			else {
 				ClearBatchMove(client);
+				ClearBlueprintHold(client);
+			}
 
 			EndPlaceLock(client);
 
@@ -3143,9 +3222,9 @@ void OpenPropSelectionMenu(int client) {
 		propMenu.AddItem(indexStr, itemBuffer);
 	}
 
+	propMenu.AddItem("97", "Blueprints");
 	if (ga_hPropPlaced[client] != null && ga_hPropPlaced[client].Length > 0)
 		propMenu.AddItem("99", "Deconstruct all props");
-
 	propMenu.AddItem("98", "Open shop menu (Cycle Firemode)");
 
 	if (g_iAllFree == 0) {
@@ -3225,13 +3304,17 @@ public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, in
 			ga_bBuildMenuOpen[client] = false;
 			OpenDeconstructConfirmMenu(client);
 		}
-		else if (selectedIndex == 98) {
+	else if (selectedIndex == 98) {
 			ga_bBuildMenuOpen[client] = false;
 			if (ga_iPropHolding[client] != INVALID_ENT_REFERENCE)
 				StopHolding(client);
 
-			OpenShopMenu(client);
-		}
+		OpenShopMenu(client);
+	}
+	else if (selectedIndex == 97) {
+		ga_bBuildMenuOpen[client] = false;
+		OpenBlueprintMenu(client);
+	}
 		else {
 			ga_bBuildMenuOpen[client] = false;
 			PrintToChat(client, "Invalid prop selection.");
@@ -3259,6 +3342,8 @@ void OpenRotationMenu(int client) {
 	rotationMenu.AddItem("z+", "+Roll");
 	rotationMenu.AddItem("z-", "-Roll");
 	rotationMenu.AddItem("reset", "Reset Rotation");
+	rotationMenu.AddItem("spacer", " ", ITEMDRAW_DISABLED | ITEMDRAW_SPACER);
+	rotationMenu.AddItem("saveblueprint", "Save Blueprint");
 	rotationMenu.AddItem("spacer", " ", ITEMDRAW_DISABLED | ITEMDRAW_SPACER);
 
 	char stepItem[64];
@@ -3395,6 +3480,37 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 			OpenRotateStepMenu(client);
 			return 0;
 		}
+		if (strcmp(item, "saveblueprint", false) == 0) {
+			float now = GetGameTime();
+			if (ga_fNextBlueprintSave[client] > now) {
+				PrintToChat(client, "Please wait %.1f seconds before saving another blueprint.", ga_fNextBlueprintSave[client] - now);
+				OpenRotationMenu(client);
+				return 0;
+			}
+			if (g_hBlueprintDb == null) {
+				PrintToChat(client, "Blueprints are unavailable because the database could not be opened.");
+				OpenRotationMenu(client);
+				return 0;
+			}
+			if (!ga_bBlueprintsLoaded[client]) {
+				LoadClientBlueprints(client);
+				PrintToChat(client, "Blueprints are loading. Try Save Blueprint again in a moment.");
+				OpenRotationMenu(client);
+				return 0;
+			}
+			if (ga_hPendingBlueprintProps[client] != null) {
+				delete ga_hPendingBlueprintProps[client];
+				ga_hPendingBlueprintProps[client] = null;
+			}
+			if (!CaptureHeldBlueprintLayout(client, ga_hPendingBlueprintProps[client])) {
+				PrintToChat(client, "You can save blueprints only while holding a group of %d to %d props.", BLUEPRINT_MIN_PROPS, BLUEPRINT_MAX_PROPS);
+				OpenRotationMenu(client);
+				return 0;
+			}
+			ga_fNextBlueprintSave[client] = now + BLUEPRINT_SAVE_COOLDOWN;
+			OpenBlueprintSaveSlotsMenu(client);
+			return 0;
+		}
 
 		int ent = EntRefToEntIndex(ga_iPropHolding[client]);
 		if (ent <= MaxClients || !IsValidEntity(ent)) {
@@ -3450,7 +3566,7 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 
 		// A mass move rotates the current group only. Do not make its lead prop
 		// change the saved default rotation for later single prop builds.
-		if (ga_hBatchMoveData[client] == null || ga_hBatchMoveData[client].Length == 0) {
+		if (!ga_bHoldingBlueprint[client] && (ga_hBatchMoveData[client] == null || ga_hBatchMoveData[client].Length == 0)) {
 			int mid = MID(ga_iModelIndex[client]);
 			ga_fPropRotations[client][mid][0] = vRot[0];
 			ga_fPropRotations[client][mid][1] = vRot[1];
@@ -3523,6 +3639,668 @@ void GetModelName(const char[] fullPath, char[] modelName, int maxLen) {
 		copyLen = maxLen - 1;
 
 	strcopy(modelName, copyLen + 1, fullPath[start]);
+}
+
+static bool GetBlueprintSteamId(int client, char[] steamId, int maxLen) {
+	return client >= 1 && client <= MaxClients && IsClientInGame(client)
+		&& GetClientAuthId(client, AuthId_Steam2, steamId, maxLen, true);
+}
+
+static int FindPropIdByModel(const char[] model) {
+	for (int i = 0; i < PROP_COUNT; i++) {
+		if (StrEqual(g_PropDefs[i].model, model, false))
+			return i;
+	}
+	return -1;
+}
+
+static ArrayList EnsureBlueprintPropList(int client, int slot) {
+	if (client < 1 || client > MaxClients || slot < 0 || slot >= BLUEPRINT_SLOT_COUNT)
+		return null;
+
+	if (ga_hBlueprintProps[client][slot] == null)
+		ga_hBlueprintProps[client][slot] = new ArrayList(ByteCountToCells(BLUEPRINT_RECORD_LENGTH));
+	return ga_hBlueprintProps[client][slot];
+}
+
+static bool ParseBlueprintRecord(const char[] record, char[] model, int modelLen, float offset[3], float angles[3]) {
+	char fields[7][PLATFORM_MAX_PATH];
+	if (ExplodeString(record, "|", fields, sizeof(fields), sizeof(fields[])) != 7)
+		return false;
+
+	strcopy(model, modelLen, fields[0]);
+	offset[0] = StringToFloat(fields[1]);
+	offset[1] = StringToFloat(fields[2]);
+	offset[2] = StringToFloat(fields[3]);
+	angles[0] = StringToFloat(fields[4]);
+	angles[1] = StringToFloat(fields[5]);
+	angles[2] = StringToFloat(fields[6]);
+	return model[0] != '\0';
+}
+
+static void MakeBlueprintRecord(const char[] model, const float offset[3], const float angles[3], char[] record, int maxLen) {
+	FormatEx(record, maxLen, "%s|%.3f|%.3f|%.3f|%.3f|%.3f|%.3f", model,
+		offset[0], offset[1], offset[2], angles[0], angles[1], angles[2]);
+}
+
+static int GetBlueprintCost(int client, int slot) {
+	if (slot < 0 || slot >= BLUEPRINT_SLOT_COUNT)
+		return -1;
+
+	ArrayList list = ga_hBlueprintProps[client][slot];
+	if (list == null || list.Length < BLUEPRINT_MIN_PROPS)
+		return -1;
+
+	int totalCost = 0;
+	for (int i = 0; i < list.Length; i++) {
+		char record[BLUEPRINT_RECORD_LENGTH], model[PLATFORM_MAX_PATH];
+		float offset[3], angles[3];
+		list.GetString(i, record, sizeof(record));
+		if (!ParseBlueprintRecord(record, model, sizeof(model), offset, angles))
+			return -1;
+
+		int modelId = FindPropIdByModel(model);
+		if (modelId < 0 || modelId == MID(Prop_AmmoCacheSmall))
+			return -1;
+		totalCost += g_PropDefs[modelId].cost;
+	}
+
+	return totalCost;
+}
+
+static void ClearClientBlueprints(int client) {
+	if (client < 1 || client > MaxClients)
+		return;
+
+	for (int slot = 0; slot < BLUEPRINT_SLOT_COUNT; slot++) {
+		if (ga_hBlueprintProps[client][slot] != null) {
+			delete ga_hBlueprintProps[client][slot];
+			ga_hBlueprintProps[client][slot] = null;
+		}
+		ga_sBlueprintName[client][slot][0] = '\0';
+	}
+	ga_bBlueprintsLoaded[client] = false;
+	ga_bBlueprintsLoading[client] = false;
+	ga_fNextBlueprintSave[client] = 0.0;
+	ga_fNextBlueprintLoad[client] = 0.0;
+
+	if (ga_hPendingBlueprintNameTimer[client] != INVALID_HANDLE) {
+		KillTimer(ga_hPendingBlueprintNameTimer[client]);
+		ga_hPendingBlueprintNameTimer[client] = INVALID_HANDLE;
+	}
+	if (ga_hPendingBlueprintProps[client] != null) {
+		delete ga_hPendingBlueprintProps[client];
+		ga_hPendingBlueprintProps[client] = null;
+	}
+	ga_iPendingBlueprintSlot[client] = -1;
+	ClearBlueprintHold(client, true);
+}
+
+static void SetupBlueprintDatabase() {
+	char error[256];
+	g_hBlueprintDb = SQLite_UseDatabase("props_blueprints", error, sizeof(error));
+	if (g_hBlueprintDb == null) {
+		LogError("Unable to open props blueprint database: %s", error);
+		return;
+	}
+
+	if (!SQL_FastQuery(g_hBlueprintDb,
+		"CREATE TABLE IF NOT EXISTS bm_props_blueprints (steamid TEXT NOT NULL, slot INTEGER NOT NULL, name TEXT NOT NULL, layout TEXT NOT NULL, PRIMARY KEY (steamid, slot))")) {
+		SQL_GetError(g_hBlueprintDb, error, sizeof(error));
+		LogError("Unable to create props blueprint table: %s", error);
+		delete g_hBlueprintDb;
+		g_hBlueprintDb = null;
+	}
+}
+
+static void LoadClientBlueprints(int client) {
+	if (g_hBlueprintDb == null || client < 1 || client > MaxClients || !IsClientInGame(client)
+		|| IsFakeClient(client) || ga_bBlueprintsLoading[client] || ga_bBlueprintsLoaded[client])
+		return;
+
+	char steamId[64], escapedSteamId[128], query[256];
+	if (!GetBlueprintSteamId(client, steamId, sizeof(steamId)))
+		return;
+
+	SQL_EscapeString(g_hBlueprintDb, steamId, escapedSteamId, sizeof(escapedSteamId));
+	FormatEx(query, sizeof(query), "SELECT slot, name, layout FROM bm_props_blueprints WHERE steamid = '%s' ORDER BY slot ASC", escapedSteamId);
+	ga_bBlueprintsLoading[client] = true;
+	SQL_TQuery(g_hBlueprintDb, SQL_LoadClientBlueprints, query, GetClientUserId(client));
+}
+
+public void SQL_LoadClientBlueprints(Database db, DBResultSet results, const char[] error, any data) {
+	int client = GetClientOfUserId(data);
+	if (client < 1 || client > MaxClients || !IsClientInGame(client))
+		return;
+
+	ga_bBlueprintsLoading[client] = false;
+	if (error[0] != '\0') {
+		LogError("Unable to load props blueprints for client %d: %s", client, error);
+		return;
+	}
+
+	for (int slot = 0; slot < BLUEPRINT_SLOT_COUNT; slot++) {
+		if (ga_hBlueprintProps[client][slot] != null) {
+			delete ga_hBlueprintProps[client][slot];
+			ga_hBlueprintProps[client][slot] = null;
+		}
+		ga_sBlueprintName[client][slot][0] = '\0';
+	}
+
+	while (results != null && results.FetchRow()) {
+		int slot = results.FetchInt(0) - 1;
+		if (slot < 0 || slot >= BLUEPRINT_SLOT_COUNT)
+			continue;
+
+		results.FetchString(1, ga_sBlueprintName[client][slot], BLUEPRINT_NAME_LENGTH);
+		char layout[BLUEPRINT_LAYOUT_LENGTH];
+		results.FetchString(2, layout, sizeof(layout));
+
+		char records[BLUEPRINT_MAX_PROPS][BLUEPRINT_RECORD_LENGTH];
+		int count = ExplodeString(layout, ";", records, sizeof(records), sizeof(records[]));
+		if (count < BLUEPRINT_MIN_PROPS || count > BLUEPRINT_MAX_PROPS)
+			continue;
+
+		ArrayList list = EnsureBlueprintPropList(client, slot);
+		for (int i = 0; i < count; i++)
+			list.PushString(records[i]);
+	}
+
+	ga_bBlueprintsLoaded[client] = true;
+}
+
+static ArrayList GetHeldGroupData(int client) {
+	return ga_bHoldingBlueprint[client] ? ga_hBlueprintHoldData[client] : ga_hBatchMoveData[client];
+}
+
+static bool CaptureHeldBlueprintLayout(int client, ArrayList &layout) {
+	ArrayList group = GetHeldGroupData(client);
+	if (group == null || group.Length + 1 < BLUEPRINT_MIN_PROPS || group.Length + 1 > BLUEPRINT_MAX_PROPS)
+		return false;
+
+	int lead = EntRefToEntIndex(ga_iPropHolding[client]);
+	int leadModelId = MID(ga_iModelIndex[client]);
+	if (!IsValidNonClientEntity(lead) || leadModelId < 0 || leadModelId >= PROP_COUNT)
+		return false;
+
+	float leadPosition[3], leadAngles[3], zeroOffset[3];
+	GetEntPropVector(lead, Prop_Send, "m_vecOrigin", leadPosition);
+	GetEntPropVector(lead, Prop_Send, "m_angRotation", leadAngles);
+	zeroOffset[0] = 0.0;
+	zeroOffset[1] = 0.0;
+	zeroOffset[2] = 0.0;
+
+	layout = new ArrayList(ByteCountToCells(BLUEPRINT_RECORD_LENGTH));
+	char record[BLUEPRINT_RECORD_LENGTH];
+	MakeBlueprintRecord(g_PropDefs[leadModelId].model, zeroOffset, leadAngles, record, sizeof(record));
+	layout.PushString(record);
+
+	for (int i = 0; i < group.Length; i++) {
+		int preview = EntRefToEntIndex(group.Get(i, 7));
+		int modelId = group.Get(i, 8);
+		if (!IsValidNonClientEntity(preview) || modelId < 0 || modelId >= PROP_COUNT) {
+			delete layout;
+			layout = null;
+			return false;
+		}
+
+		float position[3], angles[3], offset[3];
+		GetEntPropVector(preview, Prop_Send, "m_vecOrigin", position);
+		GetEntPropVector(preview, Prop_Send, "m_angRotation", angles);
+		offset[0] = position[0] - leadPosition[0];
+		offset[1] = position[1] - leadPosition[1];
+		offset[2] = position[2] - leadPosition[2];
+		MakeBlueprintRecord(g_PropDefs[modelId].model, offset, angles, record, sizeof(record));
+		layout.PushString(record);
+	}
+
+	return true;
+}
+
+static void OpenBlueprintSaveSlotsMenu(int client) {
+	Menu menu = new Menu(BlueprintSaveSlotMenuHandler);
+	menu.SetTitle("Save Blueprint\nChoose a slot");
+
+	for (int slot = 0; slot < BLUEPRINT_SLOT_COUNT; slot++) {
+		char info[8], display[192];
+		IntToString(slot, info, sizeof(info));
+		if (ga_hBlueprintProps[client][slot] == null || ga_hBlueprintProps[client][slot].Length == 0) {
+			FormatEx(display, sizeof(display), "Slot %d: Empty", slot + 1);
+		} else {
+			int cost = GetBlueprintCost(client, slot);
+			if (cost < 0)
+				FormatEx(display, sizeof(display), "Slot %d: %s (Unavailable)", slot + 1, ga_sBlueprintName[client][slot]);
+			else
+				FormatEx(display, sizeof(display), "Slot %d: %s (%d props, Cost: %d)", slot + 1,
+					ga_sBlueprintName[client][slot], ga_hBlueprintProps[client][slot].Length, cost);
+		}
+		menu.AddItem(info, display);
+	}
+
+	menu.ExitBackButton = true;
+	menu.Display(client, MENU_STAYOPENTIME);
+}
+
+static void PromptBlueprintName(int client, int slot) {
+	ga_iPendingBlueprintSlot[client] = slot;
+	if (ga_hPendingBlueprintNameTimer[client] != INVALID_HANDLE)
+		KillTimer(ga_hPendingBlueprintNameTimer[client]);
+	ga_hPendingBlueprintNameTimer[client] = CreateTimer(30.0, Timer_BlueprintNameTimeout, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
+	PrintToChat(client, "Type a name for Blueprint Slot %d in chat (max %d characters).", slot + 1, BLUEPRINT_NAME_MAX_CHARS);
+	FakeClientCommand(client, "messagemode");
+}
+
+public int BlueprintSaveSlotMenuHandler(Menu menu, MenuAction action, int client, int param) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Select) {
+		char info[8];
+		menu.GetItem(param, info, sizeof(info));
+		int slot = StringToInt(info);
+		if (slot < 0 || slot >= BLUEPRINT_SLOT_COUNT)
+			return 0;
+
+		if (ga_hBlueprintProps[client][slot] != null && ga_hBlueprintProps[client][slot].Length > 0) {
+			Menu confirm = new Menu(BlueprintOverwriteMenuHandler);
+			char yesInfo[8];
+			IntToString(slot, yesInfo, sizeof(yesInfo));
+			confirm.SetTitle("Overwrite Blueprint Slot %d?", slot + 1);
+			confirm.AddItem(yesInfo, "Yes, overwrite");
+			confirm.AddItem("-1", "No");
+			confirm.Display(client, MENU_STAYOPENTIME);
+		} else {
+			PromptBlueprintName(client, slot);
+		}
+	}
+	return 0;
+}
+
+public int BlueprintOverwriteMenuHandler(Menu menu, MenuAction action, int client, int param) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Select) {
+		char info[8];
+		menu.GetItem(param, info, sizeof(info));
+		int slot = StringToInt(info);
+		if (slot >= 0 && slot < BLUEPRINT_SLOT_COUNT)
+			PromptBlueprintName(client, slot);
+		else
+			OpenRotationMenu(client);
+	}
+	return 0;
+}
+
+public Action Timer_BlueprintNameTimeout(Handle timer, int userId) {
+	int client = GetClientOfUserId(userId);
+	if (client < 1 || client > MaxClients)
+		return Plugin_Stop;
+
+	ga_hPendingBlueprintNameTimer[client] = INVALID_HANDLE;
+	if (ga_iPendingBlueprintSlot[client] >= 0) {
+		ga_iPendingBlueprintSlot[client] = -1;
+		if (ga_hPendingBlueprintProps[client] != null) {
+			delete ga_hPendingBlueprintProps[client];
+			ga_hPendingBlueprintProps[client] = null;
+		}
+		PrintToChat(client, "Blueprint save cancelled because no name was entered.");
+	}
+	return Plugin_Stop;
+}
+
+static bool IsBlueprintNameCharacter(int character) {
+	if ((character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9'))
+		return true;
+
+	// Ordinary label punctuation only. This keeps blueprint names readable in
+	// menus and chat while SQL_EscapeString remains a second line of defence.
+	switch (character) {
+		case 32, 33, 38, 39, 40, 41, 43, 44, 45, 46, 63, 91, 93, 95:
+			return true;
+	}
+	return false;
+}
+
+static bool IsValidBlueprintUtf8(const char[] text, int start, int &bytes) {
+	int first = text[start] & 0xFF;
+	if (first >= 0xC2 && first <= 0xDF)
+		bytes = 2;
+	else if (first >= 0xE0 && first <= 0xEF)
+		bytes = 3;
+	else if (first >= 0xF0 && first <= 0xF4)
+		bytes = 4;
+	else
+		return false;
+
+	for (int i = 1; i < bytes; i++) {
+		int next = text[start + i] & 0xFF;
+		if (next == 0 || (next & 0xC0) != 0x80)
+			return false;
+	}
+
+	int second = text[start + 1] & 0xFF;
+	if ((first == 0xE0 && second < 0xA0) || (first == 0xED && second > 0x9F)
+		|| (first == 0xF0 && second < 0x90) || (first == 0xF4 && second > 0x8F))
+		return false;
+
+	return true;
+}
+
+static void SanitizeBlueprintName(char[] name, int maxLen) {
+	char clean[BLUEPRINT_NAME_LENGTH];
+	int read = 0;
+	int write = 0;
+	int characters = 0;
+
+	while (name[read] != '\0' && characters < BLUEPRINT_NAME_MAX_CHARS) {
+		int character = name[read] & 0xFF;
+		if (character < 0x80) {
+			if (IsBlueprintNameCharacter(character)) {
+				clean[write++] = character;
+				characters++;
+			}
+			read++;
+			continue;
+		}
+
+		int bytes;
+		if (!IsValidBlueprintUtf8(name, read, bytes)) {
+			read++;
+			continue;
+		}
+		if (write + bytes >= sizeof(clean))
+			break;
+
+		for (int i = 0; i < bytes; i++)
+			clean[write++] = name[read + i];
+		characters++;
+		read += bytes;
+	}
+
+	clean[write] = '\0';
+	strcopy(name, maxLen, clean);
+	TrimString(name);
+}
+
+public Action Command_BlueprintNameSay(int client, const char[] command, int args) {
+	if (client < 1 || client > MaxClients || ga_iPendingBlueprintSlot[client] < 0 || ga_hPendingBlueprintProps[client] == null)
+		return Plugin_Continue;
+
+	char name[BLUEPRINT_NAME_LENGTH];
+	GetCmdArgString(name, sizeof(name));
+	StripQuotes(name);
+	TrimString(name);
+	ReplaceString(name, sizeof(name), "\n", "");
+	ReplaceString(name, sizeof(name), "\r", "");
+	ReplaceString(name, sizeof(name), "\x01", "");
+	ReplaceString(name, sizeof(name), "\x03", "");
+	ReplaceString(name, sizeof(name), "\x04", "");
+	SanitizeBlueprintName(name, sizeof(name));
+	if (name[0] == '\0')
+		FormatEx(name, sizeof(name), "Blueprint %d", ga_iPendingBlueprintSlot[client] + 1);
+
+	SavePendingBlueprint(client, name);
+	return Plugin_Handled;
+}
+
+static void SavePendingBlueprint(int client, const char[] name) {
+	int slot = ga_iPendingBlueprintSlot[client];
+	ArrayList pending = ga_hPendingBlueprintProps[client];
+	if (slot < 0 || slot >= BLUEPRINT_SLOT_COUNT || pending == null)
+		return;
+
+	if (ga_hPendingBlueprintNameTimer[client] != INVALID_HANDLE) {
+		KillTimer(ga_hPendingBlueprintNameTimer[client]);
+		ga_hPendingBlueprintNameTimer[client] = INVALID_HANDLE;
+	}
+
+	if (ga_hBlueprintProps[client][slot] != null)
+		delete ga_hBlueprintProps[client][slot];
+	ga_hBlueprintProps[client][slot] = new ArrayList(ByteCountToCells(BLUEPRINT_RECORD_LENGTH));
+	for (int i = 0; i < pending.Length; i++) {
+		char record[BLUEPRINT_RECORD_LENGTH];
+		pending.GetString(i, record, sizeof(record));
+		ga_hBlueprintProps[client][slot].PushString(record);
+	}
+	strcopy(ga_sBlueprintName[client][slot], BLUEPRINT_NAME_LENGTH, name);
+
+	char layout[BLUEPRINT_LAYOUT_LENGTH];
+	layout[0] = '\0';
+	for (int i = 0; i < pending.Length; i++) {
+		char record[BLUEPRINT_RECORD_LENGTH];
+		pending.GetString(i, record, sizeof(record));
+		if (i > 0)
+			StrCat(layout, sizeof(layout), ";");
+		StrCat(layout, sizeof(layout), record);
+	}
+
+	char steamId[64], escapedSteamId[128], escapedName[BLUEPRINT_NAME_LENGTH * 2], escapedLayout[BLUEPRINT_LAYOUT_LENGTH * 2], query[BLUEPRINT_LAYOUT_LENGTH * 2 + 512];
+	if (g_hBlueprintDb == null || !GetBlueprintSteamId(client, steamId, sizeof(steamId))) {
+		PrintToChat(client, "Blueprint save failed because the database is unavailable.");
+		delete ga_hPendingBlueprintProps[client];
+		ga_hPendingBlueprintProps[client] = null;
+		ga_iPendingBlueprintSlot[client] = -1;
+		return;
+	}
+
+	SQL_EscapeString(g_hBlueprintDb, steamId, escapedSteamId, sizeof(escapedSteamId));
+	SQL_EscapeString(g_hBlueprintDb, name, escapedName, sizeof(escapedName));
+	SQL_EscapeString(g_hBlueprintDb, layout, escapedLayout, sizeof(escapedLayout));
+	FormatEx(query, sizeof(query), "REPLACE INTO bm_props_blueprints (steamid, slot, name, layout) VALUES ('%s', %d, '%s', '%s')", escapedSteamId, slot + 1, escapedName, escapedLayout);
+	SQL_TQuery(g_hBlueprintDb, SQL_SaveClientBlueprint, query, GetClientUserId(client));
+
+	delete ga_hPendingBlueprintProps[client];
+	ga_hPendingBlueprintProps[client] = null;
+	ga_iPendingBlueprintSlot[client] = -1;
+	PrintToChat(client, "Saved Blueprint Slot %d: %s", slot + 1, name);
+	OpenRotationMenu(client);
+}
+
+public void SQL_SaveClientBlueprint(Database db, DBResultSet results, const char[] error, any data) {
+	if (error[0] != '\0')
+		LogError("Unable to save props blueprint for userid %d: %s", data, error);
+}
+
+static int GetBlueprintHoldCost(int client) {
+	ArrayList list = ga_hBlueprintHoldData[client];
+	if (list == null)
+		return -1;
+
+	int leadModelId = MID(ga_iModelIndex[client]);
+	if (leadModelId < 0 || leadModelId >= PROP_COUNT)
+		return -1;
+
+	int cost = g_PropDefs[leadModelId].cost;
+	for (int i = 0; i < list.Length; i++) {
+		int modelId = list.Get(i, 8);
+		if (modelId < 0 || modelId >= PROP_COUNT)
+			return -1;
+		cost += g_PropDefs[modelId].cost;
+	}
+	return cost;
+}
+
+static void FinishBlueprintPlacement(int client, const float leadPosition[3], const float leadAngles[3]) {
+	ArrayList list = ga_hBlueprintHoldData[client];
+	if (list == null)
+		return;
+
+	PropId previousModel = ga_iModelIndex[client];
+	for (int i = 0; i < list.Length; i++) {
+		int modelId = list.Get(i, 8);
+		if (modelId < 0 || modelId >= PROP_COUNT)
+			continue;
+
+		float offset[3], angles[3], position[3];
+		offset[0] = view_as<float>(list.Get(i, 1));
+		offset[1] = view_as<float>(list.Get(i, 2));
+		offset[2] = view_as<float>(list.Get(i, 3));
+		angles[0] = view_as<float>(list.Get(i, 4)) + leadAngles[0] - ga_fBlueprintLeadAngles[client][0];
+		angles[1] = view_as<float>(list.Get(i, 5)) + leadAngles[1] - ga_fBlueprintLeadAngles[client][1];
+		angles[2] = view_as<float>(list.Get(i, 6)) + leadAngles[2] - ga_fBlueprintLeadAngles[client][2];
+		TransformBatchOffset(client, offset, leadPosition, leadAngles, position);
+
+		ga_iModelIndex[client] = view_as<PropId>(modelId);
+		ga_iPropOwner[client] = 0;
+		CreateProp(client, position, angles, 0, true);
+	}
+
+	ga_iModelIndex[client] = previousModel;
+	ClearBlueprintHold(client);
+}
+
+static bool StartBlueprintHold(int client, int slot) {
+	float now = GetGameTime();
+	if (ga_fNextBlueprintLoad[client] > now) {
+		PrintToChat(client, "Please wait %.1f seconds before loading another blueprint.", ga_fNextBlueprintLoad[client] - now);
+		return false;
+	}
+
+	int cost = GetBlueprintCost(client, slot);
+	ArrayList saved = (slot >= 0 && slot < BLUEPRINT_SLOT_COUNT) ? ga_hBlueprintProps[client][slot] : null;
+	if (saved == null || cost < 0 || saved.Length < BLUEPRINT_MIN_PROPS || saved.Length > BLUEPRINT_MAX_PROPS) {
+		PrintToChat(client, "That blueprint is unavailable because one of its props no longer exists.");
+		return false;
+	}
+	if (g_iAllFree == 0 && !HasEnoughResources(client, cost)) {
+		PrintToChat(client, "You cannot afford that blueprint.");
+		return false;
+	}
+
+	ga_fNextBlueprintLoad[client] = now + BLUEPRINT_LOAD_COOLDOWN;
+	ClearPropSelections(client);
+	if (ga_iPropHolding[client] != INVALID_ENT_REFERENCE)
+		StopHolding(client);
+
+	char rootRecord[BLUEPRINT_RECORD_LENGTH], rootModel[PLATFORM_MAX_PATH];
+	float rootOffset[3], rootAngles[3];
+	saved.GetString(0, rootRecord, sizeof(rootRecord));
+	if (!ParseBlueprintRecord(rootRecord, rootModel, sizeof(rootModel), rootOffset, rootAngles))
+		return false;
+
+	int rootModelId = FindPropIdByModel(rootModel);
+	if (rootModelId < 0 || rootModelId == MID(Prop_AmmoCacheSmall))
+		return false;
+
+	float rootPosition[3], eyeAngles[3];
+	GetClientEyePosition(client, rootPosition);
+	GetClientEyeAngles(client, eyeAngles);
+	GetPositionInFront(rootPosition, eyeAngles, PROP_HOLD_DISTANCE);
+	ga_iModelIndex[client] = view_as<PropId>(rootModelId);
+	ga_iPropOwner[client] = 0;
+	if (!CreateProp(client, rootPosition, rootAngles))
+		return false;
+
+	int lead = EntRefToEntIndex(ga_iPropHolding[client]);
+	if (!IsValidNonClientEntity(lead))
+		return false;
+	TeleportEntity(lead, rootPosition, rootAngles, NULL_VECTOR);
+
+	if (ga_hBlueprintHoldData[client] != null)
+		delete ga_hBlueprintHoldData[client];
+	ga_hBlueprintHoldData[client] = new ArrayList(PROP_BATCH_DATA_SIZE);
+	ga_bHoldingBlueprint[client] = true;
+	ga_fBlueprintLeadAngles[client][0] = rootAngles[0];
+	ga_fBlueprintLeadAngles[client][1] = rootAngles[1];
+	ga_fBlueprintLeadAngles[client][2] = rootAngles[2];
+
+	for (int i = 1; i < saved.Length; i++) {
+		char record[BLUEPRINT_RECORD_LENGTH], model[PLATFORM_MAX_PATH];
+		float offset[3], angles[3], position[3];
+		saved.GetString(i, record, sizeof(record));
+		if (!ParseBlueprintRecord(record, model, sizeof(model), offset, angles)) {
+			StopHolding(client);
+			return false;
+		}
+
+		int modelId = FindPropIdByModel(model);
+		if (modelId < 0 || modelId == MID(Prop_AmmoCacheSmall)) {
+			StopHolding(client);
+			return false;
+		}
+
+		int previewRef = CreateBatchPreview(modelId);
+		if (previewRef == INVALID_ENT_REFERENCE) {
+			StopHolding(client);
+			return false;
+		}
+
+		int data[PROP_BATCH_DATA_SIZE];
+		data[0] = INVALID_ENT_REFERENCE;
+		data[1] = view_as<int>(offset[0]);
+		data[2] = view_as<int>(offset[1]);
+		data[3] = view_as<int>(offset[2]);
+		data[4] = view_as<int>(angles[0]);
+		data[5] = view_as<int>(angles[1]);
+		data[6] = view_as<int>(angles[2]);
+		data[7] = previewRef;
+		data[8] = modelId;
+		data[9] = 0;
+		ga_hBlueprintHoldData[client].PushArray(data, sizeof(data));
+
+		TransformBatchOffset(client, offset, rootPosition, rootAngles, position);
+		int preview = EntRefToEntIndex(previewRef);
+		if (IsValidNonClientEntity(preview))
+			TeleportEntity(preview, position, angles, NULL_VECTOR);
+	}
+
+	PrintCenterText(client, "Loaded blueprint: %s\nCost: %d", ga_sBlueprintName[client][slot], cost);
+	OpenRotationMenu(client);
+	return true;
+}
+
+static void OpenBlueprintMenu(int client) {
+	if (g_hBlueprintDb == null) {
+		PrintToChat(client, "Blueprints are unavailable because the database could not be opened.");
+		return;
+	}
+	if (!ga_bBlueprintsLoaded[client]) {
+		LoadClientBlueprints(client);
+		PrintToChat(client, "Blueprints are loading. Open the build menu again in a moment.");
+		return;
+	}
+
+	int blueprintCount = 0;
+	Menu menu = new Menu(BlueprintMenuHandler);
+	menu.SetTitle("Blueprints\nBuild points: %d", ga_iPlayerBuildPoints[client]);
+	for (int slot = 0; slot < BLUEPRINT_SLOT_COUNT; slot++) {
+		ArrayList list = ga_hBlueprintProps[client][slot];
+		if (list == null || list.Length == 0)
+			continue;
+
+		blueprintCount++;
+		char info[8], display[192];
+		IntToString(slot, info, sizeof(info));
+		int cost = GetBlueprintCost(client, slot);
+		if (cost < 0) {
+			FormatEx(display, sizeof(display), "Slot %d: %s (Unavailable)", slot + 1, ga_sBlueprintName[client][slot]);
+			menu.AddItem(info, display, ITEMDRAW_DISABLED);
+		} else {
+			FormatEx(display, sizeof(display), "Slot %d: %s (Cost: %d)", slot + 1, ga_sBlueprintName[client][slot], cost);
+			menu.AddItem(info, display, (g_iAllFree == 1 || HasEnoughResources(client, cost)) ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+		}
+	}
+
+	if (blueprintCount == 0) {
+		delete menu;
+		PrintToChat(client, "You have no blueprints. Hold a group of 2 to 5 props, open Rotation page 2, then choose Save Blueprint.");
+		return;
+	}
+
+	menu.ExitBackButton = true;
+	menu.Display(client, MENU_STAYOPENTIME);
+}
+
+public int BlueprintMenuHandler(Menu menu, MenuAction action, int client, int param) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Select) {
+		char info[8];
+		menu.GetItem(param, info, sizeof(info));
+		StartBlueprintHold(client, StringToInt(info));
+	}
+	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients && param == MenuCancel_ExitBack)
+		OpenPropSelectionMenu(client);
+	return 0;
 }
 
 bool IsPlayerOnProp(int client) {
@@ -3663,6 +4441,7 @@ public void OnMapEnd() {
 			delete ga_hBatchMoveData[i];
 			ga_hBatchMoveData[i] = null;
 		}
+		ClearBlueprintHold(i, true);
 	}
 	if (g_hAmmoCacheRefs != null) {
 		delete g_hAmmoCacheRefs;
@@ -3684,6 +4463,7 @@ public void OnPluginEnd() {
 		KillNowRef(ga_iPropHolding[i]);
 		ga_iPropHolding[i] = INVALID_ENT_REFERENCE;
 		ClearBatchMove(i, true);
+		ClearBlueprintHold(i, true);
 
 		RefundAllSupply(i, true, true);
 
@@ -3710,6 +4490,7 @@ public void OnPluginEnd() {
 			delete ga_hHighlightedMattressRefs[i];
 			ga_hHighlightedMattressRefs[i] = null;
 		}
+		ClearClientBlueprints(i);
 		ClearSelectablePropFlash(i);
 		if (ga_hSelectableFlashRefs[i] != null) {
 			delete ga_hSelectableFlashRefs[i];
@@ -3724,6 +4505,7 @@ public void OnPluginEnd() {
 		delete g_hMattressRefs;
 		g_hMattressRefs = null;
 	}
+	delete g_hBlueprintDb;
 	delete g_hDirectResupply;
 
 	KillTipTimer();
