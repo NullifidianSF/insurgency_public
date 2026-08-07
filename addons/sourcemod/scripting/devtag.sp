@@ -11,7 +11,6 @@
 GameData g_hGameData = null;
 int g_iDeveloperFlagOffset = -1;
 int g_iDeveloperStatusOffset = -1;
-bool g_bLateLoad = false;
 
 bool ga_bDevTag[MAXPLAYERS + 1] = {true, ...};
 bool ga_bIsAdmin[MAXPLAYERS + 1] = {false, ...};
@@ -27,11 +26,6 @@ public Plugin myinfo = {
 	url = ""
 };
 
-public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
-	g_bLateLoad = late;
-	return APLRes_Success;
-}
-
 public void OnPluginStart() {
 	g_hGameData = LoadGameConfigFile(GAMEDATA_FILE);
 	if (g_hGameData == null)
@@ -44,10 +38,7 @@ public void OnPluginStart() {
 
 	RegAdminCmd("sm_devtag", Cmd_DevTag, ADMFLAG_KICK, "Toggle your dev tag");
 
-	HookEvent("player_spawn", Event_PlayerSpawn_Post, EventHookMode_Post);
-
-	if (g_bLateLoad)
-		RequestFrame(Frame_InitialiseExistingClients);
+	HookEvent("player_team", Event_PlayerTeam_Post, EventHookMode_Post);
 }
 
 public void OnPluginEnd() {
@@ -60,6 +51,7 @@ public void OnPluginEnd() {
 public void OnMapStart() {
 	for (int client = 1; client <= MaxClients; client++)
 		ga_bCapturedOriginal[client] = false;
+	RequestFrame(Frame_InitialiseExistingClients);
 }
 
 public void OnClientPostAdminCheck(int client) {
@@ -82,7 +74,7 @@ public void OnClientDisconnect(int client) {
 	ga_iOriginalDeveloperStatus[client] = 0;
 }
 
-public void Event_PlayerSpawn_Post(Event event, const char[] name, bool dontBroadcast) {
+public void Event_PlayerTeam_Post(Event event, const char[] name, bool dontBroadcast) {
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	if (IsRealClient(client) && ga_bIsAdmin[client])
 		RequestFrame(Frame_ApplyDeveloperState, GetClientUserId(client));
