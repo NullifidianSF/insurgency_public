@@ -44,6 +44,8 @@ public void OnPluginStart() {
 
 	RegAdminCmd("sm_devtag", Cmd_DevTag, ADMFLAG_KICK, "Toggle your dev tag");
 
+	HookEvent("player_spawn", Event_PlayerSpawn_Post, EventHookMode_Post);
+
 	if (g_bLateLoad)
 		RequestFrame(Frame_InitialiseExistingClients);
 }
@@ -78,6 +80,12 @@ public void OnClientDisconnect(int client) {
 	ga_bCapturedOriginal[client] = false;
 	ga_iOriginalDeveloperFlag[client] = 0;
 	ga_iOriginalDeveloperStatus[client] = 0;
+}
+
+public void Event_PlayerSpawn_Post(Event event, const char[] name, bool dontBroadcast) {
+	int client = GetClientOfUserId(event.GetInt("userid"));
+	if (IsRealClient(client) && ga_bIsAdmin[client])
+		RequestFrame(Frame_ApplyDeveloperState, GetClientUserId(client));
 }
 
 void Frame_InitialiseExistingClients(any data) {
