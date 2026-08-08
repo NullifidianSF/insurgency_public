@@ -7,7 +7,7 @@
 #include <clientprefs>
 #include <dbi>
 
-#define PL_VERSION		"2.68"
+#define PL_VERSION		"2.69"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 
 #define MAXENTITIES		2048
@@ -1724,7 +1724,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 
 			int health = GetEntProp(ent, Prop_Data, "m_iHealth");
 			StopHolding(client, false, movingBatch || holdingBlueprint);
-			bool placed = CreateProp(client, vPos, vAng, health, true);
+			bool placed = CreateProp(client, vPos, vAng, health, true, holdingBlueprint);
 			if (placed && holdingBlueprint)
 				FinishBlueprintPlacement(client, vPos, vAng);
 			else if (placed && movingBatch)
@@ -2001,7 +2001,7 @@ static void UpdateClientWeaponState(int client, int entity = -1) {
 	ga_bHoldingMeleeWeapon[client] = (entity > 0 && GetPlayerWeaponSlot(client, 2) == entity);
 }
 
-bool CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, bool solid = false) {
+bool CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, bool solid = false, bool usePlacementAngles = false) {
 	if (!IsPlayerOnGround(client)) {
 		PrintCenterText(client, "You cannot build a prop while falling!");
 		return false;
@@ -2122,7 +2122,7 @@ bool CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 		TrackSolidProp(prop, trackedOwner, modelId);
 
 	if (solid) {
-		if (!bMovingExisting)
+		if (!bMovingExisting && !usePlacementAngles)
 			TeleportEntity(prop, vPos, ga_fPropRotations[client][mid], NULL_VECTOR);
 		else
 			TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
@@ -4141,7 +4141,7 @@ static void FinishBlueprintPlacement(int client, const float leadPosition[3], co
 
 		ga_iModelIndex[client] = view_as<PropId>(modelId);
 		ga_iPropOwner[client] = 0;
-		CreateProp(client, position, angles, 0, true);
+		CreateProp(client, position, angles, 0, true, true);
 	}
 
 	ga_iModelIndex[client] = previousModel;
