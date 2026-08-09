@@ -4,7 +4,7 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PL_VERSION  "1.1"
+#define PL_VERSION  "1.2"
 #define ADM_ACCESS "sm_devtag"
 #define GAMEDATA_FILE "insurgency-bm.games"
 
@@ -38,7 +38,7 @@ public void OnPluginStart() {
 
 	RegAdminCmd("sm_devtag", Cmd_DevTag, ADMFLAG_KICK, "Toggle your dev tag");
 
-	HookEvent("player_team", Event_PlayerTeam_Post, EventHookMode_Post);
+	HookEvent("player_pick_squad", Event_PlayerPickSquad_Post, EventHookMode_Post);
 }
 
 public void OnPluginEnd() {
@@ -74,7 +74,7 @@ public void OnClientDisconnect(int client) {
 	ga_iOriginalDeveloperStatus[client] = 0;
 }
 
-public void Event_PlayerTeam_Post(Event event, const char[] name, bool dontBroadcast) {
+public void Event_PlayerPickSquad_Post(Event event, const char[] name, bool dontBroadcast) {
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	if (IsRealClient(client) && ga_bIsAdmin[client])
 		RequestFrame(Frame_ApplyDeveloperState, GetClientUserId(client));
