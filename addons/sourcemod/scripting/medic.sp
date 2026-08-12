@@ -4,6 +4,7 @@
 #include <sdktools>
 #include <sdkhooks>
 #include <clientprefs>
+#include <dhooks>
 
 native bool Drag_IsEntityDragged(int entity);
 native void Drag_ForceDrop(int entity);
@@ -14,6 +15,7 @@ Handle	g_hFwdRagdollReady = null;
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
 #define TEAM_INSURGENT	3
+#define INS_STANCE_PRONE	2
 
 // ---- Objective Resource access (read-only) ----
 static int  g_iObjResEntity = -1;
@@ -469,6 +471,9 @@ int		m_hMyWeapons;
 
 Handle	g_hForceRespawn = null;
 Handle	g_hGameConfig = null;
+Handle	g_hSetCurrentStance = null;
+DynamicDetour g_hPlayerSharedSpawnDetour = null;
+int		g_iPlayerSharedStateOffset = -1;
 
 // ----------------------------------------------------------------------
 // Per-entity state
@@ -549,6 +554,7 @@ float	ga_fPendingRagTeleportVel[MAXPLAYERS + 1][3];
 
 bool	ga_bBeingRevivedByMedic[MAXPLAYERS + 1];
 bool	ga_bRevivedByMedic[MAXPLAYERS + 1];
+bool	ga_bReviveSpawnProne[MAXPLAYERS + 1];
 bool	ga_bPlayerSelectNewClass[MAXPLAYERS + 1];
 bool	ga_bPlayerPickSquad[MAXPLAYERS + 1];
 bool	ga_bIsMedic[MAXPLAYERS + 1];
@@ -587,7 +593,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & GPT/Codex",
 	description = "Adds the ability to revive with the Medic class and a health kit.",
-	version = "1.3.30",
+	version = "1.3.31",
 	url = ""
 };
 
@@ -665,6 +671,43 @@ public void OnPluginStart() {
 	PrepSDKCall_SetFromConf(g_hGameConfig, SDKConf_Signature, "ForceRespawn");
 	if ((g_hForceRespawn = EndPrepSDKCall()) == INVALID_HANDLE)
 		SetFailState("Fatal Error: Unable to find signature for \"ForceRespawn\"!");
+
+	GameData stanceGameData = LoadGameConfigFile("insurgency-bm.games");
+	if (stanceGameData == null)
+		SetFailState("Fatal Error: Missing File \"insurgency-bm.games\" for native revive stance!");
+
+	g_iPlayerSharedStateOffset = stanceGameData.GetOffset("CINSPlayer::SharedState");
+	if (g_iPlayerSharedStateOffset < 0) {
+		delete stanceGameData;
+		SetFailState("Fatal Error: Missing CINSPlayer::SharedState offset in insurgency-bm.games!");
+	}
+
+	StartPrepSDKCall(SDKCall_Raw);
+	if (!PrepSDKCall_SetFromConf(stanceGameData, SDKConf_Signature, "CINSPlayerShared::SetCurrentStance")) {
+		delete stanceGameData;
+		SetFailState("Fatal Error: Missing CINSPlayerShared::SetCurrentStance signature in insurgency-bm.games!");
+	}
+	PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);
+	PrepSDKCall_AddParameter(SDKType_Float, SDKPass_Plain);
+	PrepSDKCall_AddParameter(SDKType_Float, SDKPass_Plain);
+	g_hSetCurrentStance = EndPrepSDKCall();
+
+	if (g_hSetCurrentStance == null)
+	{
+		delete stanceGameData;
+		SetFailState("Fatal Error: Unable to prepare CINSPlayerShared::SetCurrentStance!");
+	}
+
+	g_hPlayerSharedSpawnDetour = new DynamicDetour(Address_Null, CallConv_THISCALL, ReturnType_Void, ThisPointer_CBaseEntity);
+	if (!g_hPlayerSharedSpawnDetour.SetFromConf(stanceGameData, SDKConf_Signature, "CINSPlayer::SharedSpawn")) {
+		delete stanceGameData;
+		SetFailState("Fatal Error: Missing CINSPlayer::SharedSpawn signature in insurgency-bm.games!");
+	}
+	if (!g_hPlayerSharedSpawnDetour.Enable(Hook_Post, Detour_PlayerSharedSpawn_Post)) {
+		delete stanceGameData;
+		SetFailState("Fatal Error: Unable to enable CINSPlayer::SharedSpawn detour!");
+	}
+	delete stanceGameData;
 
 	SetupConVars();
 	g_hAutoThanksCookie = RegClientCookie("medic_autoty", "Enable automatic team-chat thanks after being revived", CookieAccess_Private);
@@ -753,8 +796,10 @@ Action Timer_MapStart(Handle timer) {
 public void OnMapEnd() {
 	FlushAllMedicStats(false);
 	CleanupAllBleedParticles();
-	for (int client = 1; client <= MaxClients; client++)
+	for (int client = 1; client <= MaxClients; client++) {
 		ResetBleedoutClient(client, false);
+		ga_bReviveSpawnProne[client] = false;
+	}
 	g_bMapInit = false;
 	g_bRoundActive = false;
 	g_bReviveActive = false;
@@ -773,6 +818,11 @@ public void OnPluginEnd() {
 
 	for (int client = 1; client <= MaxClients; client++)
 		RemoveRagdoll(client);
+
+	if (g_hPlayerSharedSpawnDetour != null)
+		g_hPlayerSharedSpawnDetour.Disable(Hook_Post, Detour_PlayerSharedSpawn_Post);
+	delete g_hPlayerSharedSpawnDetour;
+	delete g_hSetCurrentStance;
 }
 
 public void OnEntityDestroyed(int entity) {
@@ -853,6 +903,20 @@ public Action Event_Spawn(Event event, const char[] name, bool dontBroadcast) {
 	ga_iTimeReviveCheck[client] = -1;
 	CreateTimer(0.5, Timer_RebuildMedicState, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
 	return Plugin_Continue;
+}
+
+public MRESReturn Detour_PlayerSharedSpawn_Post(int client) {
+	if (client < 1 || client > MaxClients || !ga_bReviveSpawnProne[client])
+		return MRES_Ignored;
+
+	ga_bReviveSpawnProne[client] = false;
+	if (!IsClientInGame(client) || g_hSetCurrentStance == null)
+		return MRES_Ignored;
+
+	Address sharedState = GetEntityAddress(client) + view_as<Address>(g_iPlayerSharedStateOffset);
+	SetEntProp(client, Prop_Send, "m_iDesiredStance", INS_STANCE_PRONE);
+	SDKCall(g_hSetCurrentStance, sharedState, INS_STANCE_PRONE, 0.0, GetGameTime());
+	return MRES_Ignored;
 }
 
 public Action Event_PlayerConnect(Event event, const char[] name, bool dontBroadcast) {
@@ -2472,8 +2536,9 @@ void RespawnPlayerRevive(int client) {	// Revive player
 	if (!IsClientInGame(client)) return;
 	if (IsPlayerAlive(client) || !g_bRoundActive) return;
 
-	SDKCall(g_hForceRespawn, client);	// Call forcerespawn fucntion
-	SetEntProp(client, Prop_Send, "m_iDesiredStance", 2);	//spawn player in prone position
+	ga_bReviveSpawnProne[client] = true;
+	SDKCall(g_hForceRespawn, client);	// Call forcerespawn function
+	ga_bReviveSpawnProne[client] = false;
 
 	int iHealth = GetClientHealth(client);
 	if (ga_bRevivedByMedic[client]) {
