@@ -4,7 +4,7 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PL_VERSION "0.4"
+#define PL_VERSION "0.5"
 #define GAMEDATA_FILE "insurgency-bm.games"
 #define PURCHASE_SIZE 0x38
 #define PURCHASES_OFFSET 0x34
@@ -136,7 +136,7 @@ void Frame_RandomiseBotExplosives(any data) {
 
 	char weaponClass[32];
 	GetExplosiveWeaponClass(client, choice, weaponClass, sizeof(weaponClass));
-	GivePlayerItem(client, weaponClass);
+	GiveExplosive(client, weaponClass);
 }
 
 public Action Command_DestroyExplosives(int client, int args) {
@@ -258,6 +258,16 @@ void GetExplosiveWeaponClass(int client, ExplosiveChoice choice, char[] weaponCl
 		case Explosive_RPG:
 			strcopy(weaponClass, maxLength, "weapon_rpg7");
 	}
+}
+
+void GiveExplosive(int client, const char[] weaponClass) {
+	int weapon = GivePlayerItem(client, weaponClass);
+	if (weapon <= MaxClients || !IsValidEntity(weapon))
+		return;
+
+	int ammoType = GetEntProp(weapon, Prop_Data, "m_iPrimaryAmmoType");
+	if (ammoType >= 0)
+		SetEntProp(client, Prop_Send, "m_iAmmo", 1, _, ammoType);
 }
 
 int DestroyExplosives(int client, int &removedPurchases) {
