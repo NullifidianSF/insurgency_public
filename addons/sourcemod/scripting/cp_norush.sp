@@ -3,11 +3,9 @@
 
 #include <sourcemod>
 #include <sdktools>
-#include <sdkhooks>
+#include <dhooks>
 
-#define TEAM_SPECTATOR 1
 #define TEAM_SECURITY 2
-#define TEAM_INSURGENT 3
 
 #define MAXENTITIES 2048
 
@@ -20,27 +18,23 @@ static int  g_iObjResEntity = -1;
 static char g_sObjResNetClass[32];
 
 int g_iNCP;
-int g_iBlockedCpTimes = 0;
-int g_iBlockcountdown = 0;
-int g_iAntiRushTimer = 0;
-int g_iDisabledCZ = 0;
 int g_iHookedCZ = 0;
-int g_iAliveSecPlayers= 0;
 int g_iActivePoint = 0;
-int g_iRushBlockTime;
 
 float g_fRushPercent;
-bool ga_bPlayerAlive[MAXPLAYERS + 1] = {false, ...};
+bool g_bCapturePaused;
 bool g_bIsLateLoad;
 
-ConVar g_cvRushBlockTime;
 ConVar g_cvRushPercent;
+
+GameData g_hGameData = null;
+DynamicDetour g_hAdjustCaptureSpeedDetour = null;
 
 public Plugin myinfo = {
 	name = "cp_norush",
 	author = "Nullifidian",
-	description = "Disable CP if low player cap",
-	version = "2.1",
+	description = "Pause CP capture progress when too few players are capturing",
+	version = "2.5",
 	url = ""
 };
 
@@ -50,24 +44,18 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 }
 
 public void OnPluginStart() {
-	g_cvRushBlockTime = CreateConVar("sm_rushblocktime", "15.0",
-		"For how long to disable CP objective when trying to cap CP with low number of players",
-		_, true, 0.0, true, 90.0);
-	g_iRushBlockTime = g_cvRushBlockTime.IntValue;
-	g_cvRushBlockTime.AddChangeHook(OnConVarChanged);
-
 	g_cvRushPercent = CreateConVar("sm_rushpercent", "0.5",
-		"Percent (rounded to nearest) of alive players need to be on a CP to cap",
+		"Percent (rounded down) of alive players needed on a CP to continue capturing",
 		_, true, 0.0, true, 1.0);
 	g_fRushPercent = g_cvRushPercent.FloatValue;
 	g_cvRushPercent.AddChangeHook(OnConVarChanged);
 
-	HookEvent("player_spawn", Event_PlayerSpawn);
-	HookEvent("player_death", Event_PlayerDeath);
 	HookEvent("round_start", Event_RoundStart, EventHookMode_PostNoCopy);
 	HookEvent("round_end", Event_RoundEnd);
 	HookEvent("object_destroyed", ObjEvents_NoCopy, EventHookMode_PostNoCopy);
 	HookEvent("controlpoint_captured", ObjEvents_NoCopy, EventHookMode_PostNoCopy);
+
+	InitialiseAdjustCaptureSpeedDetour();
 
 	char cfgName[PLATFORM_MAX_PATH];
 	GetPluginFilename(INVALID_HANDLE, cfgName, sizeof cfgName);
@@ -78,7 +66,7 @@ public void OnPluginStart() {
 public void OnMapStart() {
 	g_iHookedCZ = 0;
 	g_iActivePoint = 0;
-	for (int i = 1; i <= MaxClients; i++) ga_bPlayerAlive[i] = false;
+	g_bCapturePaused = false;
 	for (int i = 0; i < MAX_CONTROLPOINTS; i++) {
 		ga_iCPCZent[i] = -1;
 		ga_sCPname[i][0] = '\0';
@@ -101,44 +89,16 @@ Action Timer_MapStart(Handle timer) {
 }
 
 public Action Event_RoundStart(Event event, char[] name, bool dontBroadcast) {
-	g_iBlockedCpTimes = 0;
+	g_bCapturePaused = false;
 	UnhookCZ();
 	RequestFrame(Frame_SetActivePointAndHook);
 	return Plugin_Continue;
 }
 
 public Action Event_RoundEnd(Event event, char[] name, bool dontBroadcast) {
-	for (int i = 1; i <= MaxClients; i++) ga_bPlayerAlive[i] = false;
-	g_iAliveSecPlayers = 0;
+	g_bCapturePaused = false;
 	UnhookCZ();
 	return Plugin_Continue;
-}
-
-public Action Event_PlayerSpawn(Event event, char[] name, bool dontBroadcast) {
-	int client = GetClientOfUserId(GetEventInt(event, "userid"));
-	if (client && !IsFakeClient(client) && IsPlayerAlive(client)) {
-		if (g_iAntiRushTimer == g_iHookedCZ && !ga_bPlayerAlive[client]) g_iAliveSecPlayers++;
-		ga_bPlayerAlive[client] = true;
-	}
-	return Plugin_Continue;
-}
-
-public Action Event_PlayerDeath(Event event, char[] name, bool dontBroadcast) {
-	int victim = GetClientOfUserId(GetEventInt(event, "userid"));
-	if (victim && !IsFakeClient(victim)) {
-		if (g_iAntiRushTimer == g_iHookedCZ && ga_bPlayerAlive[victim]) {
-			ga_bPlayerAlive[victim] = false;
-			g_iAliveSecPlayers--;
-		}
-	}
-	return Plugin_Continue;
-}
-
-public void OnClientDisconnect(int client) {
-	if (client && g_iAntiRushTimer == g_iHookedCZ && ga_bPlayerAlive[client]) {
-		ga_bPlayerAlive[client] = false;
-		g_iAliveSecPlayers--;
-	}
 }
 
 void FindCPpos() {
@@ -186,9 +146,7 @@ void MatchByExactPosition() {
 }
 
 public void ObjEvents_NoCopy(Event event, char[] name, bool dontBroadcast) {
-	g_iBlockedCpTimes = 0;
-	g_iDisabledCZ = 0;
-	g_iBlockcountdown = 0;
+	g_bCapturePaused = false;
 	RequestFrame(Frame_SetActivePointAndHook);
 }
 
@@ -223,103 +181,6 @@ void SetActivePointAndHook() {
 	UnhookCZ();
 	g_iHookedCZ = ent;
 	g_iActivePoint = target;
-	SDKHook(ent, SDKHook_StartTouch, Hook_StartTouchCZ);
-}
-
-bool ToggleObjective(int ent, bool enable, bool announce = true) {
-	char input[8];
-
-	if (!enable) {
-		strcopy(input, sizeof input, "Disable");
-	} else {
-		strcopy(input, sizeof input, "Enable");
-	}
-
-	if (!IsValidEntity(ent) || !AcceptEntityInput(ent, input)) {
-		LogError("[cp_norush] Failed to %s capture zone entity %d.", input, ent);
-		return false;
-	}
-
-	if (!enable) {
-		g_iDisabledCZ = ent;
-	} else {
-		if (g_iDisabledCZ == ent) g_iDisabledCZ = 0;
-		if (announce) PrintToChatAll("\x070088cc[BM]\x01 Control point enabled");
-	}
-
-	return true;
-}
-
-void RestoreDisabledObjective() {
-	if (g_iDisabledCZ > 0) {
-		int ent = g_iDisabledCZ;
-		if (!IsValidEntity(ent)) {
-			g_iDisabledCZ = 0;
-		} else {
-			ToggleObjective(ent, true, false);
-		}
-	}
-
-	g_iBlockcountdown = 0;
-}
-
-public Action Hook_StartTouchCZ(int entity, int client) {
-	if (client > 0 && client <= MaxClients && !IsFakeClient(client)) {
-		if (g_iAntiRushTimer != entity) {
-			g_iAntiRushTimer = entity;
-			CreateTimer(1.0, Timer_AntiCpRush, EntIndexToEntRef(entity), TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
-			g_iAliveSecPlayers = Team_CountAlivePlayers(TEAM_SECURITY, true);
-		}
-	}
-	return Plugin_Continue;
-}
-
-Action Timer_AntiCpRush(Handle timer, int entref) {
-	int ent = EntRefToEntIndex(entref);
-	if (ent == INVALID_ENT_REFERENCE || !IsValidEntity(ent) || ent != g_iHookedCZ || ent != g_iAntiRushTimer) return Plugin_Stop;
-
-	if (g_iBlockcountdown) {
-		g_iBlockcountdown--;
-		if (!g_iBlockcountdown && !ToggleObjective(ent, true)) g_iBlockcountdown = 1;
-		return Plugin_Continue;
-	}
-
-	static int iCpMsgcooldowntime = 0;
-	if (iCpMsgcooldowntime > 0)
-		iCpMsgcooldowntime--;
-
-	float fCapPercent = ObjectiveResource_GetPropFloat("m_flLazyCapPerc", 4, g_iActivePoint);
-
-	if (g_iRushBlockTime && g_iBlockedCpTimes < 5 && fCapPercent >= 0.75 && fCapPercent < 1.0) {
-		int iPlayersOnCp = ObjectiveResource_GetProp("m_nInsurgentCount", 4, g_iActivePoint);
-		int iNeedPlayers = RoundToFloor(g_fRushPercent * g_iAliveSecPlayers);
-
-		if (iPlayersOnCp > 0 && iPlayersOnCp < iNeedPlayers && g_iAliveSecPlayers >= iNeedPlayers) {
-			if (ToggleObjective(ent, false)) {
-				PrintToChatAll("\x070088cc[BM]\x01 Control point locked for \x070088cc%d\x01s due to low player cap  (\x070088cc%d\x01/\x070088cc%d\x01)",
-							g_iRushBlockTime, iPlayersOnCp, iNeedPlayers);
-				g_iBlockedCpTimes++;
-				g_iBlockcountdown = g_iRushBlockTime;
-				return Plugin_Continue;
-			}
-		}
-	}
-
-	if (!iCpMsgcooldowntime && fCapPercent > 0.02 && fCapPercent < 1.0) {
-		int iCapPercent  = RoundFloat(fCapPercent * 100.0);
-		int iNeedPlayers = RoundToFloor(g_fRushPercent * g_iAliveSecPlayers);
-
-		if (iNeedPlayers && g_iRushBlockTime) {
-			int iPlayersOnCp = ObjectiveResource_GetProp("m_nInsurgentCount", 4, g_iActivePoint);
-			PrintToChatAll("\x070088cc[BM]\x01 Capture progress at \x070088cc%d\x01%% (\x070088cc%d\x01/\x070088cc%d\x01)",
-						iCapPercent, iPlayersOnCp, iNeedPlayers);
-		}
-		else PrintToChatAll("\x070088cc[BM]\x01 Capture progress at \x070088cc%d\x01%%", iCapPercent);
-
-		iCpMsgcooldowntime = 10;
-	}
-
-	return Plugin_Continue;
 }
 
 bool ObjectiveResource_GetPropVector(const char[] prop, float vec[3], int element = 0) {
@@ -362,15 +223,6 @@ float ObjectiveResource_GetPropFloat(const char[] prop, int size = 4, int elemen
 	return -1.0;
 }
 
-int Team_CountAlivePlayers(int team, bool ignorebots) {
-	int count = 0;
-	for (int i = 1; i <= MaxClients; i++) {
-		if (!IsClientInGame(i) || GetClientTeam(i) != team || !IsPlayerAlive(i) || ignorebots && IsFakeClient(i)) continue;
-		count++;
-	}
-	return count;
-}
-
 bool InCounterAttack() { return view_as<bool>(GameRules_GetProp("m_bCounterAttack")); }
 
 bool IsValidCZIndex(int idx) {
@@ -378,22 +230,90 @@ bool IsValidCZIndex(int idx) {
 }
 
 void UnhookCZ() {
-	RestoreDisabledObjective();
-
-	if (g_iHookedCZ > 0) {
-		SDKUnhook(g_iHookedCZ, SDKHook_StartTouch, Hook_StartTouchCZ);
-		g_iHookedCZ = 0;
-	}
-	g_iAntiRushTimer = 0;
+	g_iHookedCZ = 0;
+	g_bCapturePaused = false;
 }
 
 public void OnMapEnd() { UnhookCZ(); }
 
 void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
-	if (convar == g_cvRushBlockTime) g_iRushBlockTime = g_cvRushBlockTime.IntValue;
-	else if (convar == g_cvRushPercent) g_fRushPercent = g_cvRushPercent.FloatValue;
+	if (convar == g_cvRushPercent) g_fRushPercent = g_cvRushPercent.FloatValue;
 }
 
 public void OnPluginEnd() {
-	RestoreDisabledObjective();
+	if (g_hAdjustCaptureSpeedDetour != null)
+		g_hAdjustCaptureSpeedDetour.Disable(Hook_Pre, Detour_AdjustCaptureSpeed_Pre);
+
+	delete g_hAdjustCaptureSpeedDetour;
+	delete g_hGameData;
+}
+
+void InitialiseAdjustCaptureSpeedDetour() {
+	if (GetFeatureStatus(FeatureType_Native, "DynamicDetour.DynamicDetour") != FeatureStatus_Available
+		|| GetFeatureStatus(FeatureType_Native, "DHookSetup.SetFromConf") != FeatureStatus_Available
+		|| GetFeatureStatus(FeatureType_Native, "DHookSetup.AddParam") != FeatureStatus_Available)
+		SetFailState("[cp_norush] DHooks with DynamicDetour support is required.");
+
+	g_hGameData = LoadGameConfigFile("insurgency-bm.games");
+	if (g_hGameData == null)
+		SetFailState("[cp_norush] Missing gamedata: addons/sourcemod/gamedata/insurgency-bm.games.txt");
+
+	g_hAdjustCaptureSpeedDetour = new DynamicDetour(Address_Null, CallConv_THISCALL, ReturnType_Float, ThisPointer_Address);
+	if (g_hAdjustCaptureSpeedDetour == null)
+		SetFailState("[cp_norush] Could not create the CINSRules_Checkpoint::AdjustCaptureSpeed detour.");
+
+	g_hAdjustCaptureSpeedDetour.AddParam(HookParamType_ObjectPtr);
+	g_hAdjustCaptureSpeedDetour.AddParam(HookParamType_Int);
+	g_hAdjustCaptureSpeedDetour.AddParam(HookParamType_Int);
+	g_hAdjustCaptureSpeedDetour.AddParam(HookParamType_Int);
+	g_hAdjustCaptureSpeedDetour.AddParam(HookParamType_Int);
+
+	if (!g_hAdjustCaptureSpeedDetour.SetFromConf(g_hGameData, SDKConf_Signature, "CINSRules_Checkpoint::AdjustCaptureSpeed")
+		|| !g_hAdjustCaptureSpeedDetour.Enable(Hook_Pre, Detour_AdjustCaptureSpeed_Pre))
+		SetFailState("[cp_norush] Could not enable the CINSRules_Checkpoint::AdjustCaptureSpeed detour.");
+}
+
+public MRESReturn Detour_AdjustCaptureSpeed_Pre(Address pThis, DHookReturn hReturn, DHookParam hParams) {
+	if (g_iHookedCZ <= MaxClients || !IsValidEntity(g_iHookedCZ))
+		return MRES_Ignored;
+
+	Address zoneAddress = hParams.GetAddress(1);
+	Address hookedZoneAddress = GetEntityAddress(g_iHookedCZ);
+	if (zoneAddress == Address_Null || zoneAddress != hookedZoneAddress)
+		return MRES_Ignored;
+
+	int team = hParams.Get(2);
+	if (team != TEAM_SECURITY)
+		return MRES_Ignored;
+
+	float capturePercent = ObjectiveResource_GetPropFloat("m_flLazyCapPerc", 4, g_iActivePoint);
+	if (capturePercent < 0.75 || capturePercent >= 1.0) {
+		g_bCapturePaused = false;
+		return MRES_Ignored;
+	}
+
+	int playersOnPoint = ObjectiveResource_GetProp("m_nInsurgentCount", 4, g_iActivePoint);
+	int alivePlayers = CountAliveSecurityPlayers();
+	int requiredPlayers = RoundToFloor(g_fRushPercent * alivePlayers);
+	if (playersOnPoint <= 0 || playersOnPoint >= requiredPlayers || alivePlayers < requiredPlayers) {
+		g_bCapturePaused = false;
+		return MRES_Ignored;
+	}
+
+	if (!g_bCapturePaused) {
+		PrintToChatAll("\x070088cc[BM]\x01 Capture paused due to low player cap (\x070088cc%d\x01/\x070088cc%d\x01)",
+			playersOnPoint, requiredPlayers);
+		g_bCapturePaused = true;
+	}
+	hReturn.Value = 0.0;
+	return MRES_Supercede;
+}
+
+int CountAliveSecurityPlayers() {
+	int count = 0;
+	for (int client = 1; client <= MaxClients; client++)
+		if (IsClientInGame(client) && !IsFakeClient(client) && IsPlayerAlive(client) && GetClientTeam(client) == TEAM_SECURITY)
+			count++;
+
+	return count;
 }
