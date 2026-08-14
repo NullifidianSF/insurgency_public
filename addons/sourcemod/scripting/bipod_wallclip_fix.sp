@@ -97,18 +97,15 @@ static void ResetClientState(int client) {
 }
 
 public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon, int &subtype, int &cmdnum, int &tickcount, int &seed, int mouse[2]) {
-	if (!IsHumanAlive(client)) {
+	if (!IsHumanAlive(client))
 		return Plugin_Continue;
-	}
 
-	if (GetEntProp(client, Prop_Send, "m_iCurrentStance") != STANCE_PRONE) {
+	if (GetEntProp(client, Prop_Send, "m_iCurrentStance") != STANCE_PRONE)
 		return Plugin_Continue;
-	}
 
 	int iWeapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-	if (iWeapon <= MaxClients || !IsValidEntity(iWeapon)) {
+	if (iWeapon <= MaxClients || !IsValidEntity(iWeapon))
 		return Plugin_Continue;
-	}
 
 	if (ga_iBipodWeaponRef[client] != EntIndexToEntRef(iWeapon))
 		CacheWeaponBipodCapability(client);
@@ -117,19 +114,16 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 		return Plugin_Continue;
 
 	int iPlayerFlags = GetEntProp(client, Prop_Send, "m_iPlayerFlags");
-	if ((iPlayerFlags & PF_DEPLOY_BIPOD) == 0) {
+	if ((iPlayerFlags & PF_DEPLOY_BIPOD) == 0)
 		return Plugin_Continue;
-	}
 
 	float now = GetGameTime();
-	if (now < ga_fPlayerNextBipodScanAt[client]) {
+	if (now < ga_fPlayerNextBipodScanAt[client])
 		return Plugin_Continue;
-	}
 	ga_fPlayerNextBipodScanAt[client] = now + BIPOD_SCAN_INTERVAL;
 
-	if (!IsWallTooClose(client, angles) || (buttons & INS_SPECIAL1) != 0) {
+	if (!IsWallTooClose(client, angles) || (buttons & INS_SPECIAL1) != 0)
 		return Plugin_Continue;
-	}
 
 	buttons |= INS_SPECIAL1;
 	return Plugin_Changed;
@@ -159,9 +153,8 @@ static bool IsWallTooClose(int client, const float angles[3]) {
 
 	TR_TraceRayFilter(origin, end, MASK_PLAYERSOLID, RayType_EndPoint, Point_Trace_Filter, client);
 
-	if (!TR_DidHit()) {
+	if (!TR_DidHit())
 		return false;
-	}
 
 	float normal[3];
 	TR_GetPlaneNormal(INVALID_HANDLE, normal);
