@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <dhooks>
 
-#define PL_VERSION "4.26"
+#define PL_VERSION "4.27"
 #define CONFIG_FILE "configs/weapon_vote_loadout_weapons.cfg"
 #define THEATER_ITEMS_FILE "configs/weapon_vote_theateritems.txt"
 #define GENERATED_CONFIG_FILE "configs/weapon_vote_loadout_weapons.generated.cfg"
@@ -251,7 +251,7 @@ public void OnPluginStart() {
 	RegConsoleCmd("sm_weaponvote", Command_WeaponVote,
 		"Open the weapon-vote loadout menu.");
 
-	RegAdminCmd("sm_weaponvote_end", Command_EndWeaponVote, ADMFLAG_ROOT,
+	RegAdminCmd("sm_weaponvote_end", Command_EndWeaponVote, ADMFLAG_BAN,
 		"End the active weapon loadout restriction.");
 
 	RegAdminCmd("sm_weaponvote_reload", Command_ReloadWeaponVote, ADMFLAG_ROOT,
@@ -1031,16 +1031,20 @@ public int MenuHandler_WeaponVote(Menu menu, MenuAction action, int client, int 
 		if (passed) {
 			if (g_bDisableVote) {
 				EndWeaponMode();
-				PrintToChatAll("\x04[Weapon Vote]\x01 Vote passed. Weapon loadout restriction ended.");
-				LogWeaponVote("Disable vote passed for %s: %d yes, %d no.", loadout, g_iVotesYes, g_iVotesNo);
+				PrintToChatAll("\x04[Weapon Vote]\x01 Disable vote passed: %d Yes, %d No. Needed %d Yes from %d votes. Weapon loadout restriction ended.", g_iVotesYes, g_iVotesNo, requiredYes, votesCast);
+				LogWeaponVote("Disable vote passed for %s: %d yes, %d no. Needed %d yes from %d votes.", loadout, g_iVotesYes, g_iVotesNo, requiredYes, votesCast);
 				PlayVoteSound(SOUND_VOTE_PASSED);
 			} else {
-				LogWeaponVote("Loadout vote passed for %s: %d yes, %d no.", loadout, g_iVotesYes, g_iVotesNo);
-				EnableWeaponMode();
+				LogWeaponVote("Loadout vote passed for %s: %d yes, %d no. Needed %d yes from %d votes.", loadout, g_iVotesYes, g_iVotesNo, requiredYes, votesCast);
+				EnableWeaponMode(votesCast, requiredYes);
 			}
 		} else {
-			PrintToChatAll("\x04[Weapon Vote]\x01 %s vote failed: %d yes, %d no.", g_bDisableVote ? "Disable" : "Loadout", g_iVotesYes, g_iVotesNo);
-			LogWeaponVote("%s vote failed for %s: %d yes, %d no.", g_bDisableVote ? "Disable" : "Loadout", loadout, g_iVotesYes, g_iVotesNo);
+			if (votesCast < g_cvMinVoters.IntValue)
+				PrintToChatAll("\x04[Weapon Vote]\x01 %s vote failed: only %d/%d votes were cast (%d Yes, %d No).", g_bDisableVote ? "Disable" : "Loadout", votesCast, g_cvMinVoters.IntValue, g_iVotesYes, g_iVotesNo);
+			else
+				PrintToChatAll("\x04[Weapon Vote]\x01 %s vote failed: %d Yes, %d No. Needed %d Yes from %d votes.", g_bDisableVote ? "Disable" : "Loadout", g_iVotesYes, g_iVotesNo, requiredYes, votesCast);
+
+			LogWeaponVote("%s vote failed for %s: %d yes, %d no. Needed %d yes from %d votes; minimum voters %d.", g_bDisableVote ? "Disable" : "Loadout", loadout, g_iVotesYes, g_iVotesNo, requiredYes, votesCast, g_cvMinVoters.IntValue);
 			PlayVoteSound(SOUND_VOTE_FAILED);
 		}
 		g_bDisableVote = false;
@@ -1055,14 +1059,14 @@ public int MenuHandler_WeaponVote(Menu menu, MenuAction action, int client, int 
 	return 0;
 }
 
-void EnableWeaponMode() {
+void EnableWeaponMode(int votesCast, int requiredYes) {
 	g_bModeActive = true;
 	CopyPendingLoadoutToActive();
 	g_iRoundsRemaining = g_cvRounds.IntValue;
 
 	char loadout[160];
 	BuildLoadoutDescription(g_sActiveWeaponNames[WeaponSlot_Primary], g_sActiveWeaponNames[WeaponSlot_Secondary], loadout, sizeof(loadout));
-	PrintToChatAll("\x04[Weapon Vote]\x01 Vote passed. Loadout: %s.", loadout);
+	PrintToChatAll("\x04[Weapon Vote]\x01 Loadout vote passed: %d Yes, %d No. Needed %d Yes from %d votes. Loadout: %s.", g_iVotesYes, g_iVotesNo, requiredYes, votesCast, loadout);
 	PlayVoteSound(SOUND_VOTE_PASSED);
 	LogMessage("[Weapon Vote] Enabled %s for %d round(s).", loadout, g_iRoundsRemaining);
 
