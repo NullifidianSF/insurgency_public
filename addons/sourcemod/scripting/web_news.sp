@@ -12,7 +12,7 @@
 
 #define WEB_NEWS_VERSION "1.0.16"
 // Edit this to the folder containing your news files. It must end with a slash.
-#define WEB_NEWS_URL "https://botmassacre.com/news/"
+#define WEB_NEWS_URL "https://your-site.example/news/"
 // Edit these file names if your web-server news files use different names.
 #define WEB_NEWS_MEDIC_FILE "news.txt"
 #define WEB_NEWS_NON_MEDIC_FILE "news_nomedic.txt"
