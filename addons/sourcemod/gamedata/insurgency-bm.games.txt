@@ -294,6 +294,15 @@
 				"linux"		"@_ZN16CPlayerInventory12RefundWeaponEi"
 			}
 
+			// Raw CPlayerInventory SDKCall: void (). Refunds every native weapon and gear purchase except melee.
+			// Pass the embedded inventory address from CINSPlayer::PlayerInventory as the this pointer.
+			"CPlayerInventory::RefundAll"
+			{
+				"library"	"server"
+				"windows"	"\x53\x8B\xD9\x56\x57\x8B\x73\x40\x4E\x78\x2D\x8D\x3C\xF5\x00\x00\x00\x00\x2B\xFE\xC1\xE7\x03"
+				"linux"		"@_ZN16CPlayerInventory9RefundAllEv"
+			}
+
 			// Player SDKCall: void (CINSPlayer *recipient). Transfers the player's weapons, ammo, magazines, gear, inventory template, and active weapon to recipient.
 			// Recipient is a raw native player address, not a client index. Designed for native possession and handoff paths.
 			"CINSPlayer::TransferInventory"
@@ -478,7 +487,8 @@
 			}
 
 			// Static SDKCall: CBaseEntity * (CBasePlayer *owner, const char *classname,
-			// const Vector &origin, const Vector &velocity, const Vector &angularVelocity, float fuseTime).
+			// const Vector &origin, const Vector &velocity, const Vector &angularVelocity, float configureValue).
+			// The final value is forwarded to CGrenadeThrownBase::Configure(float); it is not the explosion fuse time.
 			"CGrenadeThrownBase::CreateThrownGrenade"
 			{
 				"library"	"server"
