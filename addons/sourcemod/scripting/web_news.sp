@@ -1,5 +1,5 @@
 /**
- * Web News v1.0.16
+ * Web News v1.0.19
  * Downloads public and staff news once per map and presents it through !news.
  * Requires the SteamWorks extension.
  */
@@ -8,11 +8,12 @@
 #pragma newdecls required
 
 #include <sourcemod>
+#include <clientprefs>
 #include <SteamWorks>
 
-#define WEB_NEWS_VERSION "1.0.16"
+#define WEB_NEWS_VERSION "1.0.19"
 // Edit this to the folder containing your news files. It must end with a slash.
-#define WEB_NEWS_URL "https://your-site.example/news/"
+#define WEB_NEWS_URL "https://botmassacre.com/news/"
 // Edit these file names if your web-server news files use different names.
 #define WEB_NEWS_MEDIC_FILE "news.txt"
 #define WEB_NEWS_NON_MEDIC_FILE "news_nomedic.txt"
@@ -28,6 +29,9 @@
 #define NEWS_RETRY_DELAY 600.0
 #define NEWS_ADVERT_MIN_DELAY 900.0
 #define NEWS_ADVERT_MAX_DELAY 2700.0
+#define NEWS_DATE_LENGTH 11
+#define NEWS_ANNOUNCEMENT_STATE_FILE "data/web_news_last_announcement.txt"
+#define NEWS_UNREAD_DAYS 7
 
 enum NewsType
 {
@@ -48,6 +52,8 @@ bool g_bAdminInFlight;
 bool g_bPublicRetryScheduled;
 bool g_bAdminRetryScheduled;
 bool g_bFetchedThisMap;
+bool g_bLatestPublicNewsIsRecent;
+bool g_bLatestAdminNewsIsRecent;
 
 Handle g_hPublicRetry;
 Handle g_hAdminRetry;
@@ -55,6 +61,13 @@ Handle g_hAdminRetry;
 NewsType g_ViewType[MAXPLAYERS + 1];
 int g_iViewPage[MAXPLAYERS + 1];
 bool g_bHasSpawned[MAXPLAYERS + 1];
+bool g_bClientUnreadNewsNotified[MAXPLAYERS + 1];
+bool g_bClientUnreadAdminNewsNotified[MAXPLAYERS + 1];
+char g_sLatestPublicNewsDate[NEWS_DATE_LENGTH];
+char g_sLatestAdminNewsDate[NEWS_DATE_LENGTH];
+char g_sLastAnnouncedNewsDate[NEWS_DATE_LENGTH];
+Cookie g_hLastReadNewsCookie;
+Cookie g_hLastReadAdminNewsCookie;
 
 public Plugin myinfo =
 {
@@ -76,6 +89,9 @@ public void OnPluginStart()
 	g_AdminLines = new ArrayList(NEWS_DISPLAY_LINE_SIZE);
 	g_PublicPageStarts = new ArrayList();
 	g_AdminPageStarts = new ArrayList();
+	g_hLastReadNewsCookie = RegClientCookie("web_news_last_read_date", "Last public-news date opened by this player.", CookieAccess_Private);
+	g_hLastReadAdminNewsCookie = RegClientCookie("web_news_last_read_admin_date", "Last admin-news date opened by this player.", CookieAccess_Private);
+	LoadLastNewsAnnouncement();
 
 	for (int client = 1; client <= MaxClients; client++)
 	{
@@ -142,18 +158,35 @@ static void ReloadNews()
 public void OnClientPutInServer(int client)
 {
 	g_bHasSpawned[client] = false;
+	g_bClientUnreadNewsNotified[client] = false;
+	g_bClientUnreadAdminNewsNotified[client] = false;
 }
 
 public void OnClientDisconnect(int client)
 {
 	g_bHasSpawned[client] = false;
+	g_bClientUnreadNewsNotified[client] = false;
+	g_bClientUnreadAdminNewsNotified[client] = false;
+}
+
+public void OnClientCookiesCached(int client)
+{
+	if (IsClientInGame(client) && !IsFakeClient(client) && g_bHasSpawned[client])
+	{
+		NotifyClientOfUnreadNews(client);
+		NotifyClientOfUnreadAdminNews(client);
+	}
 }
 
 public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	if (client >= 1 && client <= MaxClients && IsClientInGame(client) && !IsFakeClient(client))
+	{
 		g_bHasSpawned[client] = true;
+		NotifyClientOfUnreadNews(client);
+		NotifyClientOfUnreadAdminNews(client);
+	}
 }
 
 static void RequestAllNews()
@@ -252,6 +285,10 @@ static void ProcessNewsResponse(Handle request, NewsType type, bool failure, boo
 	BuildNewsLines(type, body);
 	SetNewsLoaded(type, true);
 	CancelNewsRetry(type);
+	if (type == News_Public)
+		UpdatePublicNewsNotifications();
+	else
+		UpdateAdminNewsNotifications();
 	PrintToServer("[Web News] %s news downloaded (%d display lines).", type == News_Public ? "Public" : "Admin", GetNewsLines(type).Length);
 	CloseHandle(request);
 }
@@ -455,6 +492,242 @@ static bool IsNewsDateLine(const char[] line)
 		&& IsCharNumeric(line[8]) && IsCharNumeric(line[9]);
 }
 
+static void UpdatePublicNewsNotifications()
+{
+	g_bLatestPublicNewsIsRecent = false;
+	g_sLatestPublicNewsDate[0] = '\0';
+
+	char latestDate[NEWS_DATE_LENGTH];
+	if (!GetFirstNewsDate(News_Public, latestDate, sizeof(latestDate)))
+		return;
+
+	strcopy(g_sLatestPublicNewsDate, sizeof(g_sLatestPublicNewsDate), latestDate);
+	if (!IsNewsDateWithinLastDays(latestDate, NEWS_UNREAD_DAYS))
+		return;
+
+	g_bLatestPublicNewsIsRecent = true;
+	if (IsNewsDateToday(latestDate) && !StrEqual(g_sLastAnnouncedNewsDate, latestDate))
+	{
+		PrintToChatAll("\x04[News]\x01 New server news is available. Type \x03/news\x01 to read it.");
+		for (int client = 1; client <= MaxClients; client++)
+		{
+			if (IsClientInGame(client) && !IsFakeClient(client))
+				g_bClientUnreadNewsNotified[client] = true;
+		}
+
+		strcopy(g_sLastAnnouncedNewsDate, sizeof(g_sLastAnnouncedNewsDate), latestDate);
+		SaveLastNewsAnnouncement();
+	}
+
+	for (int client = 1; client <= MaxClients; client++)
+	{
+		if (IsClientInGame(client) && !IsFakeClient(client))
+			NotifyClientOfUnreadNews(client);
+	}
+}
+
+static void UpdateAdminNewsNotifications()
+{
+	g_bLatestAdminNewsIsRecent = false;
+	g_sLatestAdminNewsDate[0] = '\0';
+
+	char latestDate[NEWS_DATE_LENGTH];
+	if (!GetFirstNewsDate(News_Admin, latestDate, sizeof(latestDate)))
+		return;
+
+	strcopy(g_sLatestAdminNewsDate, sizeof(g_sLatestAdminNewsDate), latestDate);
+	if (!IsNewsDateWithinLastDays(latestDate, NEWS_UNREAD_DAYS))
+		return;
+
+	g_bLatestAdminNewsIsRecent = true;
+	for (int client = 1; client <= MaxClients; client++)
+	{
+		if (IsClientInGame(client) && !IsFakeClient(client))
+			NotifyClientOfUnreadAdminNews(client);
+	}
+}
+
+static bool GetFirstNewsDate(NewsType type, char[] date, int maxLength)
+{
+	char line[NEWS_DISPLAY_LINE_SIZE];
+	ArrayList lines = GetNewsLines(type);
+	for (int i = 0; i < lines.Length; i++)
+	{
+		lines.GetString(i, line, sizeof(line));
+		if (IsNewsDateLine(line))
+		{
+			strcopy(date, maxLength, line);
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static void NotifyClientOfUnreadNews(int client)
+{
+	if (!g_bHasSpawned[client] || !g_bLatestPublicNewsIsRecent || g_bClientUnreadNewsNotified[client])
+		return;
+	if (!AreClientCookiesCached(client))
+		return;
+
+	char lastReadDate[NEWS_DATE_LENGTH];
+	GetClientCookie(client, g_hLastReadNewsCookie, lastReadDate, sizeof(lastReadDate));
+	if (!IsNewsDateNewer(g_sLatestPublicNewsDate, lastReadDate))
+		return;
+
+	PrintToChat(client, "\x04[News]\x01 New server news is available. Type \x03/news\x01 to read it.");
+	g_bClientUnreadNewsNotified[client] = true;
+}
+
+static void MarkLatestPublicNewsRead(int client)
+{
+	if (g_sLatestPublicNewsDate[0] == '\0' || !AreClientCookiesCached(client))
+		return;
+
+	SetClientCookie(client, g_hLastReadNewsCookie, g_sLatestPublicNewsDate);
+	g_bClientUnreadNewsNotified[client] = true;
+}
+
+static void NotifyClientOfUnreadAdminNews(int client)
+{
+	if (!CanReadAdminNews(client) || !g_bHasSpawned[client] || !g_bLatestAdminNewsIsRecent || g_bClientUnreadAdminNewsNotified[client])
+		return;
+	if (!AreClientCookiesCached(client))
+		return;
+
+	char lastReadDate[NEWS_DATE_LENGTH];
+	GetClientCookie(client, g_hLastReadAdminNewsCookie, lastReadDate, sizeof(lastReadDate));
+	if (!IsNewsDateNewer(g_sLatestAdminNewsDate, lastReadDate))
+		return;
+
+	PrintToChat(client, "\x04[Admin News]\x01 You have unread admin news. Type \x03/news\x01 to read it.");
+	g_bClientUnreadAdminNewsNotified[client] = true;
+}
+
+static void MarkLatestAdminNewsRead(int client)
+{
+	if (g_sLatestAdminNewsDate[0] == '\0' || !AreClientCookiesCached(client))
+		return;
+
+	SetClientCookie(client, g_hLastReadAdminNewsCookie, g_sLatestAdminNewsDate);
+	g_bClientUnreadAdminNewsNotified[client] = true;
+}
+
+static bool IsNewsDateToday(const char[] date)
+{
+	char today[NEWS_DATE_LENGTH];
+	FormatTime(today, sizeof(today), "%d/%m/%Y");
+	return StrEqual(date, today);
+}
+
+static bool IsNewsDateWithinLastDays(const char[] date, int maximumAge)
+{
+	int day;
+	int month;
+	int year;
+	if (!ParseNewsDate(date, day, month, year))
+		return false;
+
+	char today[NEWS_DATE_LENGTH];
+	FormatTime(today, sizeof(today), "%d/%m/%Y");
+	int todayDay;
+	int todayMonth;
+	int todayYear;
+	if (!ParseNewsDate(today, todayDay, todayMonth, todayYear))
+		return false;
+
+	int age = DateToDayNumber(todayDay, todayMonth, todayYear) - DateToDayNumber(day, month, year);
+	return age >= 0 && age <= maximumAge;
+}
+
+static bool IsNewsDateNewer(const char[] candidate, const char[] previous)
+{
+	int candidateDay;
+	int candidateMonth;
+	int candidateYear;
+	if (!ParseNewsDate(candidate, candidateDay, candidateMonth, candidateYear))
+		return false;
+
+	int previousDay;
+	int previousMonth;
+	int previousYear;
+	if (!ParseNewsDate(previous, previousDay, previousMonth, previousYear))
+		return true;
+
+	return DateToDayNumber(candidateDay, candidateMonth, candidateYear) > DateToDayNumber(previousDay, previousMonth, previousYear);
+}
+
+static bool ParseNewsDate(const char[] date, int &day, int &month, int &year)
+{
+	if (!IsNewsDateLine(date))
+		return false;
+
+	day = (date[0] - '0') * 10 + (date[1] - '0');
+	month = (date[3] - '0') * 10 + (date[4] - '0');
+	year = (date[6] - '0') * 1000 + (date[7] - '0') * 100 + (date[8] - '0') * 10 + (date[9] - '0');
+	return month >= 1 && month <= 12 && day >= 1 && day <= DaysInNewsMonth(month, year);
+}
+
+static int DateToDayNumber(int day, int month, int year)
+{
+	int previousYear = year - 1;
+	int total = previousYear * 365 + previousYear / 4 - previousYear / 100 + previousYear / 400;
+	for (int i = 1; i < month; i++)
+		total += DaysInNewsMonth(i, year);
+	return total + day;
+}
+
+static int DaysInNewsMonth(int month, int year)
+{
+	switch (month)
+	{
+		case 2:
+			return IsNewsLeapYear(year) ? 29 : 28;
+		case 4, 6, 9, 11:
+			return 30;
+	}
+
+	return 31;
+}
+
+static bool IsNewsLeapYear(int year)
+{
+	return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+}
+
+static void LoadLastNewsAnnouncement()
+{
+	char path[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, path, sizeof(path), NEWS_ANNOUNCEMENT_STATE_FILE);
+
+	File file = OpenFile(path, "r");
+	if (file == null)
+		return;
+
+	file.ReadLine(g_sLastAnnouncedNewsDate, sizeof(g_sLastAnnouncedNewsDate));
+	TrimString(g_sLastAnnouncedNewsDate);
+	if (!IsNewsDateLine(g_sLastAnnouncedNewsDate))
+		g_sLastAnnouncedNewsDate[0] = '\0';
+	delete file;
+}
+
+static void SaveLastNewsAnnouncement()
+{
+	char path[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, path, sizeof(path), NEWS_ANNOUNCEMENT_STATE_FILE);
+
+	File file = OpenFile(path, "w");
+	if (file == null)
+	{
+		PrintToServer("[Web News] Could not save the last news announcement date.");
+		return;
+	}
+
+	file.WriteLine("%s", g_sLastAnnouncedNewsDate);
+	delete file;
+}
+
 static bool GetNewsPageDate(ArrayList lines, int start, int end, char[] date, int maxLength, bool &continued)
 {
 	char line[NEWS_DISPLAY_LINE_SIZE];
@@ -507,9 +780,15 @@ public int MenuHandler_NewsMenu(Menu menu, MenuAction action, int client, int se
 		return 0;
 
 	if (selection == 1)
+	{
+		MarkLatestPublicNewsRead(client);
 		ShowNewsPanel(client, News_Public, 0);
+	}
 	else if (selection == 2 && CanReadAdminNews(client))
+	{
+		MarkLatestAdminNewsRead(client);
 		ShowNewsPanel(client, News_Admin, 0);
+	}
 	else if (selection == 5 && CanReloadNews(client))
 	{
 		ReloadNews();
