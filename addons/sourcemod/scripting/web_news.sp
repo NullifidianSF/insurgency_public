@@ -1,5 +1,5 @@
 /**
- * Web News v1.0.19
+ * Web News v1.0.20
  * Downloads public and staff news once per map and presents it through !news.
  * Requires the SteamWorks extension.
  */
@@ -11,7 +11,7 @@
 #include <clientprefs>
 #include <SteamWorks>
 
-#define WEB_NEWS_VERSION "1.0.19"
+#define WEB_NEWS_VERSION "1.0.20"
 // Edit this to the folder containing your news files. It must end with a slash.
 #define WEB_NEWS_URL "https://botmassacre.com/news/"
 // Edit these file names if your web-server news files use different names.
@@ -57,6 +57,7 @@ bool g_bLatestAdminNewsIsRecent;
 
 Handle g_hPublicRetry;
 Handle g_hAdminRetry;
+Handle g_hNewsAdvert;
 
 NewsType g_ViewType[MAXPLAYERS + 1];
 int g_iViewPage[MAXPLAYERS + 1];
@@ -107,6 +108,7 @@ public void OnMapStart()
 	g_bAdminRetryScheduled = false;
 	g_hPublicRetry = null;
 	g_hAdminRetry = null;
+	delete g_hNewsAdvert;
 	ScheduleNewsAdvert();
 }
 
@@ -121,6 +123,7 @@ public void OnConfigsExecuted()
 
 public void OnPluginEnd()
 {
+	delete g_hNewsAdvert;
 	delete g_PublicLines;
 	delete g_AdminLines;
 	delete g_PublicPageStarts;
@@ -313,11 +316,13 @@ public Action Timer_RetryNews(Handle timer, any data)
 
 static void ScheduleNewsAdvert()
 {
-	CreateTimer(GetRandomFloat(NEWS_ADVERT_MIN_DELAY, NEWS_ADVERT_MAX_DELAY), Timer_NewsAdvert);
+	if (g_hNewsAdvert == null)
+		g_hNewsAdvert = CreateTimer(GetRandomFloat(NEWS_ADVERT_MIN_DELAY, NEWS_ADVERT_MAX_DELAY), Timer_NewsAdvert);
 }
 
 public Action Timer_NewsAdvert(Handle timer)
 {
+	g_hNewsAdvert = null;
 	PrintToChatAll("\x04[News]\x01 Type \x03/news\x01 to read the latest server news.");
 	ScheduleNewsAdvert();
 	return Plugin_Stop;
