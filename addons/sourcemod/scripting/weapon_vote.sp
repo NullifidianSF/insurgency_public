@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <dhooks>
 
-#define PL_VERSION "4.27"
+#define PL_VERSION "4.28"
 #define CONFIG_FILE "configs/weapon_vote_loadout_weapons.cfg"
 #define THEATER_ITEMS_FILE "configs/weapon_vote_theateritems.txt"
 #define GENERATED_CONFIG_FILE "configs/weapon_vote_loadout_weapons.generated.cfg"
@@ -952,6 +952,12 @@ public int MenuHandler_Upgrades(Menu menu, MenuAction action, int client, int it
 }
 
 void StartWeaponVote(int client) {
+	int eligiblePlayers = GetEligibleVoterCount();
+	if (eligiblePlayers < g_cvMinVoters.IntValue) {
+		ReplyToCommand(client, "[Weapon Vote] Cannot start: %d eligible human players are online, but at least %d are required.", eligiblePlayers, g_cvMinVoters.IntValue);
+		return;
+	}
+
 	CopyClientSelectionToPending(client);
 	g_iVotesYes = 0;
 	g_iVotesNo = 0;
@@ -979,6 +985,12 @@ void StartWeaponVote(int client) {
 }
 
 void StartDisableWeaponVote(int client) {
+	int eligiblePlayers = GetEligibleVoterCount();
+	if (eligiblePlayers < g_cvMinVoters.IntValue) {
+		ReplyToCommand(client, "[Weapon Vote] Cannot start: %d eligible human players are online, but at least %d are required.", eligiblePlayers, g_cvMinVoters.IntValue);
+		return;
+	}
+
 	g_iVotesYes = 0;
 	g_iVotesNo = 0;
 	g_bDisableVote = true;
@@ -1362,6 +1374,15 @@ bool IsAllowedUtilityWeapon(const char[] weaponClass) {
 
 bool IsEligibleVoter(int client) {
 	return client >= 1 && client <= MaxClients && IsClientInGame(client) && !IsFakeClient(client) && GetClientTeam(client) > 1;
+}
+
+int GetEligibleVoterCount() {
+	int count;
+	for (int client = 1; client <= MaxClients; client++)
+		if (IsEligibleVoter(client))
+			count++;
+
+	return count;
 }
 
 void LoadWeaponConfig() {
