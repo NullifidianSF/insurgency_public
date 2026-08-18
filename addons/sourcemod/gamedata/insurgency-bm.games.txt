@@ -75,6 +75,65 @@
 				"windows"	"391"
 				"linux"		"392"
 			}
+
+			// Internal CINSWeapon virtual query: bool (). Returns whether this weapon permits its owner to sprint.
+			"CINSWeapon::AllowPlayerSprint"
+			{
+				"windows"	"382"
+				"linux"		"383"
+			}
+
+			// Internal CINSWeapon virtual query: bool (). Returns whether this weapon permits its owner to lean.
+			"CINSWeapon::AllowPlayerLean"
+			{
+				"windows"	"383"
+				"linux"		"384"
+			}
+
+			// Internal CINSWeapon virtual query: bool (). Returns whether this weapon permits its owner to jump.
+			"CINSWeapon::AllowPlayerJump"
+			{
+				"windows"	"384"
+				"linux"		"385"
+			}
+
+			// Internal CINSWeapon virtual query: bool (). Returns whether this weapon permits firing during sprint.
+			"CINSWeapon::CanSprintShoot"
+			{
+				"windows"	"387"
+				"linux"		"388"
+			}
+
+			// Internal CINSWeapon virtual query: bool (). Returns whether this weapon permits reloading during sprint.
+			"CINSWeapon::CanReloadSprint"
+			{
+				"windows"	"388"
+				"linux"		"389"
+			}
+
+			// Internal CINSWeapon virtual query: bool (). Returns whether the native reload
+			// discards the previous magazine and its remaining ammo.
+			"CINSWeapon::ShouldLoseAmmoOnReload"
+			{
+				"windows"	"400"
+				"linux"		"401"
+			}
+
+			// Internal CINSWeapon virtual: bool (). Switches between a weapon and its attached
+			// underbarrel accessory, such as an M203 or GP25. Returns false when none is available.
+			"CINSWeapon::ToggleUnderbarrelAccessory"
+			{
+				"windows"	"460"
+				"linux"		"461"
+			}
+
+			// Internal CINSWeapon virtual query: bool (). Returns whether the weapon has a
+			// chambered round. Derived ballistic weapons provide their live chamber state.
+			"CINSWeapon::HasChamberedRound"
+			{
+				"windows"	"461"
+				"linux"		"462"
+			}
 		}
 
 		"Signatures"
@@ -95,6 +154,15 @@
 				"library"	"server"
 				"windows"	"\x8B\x81\x18\x41\x00\x00\xC3\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\x55\x8B\xEC\x83\xEC\x10\x83\xB9\x90\x05\x00\x00\x00"
 				"linux"		"@_ZNK10CINSWeapon25GetWeaponDefinitionHandleEv"
+			}
+
+			// Weapon SDKCall: int (). Returns the native primary ammo-type ID, including a compatible ammo override
+			// from upgrade slot 1. Returns -1 when the weapon has no valid primary ammo type.
+			"CINSWeapon::GetPrimaryAmmoType"
+			{
+				"library"	"server"
+				"windows"	"\x56\x6A\x01\x8B\xF1\xE8\x2A\x2A\x2A\x2A\x85\xC0\x74\x2A\x8B\x80\xFC\x02\x00\x00\x85\xC0\x7F\x2A\x83\xBE\x90\x05\x00\x00\x00\x8D\x86\x90\x05\x00\x00\x7C\x2A\x85\xC0\x74\x2A\x8B\x80\x1C\x10\x00\x00\x5E\xC3\x83\xC8\xFF\x5E\xC3"
+				"linux"		"@_ZNK10CINSWeapon18GetPrimaryAmmoTypeEv"
 			}
 
 			// Entity SDKCall: Address (int upgradeSlot). Returns the native weapon-upgrade definition
@@ -257,6 +325,24 @@
 				"library"	"server"
 				"windows"	"\x55\x8B\xEC\x57\x8B\xF9\x8B\x07\x8B\x80\x14\x01\x00\x00\xFF\xD0\x84\xC0\x75\x2A\x2A\xC0\x5F\x5D\xC2\x04\x00\x80\x7D\x08\x00\x75\x2A\x8B\x07\x8B\xCF\x8B\x80\x20\x08\x00\x00\xFF\xD0\x84\xC0\x74\x2A\x8B\xCF\xE8\x2A\x2A\x2A\x2A\x84\xC0\x74\x2A\x8B\xCF\xE8\x2A\x2A\x2A\x2A"
 				"linux"		"@_ZN10CINSPlayer8ResupplyEb"
+			}
+
+			// Player detour: bool (CBaseCombatWeapon *weapon). Native world-weapon pickup path.
+			// Supercede with false to refuse a pickup before it drops the weapon occupying that slot.
+			"CINSPlayer::BumpWeapon"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x53\x6A\x00\x8B\xD9\x2A\x2A\x2A\x2A\x2A\x84\xC0\x75\x28\x8B\x4B\x18\x85\xC9\x74\x0B\xA1\x2A\x2A\x2A\x2A\x2B\x48\x5C\xC1\xF9\x04\x51\x68\x2A\x2A\x2A\x2A\xFF\x15\x2A\x2A\x2A\x2A\x83\xC4\x08\x32\xC0\x5B\x5D\xC2\x04\x00"
+				"linux"		"@_ZN10CINSPlayer10BumpWeaponEP17CBaseCombatWeapon"
+			}
+
+			// Player SDKCall: bool (CBaseCombatWeapon *weapon, int switchReason).
+			// Performs the full native weapon-switch/deploy path. Pass 0 for the normal switch reason.
+			"CINSPlayer::Weapon_Switch"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\xFF\x75\x0C\x6A\x00\xFF\x75\x08\xE8\x2A\x2A\x2A\x2A\x5D\xC2\x08\x00"
+				"linux"		"@_ZN10CINSPlayer13Weapon_SwitchEP17CBaseCombatWeaponi"
 			}
 
 			// Player SDKCall: Address (int ammoIndex). Returns the player's native CINSWeaponMagazines container for the ammo type.
@@ -461,6 +547,38 @@
 				"linux"		"@_ZN10CINSPlayer13RemoveRagdollEv"
 			}
 
+			// Player SDKCall: int (). Returns the native CINSPlayer player-flag bitfield.
+			"CINSPlayer::GetPlayerFlags"
+			{
+				"library"	"server"
+				"windows"	"\x8B\x81\xC0\x1A\x00\x00\xC3"
+				"linux"		"@_ZNK10CINSPlayer14GetPlayerFlagsEv"
+			}
+
+			// Player SDKCall: bool (int playerFlag). Returns whether all bits in playerFlag are set.
+			"CINSPlayer::HasPlayerFlag"
+			{
+				"library"	"server"
+				"windows"	"\x8B\x81\xC0\x1A\x00\x00\x23\x45\x08\xF7\xD8\x1B\xC0\xF7\xD8\x5D\xC2\x04\x00"
+				"linux"		"@_ZNK10CINSPlayer13HasPlayerFlagEi"
+			}
+
+			// Player SDKCall: void (int playerFlag). Sets the supplied native player-flag bits.
+			"CINSPlayer::AddPlayerFlag"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x56\x8D\xB1\xC0\x1A\x00\x00\x57\x8B\x3E\x0B\x7D\x08\x39\x3E\x74\x11\x8B\x86\xA0\xFD\xFF\xFF\x8D\x8E\xA0\xFD\xFF\xFF\x56\xFF\x10\x89\x3E\x5F\x5E\x5D\xC2\x04\x00"
+				"linux"		"@_ZN10CINSPlayer13AddPlayerFlagEi"
+			}
+
+			// Player SDKCall: void (int playerFlag). Clears the supplied native player-flag bits.
+			"CINSPlayer::RemovePlayerFlag"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x56\x8B\x75\x08\x57\x8D\xB9\xC0\x1A\x00\x00\xF7\xD6\x23\x37\x39\x37\x74\x11\x8B\x87\xA0\xFD\xFF\xFF\x8D\x8F\xA0\xFD\xFF\xFF\x57\xFF\x10\x89\x37\x5F\x5E\x5D\xC2\x04\x00"
+				"linux"		"@_ZN10CINSPlayer16RemovePlayerFlagEi"
+			}
+
 			// Player SDKCall: void (Vector &muzzleOrigin, QAngle &muzzleAngles). Writes native muzzle position and direction.
 			"CINSPlayer::GetMuzzle"
 			{
@@ -540,6 +658,150 @@
 				"library"	"server"
 				"windows"	"\x55\x8B\xEC\x83\xEC\x14\x83\xB9\x90\x05\x00\x00\x00\x8D\x81\x90\x05\x00\x00\x89\x4D\xF4\x0F\x8C\x2A\x2A\x2A\x2A\x85\xC0\x0F\x84\x2A\x2A\x2A\x2A\xF3\x0F\x10\x88\x30\x0B\x00\x00\xBA\x0A\x00\x00\x00\x53\x56\x57\xF3\x0F\x11\x4D\xFC\x8D\xB1\x70\x16\x00\x00\x8D\x99\xA4\x41\x00\x00\x89\x55\xF8\x8B\x0B\x85\xC9\x78\x58\x83\x3E\x00\x7D\x40\xA1\x2A\x2A\x2A\x2A"
 				"linux"		"@_ZN10CINSWeapon22GetReloadSpeedModifierEv"
+			}
+
+			// Weapon SDKCall: bool (int importantButton). Reads whether the weapon's native button state is held.
+			// The argument is an eWeaponImportantButtons value, not a Source IN_* button bit.
+			"CINSWeapon::IsHoldingButton"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x8B\x45\x08\x8A\x84\x08\x9A\x41\x00\x00\x5D\xC2\x04\x00"
+				"linux"		"@_ZNK10CINSWeapon15IsHoldingButtonE23eWeaponImportantButtons"
+			}
+
+			// NextBot SDKCall: void (float duration). Holds the Fire Mode button for the requested duration.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::PressFiremodeButton"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x0C\x81\x89\xB4\x20\x00\x00\x00\x10\x00\x00\x56\x57\x8D\xB9\x00\xB4\x00\x00\x8B\xCF"
+				"linux"		"@_ZN11CINSNextBot19PressFiremodeButtonEf"
+			}
+
+			// NextBot SDKCall: void (). Releases the Fire Mode button.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::ReleaseFiremodeButton"
+			{
+				"library"	"server"
+				"windows"	"\x81\xA1\xB4\x20\x00\x00\xFF\xEF\xFF\xFF\xC3"
+				"linux"		"@_ZN11CINSNextBot21ReleaseFiremodeButtonEv"
+			}
+
+			// NextBot SDKCall: void (float duration). Holds the Sprint button for the requested duration.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::PressSprintButton"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x0C\x81\x89\xB4\x20\x00\x00\x00\x80\x00\x00\x56\x57\x8D\xB9\x00\xB4\x00\x00"
+				"linux"		"@_ZN11CINSNextBot17PressSprintButtonEf"
+			}
+
+			// NextBot SDKCall: void (). Releases the Sprint button.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::ReleaseSprintButton"
+			{
+				"library"	"server"
+				"windows"	"\x81\xA1\xB4\x20\x00\x00\xFF\x7F\xFF\xFF\xC3"
+				"linux"		"@_ZN11CINSNextBot19ReleaseSprintButtonEv"
+			}
+
+			// NextBot SDKCall: void (float duration). Holds the Prone button for the requested duration.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::PressProneButton"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x0C\x83\x89\xB4\x20\x00\x00\x08\x56\x57\x8D\xB9\xDC\xB3\x00\x00"
+				"linux"		"@_ZN11CINSNextBot16PressProneButtonEf"
+			}
+
+			// NextBot SDKCall: void (). Releases the Prone button.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::ReleaseProneButton"
+			{
+				"library"	"server"
+				"windows"	"\x81\xA1\xB4\x20\x00\x00\xF7\xFF\xFF\xFF\xC3"
+				"linux"		"@_ZN11CINSNextBot18ReleaseProneButtonEv"
+			}
+
+			// NextBot SDKCall: void (float duration). Holds the Left Lean button for the requested duration.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::PressLeanLeftButton"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x0C\x81\x89\xB4\x20\x00\x00\x00\x20\x00\x00\x56\x57\x8D\xB9\xE8\xB3\x00\x00"
+				"linux"		"@_ZN11CINSNextBot19PressLeanLeftButtonEf"
+			}
+
+			// NextBot SDKCall: void (). Releases the Left Lean button.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::ReleaseLeanLeftButton"
+			{
+				"library"	"server"
+				"windows"	"\x81\xA1\xB4\x20\x00\x00\xFF\xDF\xFF\xFF\xC3"
+				"linux"		"@_ZN11CINSNextBot21ReleaseLeanLeftButtonEv"
+			}
+
+			// NextBot SDKCall: void (float duration). Holds the Right Lean button for the requested duration.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::PressLeanRightButton"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x0C\x81\x89\xB4\x20\x00\x00\x00\x40\x00\x00\x56\x57\x8D\xB9\xF4\xB3\x00\x00"
+				"linux"		"@_ZN11CINSNextBot20PressLeanRightButtonEf"
+			}
+
+			// NextBot SDKCall: void (). Releases the Right Lean button.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::ReleaseLeanRightButton"
+			{
+				"library"	"server"
+				"windows"	"\x81\xA1\xB4\x20\x00\x00\xFF\xBF\xFF\xFF\xC3"
+				"linux"		"@_ZN11CINSNextBot22ReleaseLeanRightButtonEv"
+			}
+
+			// NextBot SDKCall: void (float duration). Holds the Ironsight button for the requested duration.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::PressIronsightButton"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x0C\x81\x89\xB4\x20\x00\x00\x00\x00\x04\x00\x56\x57\x8D\xB9\x0C\xB4\x00\x00"
+				"linux"		"@_ZN11CINSNextBot20PressIronsightButtonEf"
+			}
+
+			// NextBot SDKCall: void (). Releases the Ironsight button.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::ReleaseIronsightButton"
+			{
+				"library"	"server"
+				"windows"	"\x81\xA1\xB4\x20\x00\x00\xFF\xFF\xFB\xFF\xC3"
+				"linux"		"@_ZN11CINSNextBot22ReleaseIronsightButtonEv"
+			}
+
+			// NextBot SDKCall: void (float duration). Holds the tertiary-attack button for the requested duration.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::PressTertiaryAttackButton"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x0C\x81\x89\xB4\x20\x00\x00\x00\x00\x02\x00\x56\x57\x8D\xB9\x18\xB4\x00\x00\x8B\xCF"
+				"linux"		"@_ZN11CINSNextBot25PressTertiaryAttackButtonEf"
+			}
+
+			// NextBot SDKCall: void (). Releases the tertiary-attack button.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::ReleaseTertiaryAttackButton"
+			{
+				"library"	"server"
+				"windows"	"\x81\xA1\xB4\x20\x00\x00\xFF\xFF\xFD\xFF\xC3"
+				"linux"		"@_ZN11CINSNextBot27ReleaseTertiaryAttackButtonEv"
+			}
+
+			// NextBot SDKCall: void (CINSWeapon *weapon, float duration). Asks the bot to choose a weapon.
+			// Requires a CINSNextBot address; the exact return value is not mapped, so use it as void.
+			"CINSNextBot::ChooseBestWeapon"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x8B\x55\x08\x83\xEC\x08\x56\x8B\xF1\x85\xD2\x0F\x84\x2A\x2A\x2A\x2A\x8B\x06\x57\x6A\x00\x52\xFF\x90\x70\x04\x00\x00\x8D\xBE\xB8\xB3\x00\x00"
+				"linux"		"@_ZN11CINSNextBot16ChooseBestWeaponEP10CINSWeaponf"
 			}
 		}
 	}
