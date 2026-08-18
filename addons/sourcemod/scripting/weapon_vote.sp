@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <dhooks>
 
-#define PL_VERSION "4.28"
+#define PL_VERSION "4.55"
 #define CONFIG_FILE "configs/weapon_vote_loadout_weapons.cfg"
 #define THEATER_ITEMS_FILE "configs/weapon_vote_theateritems.txt"
 #define GENERATED_CONFIG_FILE "configs/weapon_vote_loadout_weapons.generated.cfg"
@@ -44,9 +44,12 @@ enum {
 Handle g_hDestroyItem = null;
 Handle g_hRefundWeapon = null;
 Handle g_hInstallWeaponUpgrade = null;
+Handle g_hToggleUnderbarrelAccessory = null;
 Handle g_hGiveAmmo = null;
 Handle g_hGetMagazines = null;
+Handle g_hWeaponSwitch = null;
 DynamicDetour g_hPlayerResupplyDetour = null;
+DynamicDetour g_hPlayerBumpWeaponDetour = null;
 ArrayList g_aWeaponClasses = null;
 ArrayList g_aWeaponNames = null;
 ArrayList g_aWeaponDefinitions = null;
@@ -71,6 +74,7 @@ ConVar g_cvRounds;
 ConVar g_cvReserveAmmo;
 ConVar g_cvRoundTime = null;
 int g_iPlayerInventoryOffset = -1;
+int g_iLastResupplyTimeOffset = -1;
 int g_iMyWeaponsOffset = -1;
 int g_iVotesYes;
 int g_iVotesNo;
@@ -100,6 +104,9 @@ char g_sActiveWeapons[WeaponSlot_Count][MAX_WEAPON_CLASSNAME];
 char g_sActiveWeaponNames[WeaponSlot_Count][MAX_WEAPON_DISPLAY_NAME];
 int g_iActiveWeaponDefinitions[WeaponSlot_Count];
 int g_iActiveUpgrades[WeaponSlot_Count][UpgradeCategory_Count];
+int g_iResupplyWeaponRefs[MAXPLAYERS + 1][MAX_PLAYER_WEAPONS];
+int g_iResupplyWeaponCount[MAXPLAYERS + 1];
+float ga_fResupplyTimeBefore[MAXPLAYERS + 1];
 
 public Plugin myinfo = {
 	name = "[INS] Weapon Vote",
@@ -155,6 +162,19 @@ public void OnPluginStart() {
 		SetFailState("[Weapon Vote] Unable to prepare CINSWeapon::InstallWeaponUpgrade SDKCall.");
 	}
 
+	StartPrepSDKCall(SDKCall_Entity);
+	if (!PrepSDKCall_SetFromConf(gameData, SDKConf_Virtual, "CINSWeapon::ToggleUnderbarrelAccessory")) {
+		delete gameData;
+		SetFailState("[Weapon Vote] Missing CINSWeapon::ToggleUnderbarrelAccessory offset.");
+	}
+
+	PrepSDKCall_SetReturnInfo(SDKType_Bool, SDKPass_Plain);
+	g_hToggleUnderbarrelAccessory = EndPrepSDKCall();
+	if (g_hToggleUnderbarrelAccessory == null) {
+		delete gameData;
+		SetFailState("[Weapon Vote] Unable to prepare CINSWeapon::ToggleUnderbarrelAccessory SDKCall.");
+	}
+
 	StartPrepSDKCall(SDKCall_Player);
 	if (!PrepSDKCall_SetFromConf(gameData, SDKConf_Signature, "CINSPlayer::GiveAmmo")) {
 		delete gameData;
@@ -187,9 +207,28 @@ public void OnPluginStart() {
 		SetFailState("[Weapon Vote] Unable to prepare CINSPlayer::GetMagazines SDKCall.");
 	}
 
+	StartPrepSDKCall(SDKCall_Player);
+	if (!PrepSDKCall_SetFromConf(gameData, SDKConf_Signature, "CINSPlayer::Weapon_Switch")) {
+		delete gameData;
+		SetFailState("[Weapon Vote] Missing CINSPlayer::Weapon_Switch signature.");
+	}
+
+	PrepSDKCall_AddParameter(SDKType_CBaseEntity, SDKPass_Pointer);
+	PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);
+	PrepSDKCall_SetReturnInfo(SDKType_Bool, SDKPass_Plain);
+	g_hWeaponSwitch = EndPrepSDKCall();
+	if (g_hWeaponSwitch == null) {
+		delete gameData;
+		SetFailState("[Weapon Vote] Unable to prepare CINSPlayer::Weapon_Switch SDKCall.");
+	}
+
 	g_iPlayerInventoryOffset = gameData.GetOffset("CINSPlayer::PlayerInventory");
 	if (g_iPlayerInventoryOffset == -1)
 		SetFailState("[Weapon Vote] Missing CINSPlayer::PlayerInventory offset.");
+
+	g_iLastResupplyTimeOffset = gameData.GetOffset("CINSPlayer::LastResupplyTime");
+	if (g_iLastResupplyTimeOffset == -1)
+		SetFailState("[Weapon Vote] Missing CINSPlayer::LastResupplyTime offset.");
 
 	g_hPlayerResupplyDetour = new DynamicDetour(Address_Null, CallConv_THISCALL, ReturnType_Bool, ThisPointer_CBaseEntity);
 	if (!g_hPlayerResupplyDetour.SetFromConf(gameData, SDKConf_Signature, "CINSPlayer::Resupply")) {
@@ -198,9 +237,22 @@ public void OnPluginStart() {
 	}
 
 	g_hPlayerResupplyDetour.AddParam(HookParamType_Bool);
-	if (!g_hPlayerResupplyDetour.Enable(Hook_Post, Detour_PlayerResupply_Post)) {
+	if (!g_hPlayerResupplyDetour.Enable(Hook_Pre, Detour_PlayerResupply_Pre)
+		|| !g_hPlayerResupplyDetour.Enable(Hook_Post, Detour_PlayerResupply_Post)) {
 		delete gameData;
 		SetFailState("[Weapon Vote] Could not enable the CINSPlayer::Resupply detour.");
+	}
+
+	g_hPlayerBumpWeaponDetour = new DynamicDetour(Address_Null, CallConv_THISCALL, ReturnType_Bool, ThisPointer_CBaseEntity);
+	if (!g_hPlayerBumpWeaponDetour.SetFromConf(gameData, SDKConf_Signature, "CINSPlayer::BumpWeapon")) {
+		delete gameData;
+		SetFailState("[Weapon Vote] Missing CINSPlayer::BumpWeapon signature.");
+	}
+
+	g_hPlayerBumpWeaponDetour.AddParam(HookParamType_CBaseEntity);
+	if (!g_hPlayerBumpWeaponDetour.Enable(Hook_Pre, Detour_PlayerBumpWeapon_Pre)) {
+		delete gameData;
+		SetFailState("[Weapon Vote] Could not enable the CINSPlayer::BumpWeapon detour.");
 	}
 
 	delete gameData;
@@ -256,6 +308,9 @@ public void OnPluginStart() {
 
 	RegAdminCmd("sm_weaponvote_reload", Command_ReloadWeaponVote, ADMFLAG_ROOT,
 		"Reload configs/weapon_vote_loadout_weapons.cfg.");
+
+	RegAdminCmd("sm_weaponvote_toggleunderbarrel", Command_ToggleUnderbarrel, ADMFLAG_ROOT,
+		"Toggle the active weapon's native underbarrel accessory for testing.");
 	// Optional automatic config generator:
 	// 1. Run listtheateritems in the server console and paste its full output into
 	//    addons/sourcemod/configs/weapon_vote_theateritems.txt.
@@ -280,7 +335,7 @@ public void OnPluginStart() {
 
 	for (int client = 1; client <= MaxClients; client++)
 		if (IsClientInGame(client))
-			SDKHook(client, SDKHook_WeaponEquip, Hook_WeaponEquip);
+			HookClientWeapons(client);
 }
 
 public void OnMapStart() {
@@ -293,6 +348,8 @@ public void OnMapStart() {
 	g_iRoundsRemaining = 0;
 	ResetPendingLoadout();
 	ResetActiveLoadout();
+	for (int client = 1; client <= MaxClients; client++)
+		ClearCapturedResupplyWeapons(client);
 }
 
 void PrecacheVoteSounds() {
@@ -337,14 +394,21 @@ public Action Timer_WeaponVoteAdvertisement(Handle timer) {
 
 public void OnPluginEnd() {
 	RestoreGeneratorRoundTime();
-	if (g_hPlayerResupplyDetour != null)
+	if (g_hPlayerBumpWeaponDetour != null)
+		g_hPlayerBumpWeaponDetour.Disable(Hook_Pre, Detour_PlayerBumpWeapon_Pre);
+	if (g_hPlayerResupplyDetour != null) {
+		g_hPlayerResupplyDetour.Disable(Hook_Pre, Detour_PlayerResupply_Pre);
 		g_hPlayerResupplyDetour.Disable(Hook_Post, Detour_PlayerResupply_Post);
+	}
+	delete g_hPlayerBumpWeaponDetour;
 	delete g_hPlayerResupplyDetour;
 	delete g_hDestroyItem;
 	delete g_hRefundWeapon;
 	delete g_hInstallWeaponUpgrade;
+	delete g_hToggleUnderbarrelAccessory;
 	delete g_hGiveAmmo;
 	delete g_hGetMagazines;
+	delete g_hWeaponSwitch;
 	delete g_aWeaponClasses;
 	delete g_aWeaponNames;
 	delete g_aWeaponDefinitions;
@@ -360,11 +424,12 @@ public void OnPluginEnd() {
 }
 
 public void OnClientPutInServer(int client) {
-	SDKHook(client, SDKHook_WeaponEquip, Hook_WeaponEquip);
+	HookClientWeapons(client);
 }
 
 public void OnClientDisconnect(int client) {
 	g_bClientVoted[client] = false;
+	ClearCapturedResupplyWeapons(client);
 	ResetClientSelection(client);
 }
 
@@ -379,6 +444,26 @@ public void Event_PlayerPickSquad(Event event, const char[] name, bool dontBroad
 	char loadout[160];
 	BuildLoadoutDescription(g_sActiveWeaponNames[WeaponSlot_Primary], g_sActiveWeaponNames[WeaponSlot_Secondary], loadout, sizeof(loadout));
 	PrintToChat(client, "\x04[Weapon Vote]\x01 Active voted loadout: %s.", loadout);
+}
+
+public Action Command_ToggleUnderbarrel(int client, int args) {
+	if (!IsEligibleVoter(client) || !IsPlayerAlive(client)) {
+		ReplyToCommand(client, "[Weapon Vote] You must be alive and on an active team.");
+		return Plugin_Handled;
+	}
+
+	int weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+	if (weapon <= MaxClients || !IsValidEntity(weapon)) {
+		ReplyToCommand(client, "[Weapon Vote] No active weapon was found.");
+		return Plugin_Handled;
+	}
+
+	if (SDKCall(g_hToggleUnderbarrelAccessory, weapon))
+		ReplyToCommand(client, "[Weapon Vote] Native underbarrel toggle succeeded.");
+	else
+		ReplyToCommand(client, "[Weapon Vote] Native underbarrel toggle found no usable attachment.");
+
+	return Plugin_Handled;
 }
 
 public Action Command_WeaponVote(int client, int args) {
@@ -690,9 +775,7 @@ bool IsGeneratorWeaponCandidate(const char[] weaponClass) {
 		&& StrContains(weaponClass, "weapon_m203_", false) != 0
 		&& StrContains(weaponClass, "weapon_gp25_", false) != 0
 		&& !StrEqual(weaponClass, "weapon_riotshield")
-		&& !StrEqual(weaponClass, "weapon_suicide_bomb_melee")
-		&& !StrEqual(weaponClass, "weapon_p2a1")
-		&& !StrEqual(weaponClass, "weapon_firesupport");
+		&& !StrEqual(weaponClass, "weapon_suicide_bomb_melee");
 }
 
 int GetGeneratedUpgradeCategory(const char[] upgradeName) {
@@ -702,7 +785,12 @@ int GetGeneratedUpgradeCategory(const char[] upgradeName) {
 		return UpgradeCategory_Scope;
 	if (StrContains(upgradeName, "magazine_", false) == 0)
 		return UpgradeCategory_Magazine;
-	if (StrContains(upgradeName, "underbarrel_", false) == 0 || StrEqual(upgradeName, "base_bipod", false))
+	if (StrContains(upgradeName, "underbarrel_", false) == 0
+		|| StrContains(upgradeName, "m203_", false) == 0
+		|| StrContains(upgradeName, "gp25_", false) == 0
+		|| StrContains(upgradeName, "weapon_m203_", false) == 0
+		|| StrContains(upgradeName, "weapon_gp25_", false) == 0
+		|| StrEqual(upgradeName, "base_bipod", false))
 		return UpgradeCategory_Underbarrel;
 	if (StrContains(upgradeName, "siderail_", false) == 0 || StrContains(upgradeName, "base_flashlight", false) == 0 || StrContains(upgradeName, "base_lasersight", false) == 0)
 		return UpgradeCategory_Siderail;
@@ -761,7 +849,7 @@ void ShowLoadoutMenu(int client) {
 	menu.AddItem("slot:0", label);
 	Format(label, sizeof(label), "Secondary: %s", HasSelectedWeapon(client, WeaponSlot_Secondary) ? ga_sSelectedWeaponNames[client][WeaponSlot_Secondary] : "Not selected");
 	menu.AddItem("slot:1", label);
-	menu.AddItem("start", "Start Vote", HasSelectedWeapon(client, WeaponSlot_Primary) ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+	menu.AddItem("start", "Start Vote", (HasSelectedWeapon(client, WeaponSlot_Primary) || HasSelectedWeapon(client, WeaponSlot_Secondary)) ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
 	if (g_bModeActive)
 		menu.AddItem("disable", "Vote to disable current voted loadout");
 	menu.Display(client, MENU_TIME_FOREVER);
@@ -813,6 +901,11 @@ void ShowWeaponChoiceMenu(int client, int slot) {
 	menu.SetTitle("Select %s weapon", slot == WeaponSlot_Primary ? "primary" : "secondary");
 
 	char info[MAX_WEAPON_CLASSNAME + 8];
+	char clearLabel[64];
+	Format(info, sizeof(info), "clear:%d", slot);
+	Format(clearLabel, sizeof(clearLabel), "Clear %s selection", slot == WeaponSlot_Primary ? "primary" : "secondary");
+	menu.AddItem(info, clearLabel, HasSelectedWeapon(client, slot) ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+
 	char weaponClass[MAX_WEAPON_CLASSNAME];
 	char weaponName[MAX_WEAPON_DISPLAY_NAME];
 	int found;
@@ -845,6 +938,12 @@ public int MenuHandler_ChooseWeapon(Menu menu, MenuAction action, int client, in
 
 		char info[MAX_WEAPON_CLASSNAME + 8];
 		menu.GetItem(item, info, sizeof(info));
+		if (StrContains(info, "clear:") == 0) {
+			ClearWeaponSelection(client, StringToInt(info[6]));
+			ShowLoadoutMenu(client);
+			return 0;
+		}
+
 		int slot = info[0] - '0';
 		int index = g_aWeaponClasses.FindString(info[2]);
 		if (index != -1) {
@@ -952,6 +1051,11 @@ public int MenuHandler_Upgrades(Menu menu, MenuAction action, int client, int it
 }
 
 void StartWeaponVote(int client) {
+	if (!HasSelectedWeapon(client, WeaponSlot_Primary) && !HasSelectedWeapon(client, WeaponSlot_Secondary)) {
+		ReplyToCommand(client, "[Weapon Vote] Select a primary or secondary weapon first.");
+		return;
+	}
+
 	int eligiblePlayers = GetEligibleVoterCount();
 	if (eligiblePlayers < g_cvMinVoters.IntValue) {
 		ReplyToCommand(client, "[Weapon Vote] Cannot start: %d eligible human players are online, but at least %d are required.", eligiblePlayers, g_cvMinVoters.IntValue);
@@ -1116,13 +1220,63 @@ public void Event_RoundEnd(Event event, const char[] name, bool dontBroadcast) {
 	}
 }
 
-public MRESReturn Detour_PlayerResupply_Post(int client, DHookReturn hReturn, DHookParam hParams) {
-	if (!g_bModeActive || !hReturn.Value || !IsEligibleVoter(client) || !IsPlayerAlive(client))
+public MRESReturn Detour_PlayerResupply_Pre(int client, DHookReturn hReturn, DHookParam hParams) {
+	ClearCapturedResupplyWeapons(client);
+	ga_fResupplyTimeBefore[client] = GetEntDataFloat(client, g_iLastResupplyTimeOffset);
+	if (!g_bModeActive || !IsEligibleVoter(client) || !IsPlayerAlive(client))
 		return MRES_Ignored;
 
-	// Native resupply has already cleared direct-granted weapons by this point.
-	RequestFrame(Frame_GiveWeaponModeAndEquipPrimary, GetClientUserId(client));
+	CaptureCarriedVotedWeaponsForResupply(client);
 	return MRES_Ignored;
+}
+
+public MRESReturn Detour_PlayerResupply_Post(int client, DHookReturn hReturn, DHookParam hParams) {
+	float resupplyTimeAfter = GetEntDataFloat(client, g_iLastResupplyTimeOffset);
+	if (!hReturn.Value || resupplyTimeAfter <= ga_fResupplyTimeBefore[client]) {
+		ClearCapturedResupplyWeapons(client);
+		return MRES_Ignored;
+	}
+
+	if (!g_bModeActive || !IsEligibleVoter(client) || !IsPlayerAlive(client)) {
+		ClearCapturedResupplyWeapons(client);
+		return MRES_Ignored;
+	}
+
+	// Wait until native resupply has completed. The frame callback equips the
+	// replacement before deleting only the old entities that were dropped.
+	RequestFrame(Frame_RestoreResupplyWeaponMode, GetClientUserId(client));
+	return MRES_Ignored;
+}
+
+public MRESReturn Detour_PlayerBumpWeapon_Pre(int client, DHookReturn hReturn, DHookParam hParams) {
+	if (!g_bModeActive || !IsEligibleVoter(client))
+		return MRES_Ignored;
+
+	int weapon = FindEntityByAddress(hParams.GetAddress(1));
+	if (weapon <= MaxClients || !IsValidEntity(weapon))
+		return MRES_Ignored;
+
+	char weaponClass[MAX_WEAPON_CLASSNAME];
+	GetEdictClassname(weapon, weaponClass, sizeof(weaponClass));
+	if (IsAllowedVotedWeapon(weaponClass))
+		return MRES_Ignored;
+
+	// BumpWeapon drops the occupied slot itself. Refuse the pickup before that
+	// native swap so the player's selected voted weapon stays in their hands.
+	hReturn.Value = false;
+	return MRES_Supercede;
+}
+
+int FindEntityByAddress(Address address) {
+	if (address == Address_Null)
+		return -1;
+
+	int maxEntities = GetMaxEntities();
+	for (int entity = MaxClients + 1; entity < maxEntities; entity++)
+		if (IsValidEntity(entity) && GetEntityAddress(entity) == address)
+			return entity;
+
+	return -1;
 }
 
 void Frame_ApplyWeaponMode(any data) {
@@ -1150,9 +1304,23 @@ void Frame_GiveWeaponModeAndEquipPrimary(any data) {
 	GiveWeaponModeToPlayer(client, true);
 }
 
+void Frame_RestoreResupplyWeaponMode(any data) {
+	int client = GetClientOfUserId(data);
+	if (!g_bModeActive || !IsEligibleVoter(client) || !IsPlayerAlive(client)) {
+		ClearCapturedResupplyWeapons(client);
+		return;
+	}
+
+	// Give and select a valid new primary first. Calling DestroyItem on a weapon
+	// that native resupply has just detached can leave m_hActiveWeapon invalid.
+	GiveWeaponModeToPlayer(client, true);
+	RemoveCapturedResupplyDrops(client);
+	ClearCapturedResupplyWeapons(client);
+}
+
 void GiveWeaponModeToPlayer(int client, bool equipPrimary) {
-	int primaryWeapon = -1;
-	int suppliedAmmoTypes[WeaponSlot_Count];
+	int weaponToEquip = -1;
+	int suppliedAmmoTypes[WeaponSlot_Count * 2];
 	int suppliedAmmoCount;
 	for (int slot = 0; slot < WeaponSlot_Count; slot++) {
 		if (g_iActiveWeaponDefinitions[slot] < 1)
@@ -1165,26 +1333,76 @@ void GiveWeaponModeToPlayer(int client, bool equipPrimary) {
 		}
 
 		InstallSelectedUpgrades(client, weapon, slot);
-		int ammoType = GetEntProp(weapon, Prop_Data, "m_iPrimaryAmmoType");
-		int magazineCapacity = GetEntProp(weapon, Prop_Send, "m_iClip1");
-		if (ammoType >= 0 && magazineCapacity > 0 && !HasSuppliedAmmoType(ammoType, suppliedAmmoTypes, suppliedAmmoCount)) {
-			int reloadCount = g_cvReserveAmmo.IntValue;
-			if (reloadCount > 0) {
-				int magazinesBefore = SDKCall(g_hGetMagazines, client, ammoType);
-				SDKCall(g_hGiveAmmo, client, magazineCapacity, ammoType, reloadCount, true, -1);
-				int magazinesAfter = SDKCall(g_hGetMagazines, client, ammoType);
-				if (reloadCount > 1 && magazinesAfter <= magazinesBefore)
-					SDKCall(g_hGiveAmmo, client, magazineCapacity * (reloadCount - 1), ammoType, 0, true, -1);
-			}
-			suppliedAmmoTypes[suppliedAmmoCount++] = ammoType;
-		}
+		int primaryAmmoType = GetEntProp(weapon, Prop_Data, "m_iPrimaryAmmoType");
+		int primaryMagazineCapacity = GetEntProp(weapon, Prop_Send, "m_iClip1");
+		GiveWeaponReserveAmmo(client, primaryAmmoType, primaryMagazineCapacity, suppliedAmmoTypes, suppliedAmmoCount);
 
-		if (slot == WeaponSlot_Primary)
-			primaryWeapon = weapon;
+		int secondaryAmmoType = GetEntProp(weapon, Prop_Data, "m_iSecondaryAmmoType");
+		int secondaryMagazineCapacity = GetEntProp(weapon, Prop_Send, "m_iClip2");
+		if (secondaryAmmoType >= 0 && secondaryMagazineCapacity < 1)
+			secondaryMagazineCapacity = 1;
+
+		GiveWeaponReserveAmmo(client, secondaryAmmoType, secondaryMagazineCapacity, suppliedAmmoTypes, suppliedAmmoCount);
+		if (secondaryAmmoType >= 0 && GetEntProp(weapon, Prop_Send, "m_iClip2") < 1)
+			SetEntProp(weapon, Prop_Send, "m_iClip2", secondaryMagazineCapacity);
+
+		if (g_iActiveUpgrades[slot][UpgradeCategory_Underbarrel] > 0)
+			GiveUnderbarrelReserveAmmo(client, suppliedAmmoTypes, suppliedAmmoCount);
+
+		if (slot == WeaponSlot_Primary || weaponToEquip == -1)
+			weaponToEquip = weapon;
 	}
 
-	if (equipPrimary && primaryWeapon > MaxClients && IsValidEntity(primaryWeapon))
-		SetEntPropEnt(client, Prop_Send, "m_hActiveWeapon", primaryWeapon);
+	if (equipPrimary && weaponToEquip > MaxClients && IsValidEntity(weaponToEquip))
+		CreateTimer(0.2, Timer_EquipVotedWeapon, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
+}
+
+void GiveWeaponReserveAmmo(int client, int ammoType, int magazineCapacity, int[] suppliedAmmoTypes, int &suppliedAmmoCount) {
+	if (ammoType < 0 || magazineCapacity < 1 || HasSuppliedAmmoType(ammoType, suppliedAmmoTypes, suppliedAmmoCount))
+		return;
+
+	int reloadCount = g_cvReserveAmmo.IntValue;
+	if (reloadCount > 0) {
+		int magazinesBefore = SDKCall(g_hGetMagazines, client, ammoType);
+		SDKCall(g_hGiveAmmo, client, magazineCapacity, ammoType, reloadCount, true, -1);
+		int magazinesAfter = SDKCall(g_hGetMagazines, client, ammoType);
+		if (reloadCount > 1 && magazinesAfter <= magazinesBefore)
+			SDKCall(g_hGiveAmmo, client, magazineCapacity * (reloadCount - 1), ammoType, 0, true, -1);
+	}
+
+	suppliedAmmoTypes[suppliedAmmoCount++] = ammoType;
+}
+
+void GiveUnderbarrelReserveAmmo(int client, int[] suppliedAmmoTypes, int &suppliedAmmoCount) {
+	for (int offset = 0; offset < MAX_PLAYER_WEAPONS * 4; offset += 4) {
+		int weapon = GetEntDataEnt2(client, g_iMyWeaponsOffset + offset);
+		if (weapon <= MaxClients || !IsValidEntity(weapon))
+			continue;
+
+		char weaponClass[MAX_WEAPON_CLASSNAME];
+		GetEdictClassname(weapon, weaponClass, sizeof(weaponClass));
+		if (!IsUnderbarrelAttachmentWeapon(weaponClass))
+			continue;
+
+		int ammoType = GetEntProp(weapon, Prop_Data, "m_iPrimaryAmmoType");
+		int magazineCapacity = GetEntProp(weapon, Prop_Send, "m_iClip1");
+		GiveWeaponReserveAmmo(client, ammoType, magazineCapacity, suppliedAmmoTypes, suppliedAmmoCount);
+	}
+}
+
+public Action Timer_EquipVotedWeapon(Handle timer, any data) {
+	int client = GetClientOfUserId(data);
+	if (!g_bModeActive || !IsEligibleVoter(client) || !IsPlayerAlive(client))
+		return Plugin_Stop;
+
+	int weapon = FindCarriedVotedWeapon(client, WeaponSlot_Primary);
+	if (weapon == -1)
+		weapon = FindCarriedVotedWeapon(client, WeaponSlot_Secondary);
+
+	if (weapon != -1)
+		SDKCall(g_hWeaponSwitch, client, weapon, 0);
+
+	return Plugin_Stop;
 }
 
 bool HasSuppliedAmmoType(int ammoType, int[] suppliedAmmoTypes, int suppliedAmmoCount) {
@@ -1245,6 +1463,63 @@ void DestroyCarriedRestrictedWeapons(int client) {
 	}
 }
 
+void CaptureCarriedVotedWeaponsForResupply(int client) {
+	for (int offset = 0; offset < MAX_PLAYER_WEAPONS * 4; offset += 4) {
+		int weapon = GetEntDataEnt2(client, g_iMyWeaponsOffset + offset);
+		if (weapon <= MaxClients || !IsValidEntity(weapon))
+			continue;
+
+		char weaponClass[MAX_WEAPON_CLASSNAME];
+		GetEdictClassname(weapon, weaponClass, sizeof(weaponClass));
+		if (IsAllowedUtilityWeapon(weaponClass))
+			continue;
+
+		if (!StrEqual(weaponClass, g_sActiveWeapons[WeaponSlot_Primary])
+			&& !StrEqual(weaponClass, g_sActiveWeapons[WeaponSlot_Secondary]))
+			continue;
+
+		int weaponRef = EntIndexToEntRef(weapon);
+		bool found;
+		for (int index = 0; index < g_iResupplyWeaponCount[client]; index++)
+			if (g_iResupplyWeaponRefs[client][index] == weaponRef) {
+				found = true;
+				break;
+			}
+
+		if (!found)
+			g_iResupplyWeaponRefs[client][g_iResupplyWeaponCount[client]++] = weaponRef;
+	}
+}
+
+void RemoveCapturedResupplyDrops(int client) {
+	int weaponCount = g_iResupplyWeaponCount[client];
+	g_iResupplyWeaponCount[client] = 0;
+
+	for (int index = 0; index < weaponCount; index++) {
+		int weapon = EntRefToEntIndex(g_iResupplyWeaponRefs[client][index]);
+		g_iResupplyWeaponRefs[client][index] = INVALID_ENT_REFERENCE;
+		if (weapon <= MaxClients || !IsValidEntity(weapon))
+			continue;
+
+		// Only remove the original weapon after native resupply has dropped it.
+		// Keeping an entity still owned by the player avoids corrupting the active
+		// weapon state if a future game update changes native resupply behavior.
+		if (GetEntPropEnt(weapon, Prop_Send, "m_hOwnerEntity") != client)
+			AcceptEntityInput(weapon, "Kill");
+	}
+}
+
+void ClearCapturedResupplyWeapons(int client) {
+	if (client < 1 || client > MaxClients)
+		return;
+
+	for (int index = 0; index < g_iResupplyWeaponCount[client]; index++)
+		g_iResupplyWeaponRefs[client][index] = INVALID_ENT_REFERENCE;
+
+	g_iResupplyWeaponCount[client] = 0;
+	ga_fResupplyTimeBefore[client] = -1.0;
+}
+
 public Action CommandListener_BuyWeapon(int client, const char[] command, int argc) {
 	if (!g_bModeActive || !IsEligibleVoter(client))
 		return Plugin_Continue;
@@ -1288,13 +1563,15 @@ public Action Hook_WeaponEquip(int client, int weapon) {
 
 	char weaponClass[MAX_WEAPON_CLASSNAME];
 	GetEdictClassname(weapon, weaponClass, sizeof(weaponClass));
-	if (StrEqual(weaponClass, g_sActiveWeapons[WeaponSlot_Primary])
-		|| StrEqual(weaponClass, g_sActiveWeapons[WeaponSlot_Secondary])
-		|| IsAllowedUtilityWeapon(weaponClass))
+	if (IsAllowedVotedWeapon(weaponClass))
 		return Plugin_Continue;
 
 	RequestFrame(Frame_DropRestrictedWeapon, EntIndexToEntRef(weapon));
 	return Plugin_Continue;
+}
+
+void HookClientWeapons(int client) {
+	SDKHook(client, SDKHook_WeaponEquip, Hook_WeaponEquip);
 }
 
 void Frame_DropRestrictedWeapon(any data) {
@@ -1308,9 +1585,7 @@ void Frame_DropRestrictedWeapon(any data) {
 
 	char weaponClass[MAX_WEAPON_CLASSNAME];
 	GetEdictClassname(weapon, weaponClass, sizeof(weaponClass));
-	if (StrEqual(weaponClass, g_sActiveWeapons[WeaponSlot_Primary])
-		|| StrEqual(weaponClass, g_sActiveWeapons[WeaponSlot_Secondary])
-		|| IsAllowedUtilityWeapon(weaponClass))
+	if (IsAllowedVotedWeapon(weaponClass))
 		return;
 
 	SDKHooks_DropWeapon(client, weapon, NULL_VECTOR, NULL_VECTOR);
@@ -1323,10 +1598,13 @@ void Frame_ReselectVotedWeapon(any data) {
 		return;
 
 	int weapon = FindCarriedVotedWeapon(client, WeaponSlot_Primary);
-	if (weapon == -1)
-		weapon = FindCarriedVotedWeapon(client, WeaponSlot_Secondary);
 	if (weapon != -1)
-		SetEntPropEnt(client, Prop_Send, "m_hActiveWeapon", weapon);
+		SDKCall(g_hWeaponSwitch, client, weapon, 0);
+	else {
+		weapon = FindCarriedVotedWeapon(client, WeaponSlot_Secondary);
+		if (weapon != -1)
+			SDKCall(g_hWeaponSwitch, client, weapon, 0);
+	}
 }
 
 int FindCarriedVotedWeapon(int client, int slot) {
@@ -1362,14 +1640,32 @@ bool IsAllowedUtilityWeapon(const char[] weaponClass) {
 		|| StrEqual(weaponClass, "weapon_rpg7")
 		|| StrEqual(weaponClass, "weapon_at4")
 		|| StrEqual(weaponClass, "weapon_rifle_grenade")
-		|| StrEqual(weaponClass, "weapon_m203_he")
-		|| StrEqual(weaponClass, "weapon_m203_incid")
-		|| StrEqual(weaponClass, "weapon_m203_smoke")
-		|| StrEqual(weaponClass, "weapon_gp25_he")
-		|| StrEqual(weaponClass, "weapon_gp25_smoke")
 		|| StrEqual(weaponClass, "weapon_c4_clicker")
 		|| StrEqual(weaponClass, "weapon_c4_tripmine")
-		|| StrEqual(weaponClass, "weapon_c4_ied");
+		|| StrEqual(weaponClass, "weapon_c4_ied")
+		|| StrEqual(weaponClass, "weapon_p2a1")
+		|| StrEqual(weaponClass, "weapon_firesupport");
+}
+
+bool IsAllowedVotedWeapon(const char[] weaponClass) {
+	if (StrEqual(weaponClass, g_sActiveWeapons[WeaponSlot_Primary])
+		|| StrEqual(weaponClass, g_sActiveWeapons[WeaponSlot_Secondary]))
+		return true;
+	if (IsAllowedUtilityWeapon(weaponClass))
+		return true;
+
+	for (int slot = 0; slot < WeaponSlot_Count; slot++)
+		if (g_iActiveUpgrades[slot][UpgradeCategory_Underbarrel] > 0 && IsUnderbarrelAttachmentWeapon(weaponClass))
+			return true;
+
+	return false;
+}
+
+bool IsUnderbarrelAttachmentWeapon(const char[] weaponClass) {
+	return StrContains(weaponClass, "weapon_m203_", false) == 0
+		|| StrContains(weaponClass, "weapon_gp25_", false) == 0
+		|| StrContains(weaponClass, "weapon_ugl_", false) == 0
+		|| StrEqual(weaponClass, "weapon_m26");
 }
 
 bool IsEligibleVoter(int client) {
@@ -1439,6 +1735,17 @@ void ResetClientSelection(int client) {
 		for (int category = 0; category < UpgradeCategory_Count; category++)
 			ga_iSelectedUpgrades[client][slot][category] = -1;
 	}
+}
+
+void ClearWeaponSelection(int client, int slot) {
+	if (client < 1 || client > MaxClients || slot < 0 || slot >= WeaponSlot_Count)
+		return;
+
+	ga_sSelectedWeapons[client][slot][0] = '\0';
+	ga_sSelectedWeaponNames[client][slot][0] = '\0';
+	ga_iSelectedWeaponDefinitions[client][slot] = 0;
+	for (int category = 0; category < UpgradeCategory_Count; category++)
+		ga_iSelectedUpgrades[client][slot][category] = -1;
 }
 
 void ResetPendingLoadout() {
@@ -1513,6 +1820,11 @@ void InstallSelectedUpgrades(int client, int weapon, int slot) {
 }
 
 void BuildLoadoutDescription(const char[] primary, const char[] secondary, char[] buffer, int maxLength) {
+	if (primary[0] == '\0') {
+		strcopy(buffer, maxLength, secondary);
+		return;
+	}
+
 	if (secondary[0] == '\0') {
 		strcopy(buffer, maxLength, primary);
 		return;
