@@ -7,8 +7,10 @@
 #include <clientprefs>
 #include <dbi>
 
-#define PL_VERSION		"2.69"
+#define PL_VERSION		"2.71"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
+// Optional MySQL entry in databases.cfg. Local SQLite is used when it is not configured.
+#define BLUEPRINT_DATABASE_CONFIG "props_blueprints"
 
 #define MAXENTITIES		2048
 
@@ -276,6 +278,7 @@ Handle ga_hSelectableFlashTimer[MAXPLAYERS + 1] = {INVALID_HANDLE, ...};
 float ga_fNextSelectableFlash[MAXPLAYERS + 1] = {0.0, ...};
 
 Database g_hBlueprintDb = null;
+bool g_bBlueprintDbReady = false;
 ArrayList ga_hBlueprintProps[MAXPLAYERS + 1][BLUEPRINT_SLOT_COUNT];
 char ga_sBlueprintName[MAXPLAYERS + 1][BLUEPRINT_SLOT_COUNT][BLUEPRINT_NAME_LENGTH];
 bool ga_bBlueprintsLoaded[MAXPLAYERS + 1] = {false, ...};
@@ -3487,7 +3490,7 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 				OpenRotationMenu(client);
 				return 0;
 			}
-			if (g_hBlueprintDb == null) {
+			if (g_hBlueprintDb == null || !g_bBlueprintDbReady) {
 				PrintToChat(client, "Blueprints are unavailable because the database could not be opened.");
 				OpenRotationMenu(client);
 				return 0;
@@ -3737,24 +3740,57 @@ static void ClearClientBlueprints(int client) {
 }
 
 static void SetupBlueprintDatabase() {
-	char error[256];
-	g_hBlueprintDb = SQLite_UseDatabase("props_blueprints", error, sizeof(error));
-	if (g_hBlueprintDb == null) {
-		LogError("Unable to open props blueprint database: %s", error);
+	g_bBlueprintDbReady = false;
+	if (SQL_CheckConfig(BLUEPRINT_DATABASE_CONFIG)) {
+		Database.Connect(SQL_ConnectBlueprintDatabase, BLUEPRINT_DATABASE_CONFIG);
 		return;
 	}
 
-	if (!SQL_FastQuery(g_hBlueprintDb,
-		"CREATE TABLE IF NOT EXISTS bm_props_blueprints (steamid TEXT NOT NULL, slot INTEGER NOT NULL, name TEXT NOT NULL, layout TEXT NOT NULL, PRIMARY KEY (steamid, slot))")) {
-		SQL_GetError(g_hBlueprintDb, error, sizeof(error));
+	SetupLocalBlueprintDatabase();
+}
+
+public void SQL_ConnectBlueprintDatabase(Database db, const char[] error, any data) {
+	if (db == null) {
+		LogError("Unable to connect to the props blueprint database '%s': %s", BLUEPRINT_DATABASE_CONFIG, error);
+		return;
+	}
+
+	g_hBlueprintDb = db;
+	SQL_TQuery(g_hBlueprintDb, SQL_CreateBlueprintTable,
+		"CREATE TABLE IF NOT EXISTS bm_props_blueprints (steamid VARCHAR(64) NOT NULL, slot TINYINT UNSIGNED NOT NULL, name VARCHAR(128) NOT NULL, layout TEXT NOT NULL, PRIMARY KEY (steamid, slot)) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+}
+
+static void SetupLocalBlueprintDatabase() {
+	g_bBlueprintDbReady = false;
+	char error[256];
+	g_hBlueprintDb = SQLite_UseDatabase("props_blueprints", error, sizeof(error));
+	if (g_hBlueprintDb == null) {
+		LogError("Unable to open local props blueprint database: %s", error);
+		return;
+	}
+
+	SQL_TQuery(g_hBlueprintDb, SQL_CreateBlueprintTable,
+		"CREATE TABLE IF NOT EXISTS bm_props_blueprints (steamid TEXT NOT NULL, slot INTEGER NOT NULL, name TEXT NOT NULL, layout TEXT NOT NULL, PRIMARY KEY (steamid, slot))");
+}
+
+public void SQL_CreateBlueprintTable(Database db, DBResultSet results, const char[] error, any data) {
+	if (error[0] != '\0') {
 		LogError("Unable to create props blueprint table: %s", error);
 		delete g_hBlueprintDb;
 		g_hBlueprintDb = null;
+		g_bBlueprintDbReady = false;
+		return;
+	}
+
+	g_bBlueprintDbReady = true;
+	for (int client = 1; client <= MaxClients; client++) {
+		if (IsClientInGame(client) && !IsFakeClient(client))
+			LoadClientBlueprints(client);
 	}
 }
 
 static void LoadClientBlueprints(int client) {
-	if (g_hBlueprintDb == null || client < 1 || client > MaxClients || !IsClientInGame(client)
+	if (g_hBlueprintDb == null || !g_bBlueprintDbReady || client < 1 || client > MaxClients || !IsClientInGame(client)
 		|| IsFakeClient(client) || ga_bBlueprintsLoading[client] || ga_bBlueprintsLoaded[client])
 		return;
 
@@ -4074,7 +4110,7 @@ static void SavePendingBlueprint(int client, const char[] name) {
 	}
 
 	char steamId[64], escapedSteamId[128], escapedName[BLUEPRINT_NAME_LENGTH * 2], escapedLayout[BLUEPRINT_LAYOUT_LENGTH * 2], query[BLUEPRINT_LAYOUT_LENGTH * 2 + 512];
-	if (g_hBlueprintDb == null || !GetBlueprintSteamId(client, steamId, sizeof(steamId))) {
+	if (g_hBlueprintDb == null || !g_bBlueprintDbReady || !GetBlueprintSteamId(client, steamId, sizeof(steamId))) {
 		PrintToChat(client, "Blueprint save failed because the database is unavailable.");
 		delete ga_hPendingBlueprintProps[client];
 		ga_hPendingBlueprintProps[client] = null;
@@ -4249,7 +4285,7 @@ static bool StartBlueprintHold(int client, int slot) {
 }
 
 static void OpenBlueprintMenu(int client) {
-	if (g_hBlueprintDb == null) {
+	if (g_hBlueprintDb == null || !g_bBlueprintDbReady) {
 		PrintToChat(client, "Blueprints are unavailable because the database could not be opened.");
 		return;
 	}
