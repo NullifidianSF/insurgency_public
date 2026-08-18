@@ -1,5 +1,5 @@
 /**
- * Web News v1.0.20
+ * Web News v1.0.21
  * Downloads public and staff news once per map and presents it through !news.
  * Requires the SteamWorks extension.
  */
@@ -11,13 +11,16 @@
 #include <clientprefs>
 #include <SteamWorks>
 
-#define WEB_NEWS_VERSION "1.0.20"
+#define WEB_NEWS_VERSION "1.0.21"
 // Edit this to the folder containing your news files. It must end with a slash.
 #define WEB_NEWS_URL "https://botmassacre.com/news/"
 // Edit these file names if your web-server news files use different names.
 #define WEB_NEWS_MEDIC_FILE "news.txt"
 #define WEB_NEWS_NON_MEDIC_FILE "news_nomedic.txt"
 #define WEB_NEWS_ADMIN_FILE "admin_news.txt"
+// Use different public cookie names for any server that has a unique public news feed.
+#define WEB_NEWS_MEDIC_READ_COOKIE "web_news_last_read_medic_date"
+#define WEB_NEWS_NON_MEDIC_READ_COOKIE "web_news_last_read_nomedic_date"
 // Limits: each file must be <= 16,383 bytes; only the first 512 wrapped display lines are stored.
 // The panel uses five stored lines of up to 56 characters per page.
 #define NEWS_BODY_MAX 16384
@@ -67,7 +70,8 @@ bool g_bClientUnreadAdminNewsNotified[MAXPLAYERS + 1];
 char g_sLatestPublicNewsDate[NEWS_DATE_LENGTH];
 char g_sLatestAdminNewsDate[NEWS_DATE_LENGTH];
 char g_sLastAnnouncedNewsDate[NEWS_DATE_LENGTH];
-Cookie g_hLastReadNewsCookie;
+Cookie g_hLastReadMedicNewsCookie;
+Cookie g_hLastReadNonMedicNewsCookie;
 Cookie g_hLastReadAdminNewsCookie;
 
 public Plugin myinfo =
@@ -90,7 +94,8 @@ public void OnPluginStart()
 	g_AdminLines = new ArrayList(NEWS_DISPLAY_LINE_SIZE);
 	g_PublicPageStarts = new ArrayList();
 	g_AdminPageStarts = new ArrayList();
-	g_hLastReadNewsCookie = RegClientCookie("web_news_last_read_date", "Last public-news date opened by this player.", CookieAccess_Private);
+	g_hLastReadMedicNewsCookie = RegClientCookie(WEB_NEWS_MEDIC_READ_COOKIE, "Last medic-news date opened by this player.", CookieAccess_Private);
+	g_hLastReadNonMedicNewsCookie = RegClientCookie(WEB_NEWS_NON_MEDIC_READ_COOKIE, "Last non-medic-news date opened by this player.", CookieAccess_Private);
 	g_hLastReadAdminNewsCookie = RegClientCookie("web_news_last_read_admin_date", "Last admin-news date opened by this player.", CookieAccess_Private);
 	LoadLastNewsAnnouncement();
 
@@ -577,7 +582,7 @@ static void NotifyClientOfUnreadNews(int client)
 		return;
 
 	char lastReadDate[NEWS_DATE_LENGTH];
-	GetClientCookie(client, g_hLastReadNewsCookie, lastReadDate, sizeof(lastReadDate));
+	GetClientCookie(client, GetPublicNewsReadCookie(), lastReadDate, sizeof(lastReadDate));
 	if (!IsNewsDateNewer(g_sLatestPublicNewsDate, lastReadDate))
 		return;
 
@@ -590,7 +595,7 @@ static void MarkLatestPublicNewsRead(int client)
 	if (g_sLatestPublicNewsDate[0] == '\0' || !AreClientCookiesCached(client))
 		return;
 
-	SetClientCookie(client, g_hLastReadNewsCookie, g_sLatestPublicNewsDate);
+	SetClientCookie(client, GetPublicNewsReadCookie(), g_sLatestPublicNewsDate);
 	g_bClientUnreadNewsNotified[client] = true;
 }
 
@@ -910,6 +915,11 @@ static void GetNewsUrl(NewsType type, char[] url, int maxLength)
 	}
 	else
 		Format(url, maxLength, "%s%s", WEB_NEWS_URL, WEB_NEWS_ADMIN_FILE);
+}
+
+static Cookie GetPublicNewsReadCookie()
+{
+	return UsesMedicTheater() ? g_hLastReadMedicNewsCookie : g_hLastReadNonMedicNewsCookie;
 }
 
 static bool UsesMedicTheater()
