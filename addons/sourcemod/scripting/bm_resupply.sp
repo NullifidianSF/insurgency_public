@@ -4,7 +4,7 @@
 #pragma semicolon 1
 #pragma newdecls required
 
-#define PLUGIN_VERSION "1.0.1"
+#define PLUGIN_VERSION "1.0.2"
 #define GAMEDATA_FILE "insurgency-bm.games"
 
 Handle g_hResupply = null;
@@ -23,6 +23,8 @@ public Plugin myinfo =
 
 public void OnPluginStart()
 {
+	LoadTranslations("common.phrases");
+
 	if (GetEngineVersion() != Engine_Insurgency)
 	{
 		SetFailState("This plugin supports Insurgency 2014 only.");
