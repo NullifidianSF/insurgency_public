@@ -16,9 +16,10 @@
 #include <sourcemod>
 #include <sdkhooks>
 #include <sdktools>
+#include <dhooks>
 //#include <insurgencydy>
 
-#define PLUGIN_VERSION "1.3.6"
+#define PLUGIN_VERSION "1.4.0"
 #define BULLET_GAMEDATA_FILE "insurgency-bm.games"
 
 static const float RICOCHET_MIN_DAMAGE = 5.0;
@@ -31,6 +32,7 @@ ConVar	g_cvBotProtectionTime = null,
 		g_cvBotProtectionBlast = null,
 		g_cvBotRiotShieldChance = null,
 		g_cvBotRiotShieldMinSec = null,
+		g_cvRiotShieldSprintMode = null,
 		g_cvRicochetEnabled = null,
 		g_cvRicochetBotShields = null,
 		g_cvRicochetCloseDistance = null,
@@ -42,11 +44,15 @@ ConVar	g_cvBotProtectionTime = null,
 		g_cvRicochetFxCooldown = null;
 
 Handle	g_hTEFireBullets = null,
-		g_hGetWeaponDefinitionHandle = null;
+		g_hGetWeaponDefinitionHandle = null,
+		g_hGetMuzzle = null;
+
+DynamicHook g_hAllowPlayerSprintHook = null;
 
 int		ga_iAttackerOfShield[MAXPLAYERS + 1] = {0, ...},
 		ga_iRicochetKillerUserId[MAXPLAYERS + 1] = {0, ...},
 		g_iBotRiotShieldMinSec,
+		g_iRiotShieldSprintMode,
 		g_iSecPlayersAlive;
 
 bool	ga_bBlacklistClass[MAXPLAYERS + 1] = {false, ...},
@@ -140,10 +146,19 @@ public void OnPluginStart()
 	{
 		g_hTEFireBullets = PrepareTEFireBullets(config);
 		g_hGetWeaponDefinitionHandle = PrepareGetWeaponDefinitionHandle(config);
+		g_hGetMuzzle = PrepareGetMuzzle(config);
+		g_hAllowPlayerSprintHook = DHookCreate(-1, HookType_Entity, ReturnType_Bool, ThisPointer_CBaseEntity);
+		if (g_hAllowPlayerSprintHook == null || !DHookSetFromConf(g_hAllowPlayerSprintHook, config, SDKConf_Virtual, "CINSWeapon::AllowPlayerSprint"))
+		{
+			delete g_hAllowPlayerSprintHook;
+			LogError("Riot-shield sprint override disabled: could not find CINSWeapon::AllowPlayerSprint in %s.txt", BULLET_GAMEDATA_FILE);
+		}
 		delete config;
 
 		if (g_hTEFireBullets == null || g_hGetWeaponDefinitionHandle == null)
 			LogError("Ricochet tracers disabled: one or more safe bullet signatures failed to resolve.");
+		if (g_hGetMuzzle == null)
+			LogError("Ricochet muzzle targeting unavailable: falling back to the shooter's eye position.");
 	}
 
 	g_cvBotProtectionTime = CreateConVar("bot_spawnprotectiontime", "6.0", "Bot spawn protection time [0.0 - 30.0]", _, true, 0.0, true, 30.0);
@@ -169,6 +184,10 @@ public void OnPluginStart()
 	g_cvBotRiotShieldMinSec = CreateConVar("bot_riotshield_minplayers", "4.0", "Min. security players alive for 'bot_riotshield' to trigger", _, true, 0.0);
 	g_iBotRiotShieldMinSec = g_cvBotRiotShieldMinSec.IntValue;
 	g_cvBotRiotShieldMinSec.AddChangeHook(OnConVarChanged);
+
+	g_cvRiotShieldSprintMode = CreateConVar("riotshield_sprint_mode", "0", "Allow sprinting with an active riot shield [0 = disabled, 1 = bots only, 2 = humans only, 3 = bots and humans]", _, true, 0.0, true, 3.0);
+	g_iRiotShieldSprintMode = g_cvRiotShieldSprintMode.IntValue;
+	g_cvRiotShieldSprintMode.AddChangeHook(OnConVarChanged);
 
 	g_cvRicochetEnabled = CreateConVar("riotshield_ricochet_enable", "1", "Enable enemy bullet ricochets from actively held riot shields", _, true, 0.0, true, 1.0);
 	g_bRicochetEnabled = g_cvRicochetEnabled.BoolValue;
@@ -207,6 +226,7 @@ public void OnPluginStart()
 	g_cvRicochetFxCooldown.AddChangeHook(OnConVarChanged);
 
 	AutoExecConfig(true, "riotshield_botspawnprotection");
+	HookExistingRiotShieldSprint();
 
 	if (g_bLateLoad)
 	{
@@ -234,6 +254,62 @@ public void OnPluginEnd()
 {
 	delete g_hTEFireBullets;
 	delete g_hGetWeaponDefinitionHandle;
+	delete g_hGetMuzzle;
+	delete g_hAllowPlayerSprintHook;
+}
+
+public void OnEntityCreated(int entity, const char[] classname)
+{
+	if (g_hAllowPlayerSprintHook != null && strcmp(classname, "weapon_riotshield", false) == 0)
+		RequestFrame(Frame_HookRiotShieldSprint, EntIndexToEntRef(entity));
+}
+
+void Frame_HookRiotShieldSprint(any reference)
+{
+	int weapon = EntRefToEntIndex(reference);
+	if (weapon > MaxClients && IsValidEntity(weapon))
+		HookRiotShieldSprint(weapon);
+}
+
+void HookExistingRiotShieldSprint()
+{
+	if (g_hAllowPlayerSprintHook == null)
+		return;
+
+	char classname[64];
+	for (int entity = MaxClients + 1; entity < GetMaxEntities(); entity++)
+	{
+		if (!IsValidEntity(entity))
+			continue;
+
+		GetEntityClassname(entity, classname, sizeof(classname));
+		if (strcmp(classname, "weapon_riotshield", false) == 0)
+			HookRiotShieldSprint(entity);
+	}
+}
+
+void HookRiotShieldSprint(int weapon)
+{
+	int hookID = DHookEntity(g_hAllowPlayerSprintHook, true, weapon, INVALID_FUNCTION, Detour_AllowPlayerSprint_Post);
+	if (hookID == INVALID_HOOK_ID)
+		LogError("Could not hook riot-shield sprint check for entity %d.", weapon);
+}
+
+public MRESReturn Detour_AllowPlayerSprint_Post(int weapon, DHookReturn hReturn, DHookParam hParams)
+{
+	if (g_iRiotShieldSprintMode == 0)
+		return MRES_Ignored;
+
+	int owner = GetEntPropEnt(weapon, Prop_Send, "m_hOwnerEntity");
+	if (!IsAliveClient(owner) || GetEntPropEnt(owner, Prop_Send, "m_hActiveWeapon") != weapon)
+		return MRES_Ignored;
+
+	bool isBot = IsFakeClient(owner);
+	if ((isBot && (g_iRiotShieldSprintMode & 1) == 0) || (!isBot && (g_iRiotShieldSprintMode & 2) == 0))
+		return MRES_Ignored;
+
+	hReturn.Value = true;
+	return MRES_Override;
 }
 
 public void OnMapStart()
@@ -540,6 +616,17 @@ static Handle PrepareGetWeaponDefinitionHandle(GameData config)
 	return EndPrepSDKCall();
 }
 
+static Handle PrepareGetMuzzle(GameData config)
+{
+	StartPrepSDKCall(SDKCall_Player);
+	if (!PrepSDKCall_SetFromConf(config, SDKConf_Signature, "CINSPlayer::GetMuzzle"))
+		return null;
+
+	PrepSDKCall_AddParameter(SDKType_Vector, SDKPass_ByRef);
+	PrepSDKCall_AddParameter(SDKType_QAngle, SDKPass_ByRef);
+	return EndPrepSDKCall();
+}
+
 static void ResetRicochetState(int client)
 {
 	ga_fNextRicochetTime[client] = 0.0;
@@ -674,9 +761,9 @@ static void GetRicochetImpactPosition(int shieldBearer, const float damagePositi
 
 static bool BuildRicochetDirection(const float origin[3], int shooter, float direction[3], float &distance)
 {
-	float shooterEye[3];
-	GetClientEyePosition(shooter, shooterEye);
-	MakeVectorFromPoints(origin, shooterEye, direction);
+	float shooterMuzzle[3];
+	GetRicochetTargetPosition(shooter, shooterMuzzle);
+	MakeVectorFromPoints(origin, shooterMuzzle, direction);
 	distance = GetVectorLength(direction);
 	if (distance <= 0.001 || distance > g_fRicochetMaxDistance)
 		return false;
@@ -730,6 +817,20 @@ static bool BuildRicochetDirection(const float origin[3], int shooter, float dir
 	direction[2] = direction[2] * forwardScale + right[2] * rightScale + up[2] * upScale;
 	NormalizeVector(direction, direction);
 	return true;
+}
+
+static void GetRicochetTargetPosition(int shooter, float outPosition[3])
+{
+	if (g_hGetMuzzle != null)
+	{
+		float muzzleAngles[3], shooterOrigin[3];
+		SDKCall(g_hGetMuzzle, shooter, outPosition, muzzleAngles);
+		GetClientAbsOrigin(shooter, shooterOrigin);
+		if (GetVectorDistance(outPosition, shooterOrigin) <= 128.0)
+			return;
+	}
+
+	GetClientEyePosition(shooter, outPosition);
 }
 
 static void EmitRicochetEffect(int shieldBearer, int shooterWeapon, const float origin[3], const float direction[3])
@@ -967,4 +1068,6 @@ void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue
 	{
 		g_fRicochetFxCooldown = g_cvRicochetFxCooldown.FloatValue;
 	}
+	else if (convar == g_cvRiotShieldSprintMode)
+	g_iRiotShieldSprintMode = g_cvRiotShieldSprintMode.IntValue;
 }
