@@ -19,7 +19,7 @@
 #include <dhooks>
 //#include <insurgencydy>
 
-#define PLUGIN_VERSION "1.4.0"
+#define PLUGIN_VERSION "1.4.1"
 #define BULLET_GAMEDATA_FILE "insurgency-bm.games"
 
 static const float RICOCHET_MIN_DAMAGE = 5.0;
@@ -45,7 +45,8 @@ ConVar	g_cvBotProtectionTime = null,
 
 Handle	g_hTEFireBullets = null,
 		g_hGetWeaponDefinitionHandle = null,
-		g_hGetMuzzle = null;
+		g_hGetMuzzle = null,
+		g_hWeaponSwitch = null;
 
 DynamicHook g_hAllowPlayerSprintHook = null;
 
@@ -147,6 +148,7 @@ public void OnPluginStart()
 		g_hTEFireBullets = PrepareTEFireBullets(config);
 		g_hGetWeaponDefinitionHandle = PrepareGetWeaponDefinitionHandle(config);
 		g_hGetMuzzle = PrepareGetMuzzle(config);
+		g_hWeaponSwitch = PrepareWeaponSwitch(config);
 		g_hAllowPlayerSprintHook = DHookCreate(-1, HookType_Entity, ReturnType_Bool, ThisPointer_CBaseEntity);
 		if (g_hAllowPlayerSprintHook == null || !DHookSetFromConf(g_hAllowPlayerSprintHook, config, SDKConf_Virtual, "CINSWeapon::AllowPlayerSprint"))
 		{
@@ -159,6 +161,8 @@ public void OnPluginStart()
 			LogError("Ricochet tracers disabled: one or more safe bullet signatures failed to resolve.");
 		if (g_hGetMuzzle == null)
 			LogError("Ricochet muzzle targeting unavailable: falling back to the shooter's eye position.");
+		if (g_hWeaponSwitch == null)
+			LogError("Riot-shield bots will use the engine's automatic weapon equip: CINSPlayer::Weapon_Switch is unavailable.");
 	}
 
 	g_cvBotProtectionTime = CreateConVar("bot_spawnprotectiontime", "6.0", "Bot spawn protection time [0.0 - 30.0]", _, true, 0.0, true, 30.0);
@@ -255,6 +259,7 @@ public void OnPluginEnd()
 	delete g_hTEFireBullets;
 	delete g_hGetWeaponDefinitionHandle;
 	delete g_hGetMuzzle;
+	delete g_hWeaponSwitch;
 	delete g_hAllowPlayerSprintHook;
 }
 
@@ -293,6 +298,22 @@ void HookRiotShieldSprint(int weapon)
 	int hookID = DHookEntity(g_hAllowPlayerSprintHook, true, weapon, INVALID_FUNCTION, Detour_AllowPlayerSprint_Post);
 	if (hookID == INVALID_HOOK_ID)
 		LogError("Could not hook riot-shield sprint check for entity %d.", weapon);
+}
+
+void Frame_EquipRiotShield(any reference)
+{
+	if (g_hWeaponSwitch == null)
+		return;
+
+	int weapon = EntRefToEntIndex(reference);
+	if (weapon <= MaxClients || !IsValidEntity(weapon))
+		return;
+
+	int client = GetEntPropEnt(weapon, Prop_Send, "m_hOwnerEntity");
+	if (!IsAliveClient(client) || !IsFakeClient(client))
+		return;
+
+	SDKCall(g_hWeaponSwitch, client, weapon, 0);
 }
 
 public MRESReturn Detour_AllowPlayerSprint_Post(int weapon, DHookReturn hReturn, DHookParam hParams)
@@ -409,7 +430,9 @@ public Action Event_PlayerSpawn_Post(Event event, char[] name, bool dontBroadcas
 				SafeKillIdx(wep);
 			}
 		}
-		GivePlayerItem(client, "weapon_riotshield");
+		int shield = GivePlayerItem(client, "weapon_riotshield");
+		if (shield > MaxClients && IsValidEntity(shield))
+			RequestFrame(Frame_EquipRiotShield, EntIndexToEntRef(shield));
 	}
 	return Plugin_Continue;
 }
@@ -624,6 +647,18 @@ static Handle PrepareGetMuzzle(GameData config)
 
 	PrepSDKCall_AddParameter(SDKType_Vector, SDKPass_ByRef);
 	PrepSDKCall_AddParameter(SDKType_QAngle, SDKPass_ByRef);
+	return EndPrepSDKCall();
+}
+
+static Handle PrepareWeaponSwitch(GameData config)
+{
+	StartPrepSDKCall(SDKCall_Player);
+	if (!PrepSDKCall_SetFromConf(config, SDKConf_Signature, "CINSPlayer::Weapon_Switch"))
+		return null;
+
+	PrepSDKCall_AddParameter(SDKType_CBaseEntity, SDKPass_Pointer);
+	PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);
+	PrepSDKCall_SetReturnInfo(SDKType_Bool, SDKPass_Plain);
 	return EndPrepSDKCall();
 }
 
