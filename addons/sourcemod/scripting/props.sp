@@ -7,7 +7,7 @@
 #include <clientprefs>
 #include <dbi>
 
-#define PL_VERSION		"2.71"
+#define PL_VERSION		"2.72"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 // Optional MySQL entry in databases.cfg. Local SQLite is used when it is not configured.
 #define BLUEPRINT_DATABASE_CONFIG "props_blueprints"
@@ -610,6 +610,7 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 			continue;
 
 		StopHolding(i);
+		DeconstructAllProps(i);
 		ga_iPropOwner[i] = 0;
 		ga_bPlayerRefund[i] = false;
 		ga_bPlacingNow[i] = false;
