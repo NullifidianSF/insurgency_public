@@ -4,14 +4,14 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PL_VERSION		"1.9"
+#define PL_VERSION		"1.10"
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
 #define TEAM_INSURGENT	3
 
-static const float gc_fTimeBeforeMoveToSpec 		= 240.0;	// def = 240.0
-static const float gc_fTimeBeforeKick				= 600.0;	// def = 600.0
+static const float gc_fTimeBeforeMoveToSpec 		= 240.0;	// Base idle seconds before moving a player-team client to spectator; 0 disables.
+static const float gc_fTimeBeforeKick				= 600.0;	// Base total idle seconds before kicking; must exceed move time; 0 disables.
 static const float gc_fTimeBeforeActionWarn			= 60.0;		// def = 60.0
 static const float gc_fTimerInterval				= 0.25;		// def = 0.25
 
@@ -19,7 +19,7 @@ static const int gc_iMinPlayersInGameBeforeMove		= 2;		// def = 2
 static const int gc_iMinPlayersInGameBeforeKick		= 10;		// def = 10
 static const int gc_iNumberOfDaysToKeepLogs			= 7;		// def = 7
 
-static const char gc_sDatabaseConfig[]					= "afkmanager";
+static const char gc_sDatabaseConfig[]					= "ban_squad_class";		// afkmanager
 static const int gc_iRepeatAfkWindow					= 86400;	// 24 hours
 static const float gc_fRepeatAfkMoveReduction			= 60.0;		// per previous AFK kick
 static const float gc_fRepeatAfkKickReduction			= 120.0;	// per previous AFK kick
@@ -194,10 +194,13 @@ public Action Event_PlayerTeam(Event event, const char[] name, bool dontBroadcas
 	if (!IsHumanClientInGame(client))
 		return Plugin_Continue;
 
-	ga_iPlayerTeam[client] = event.GetInt("team");
-	ga_fTimePlayerLastActive[client] = AFK_Now();
+	int team = event.GetInt("team");
+	ga_iPlayerTeam[client] = team;
 	ga_fTimeToNextWarning[client] = 0.0;
 	ga_bIsPlayerPickedSquad[client] = false;
+	if (team == TEAM_SECURITY || team == TEAM_INSURGENT)
+		ga_fTimePlayerLastActive[client] = AFK_Now();
+
 	return Plugin_Continue;
 }
 
@@ -217,6 +220,10 @@ public Action OnClientSayCommand(int client, const char[] command, const char[] 
 	if (!IsHumanClientInGame(client))
 		return Plugin_Continue;
 
+	int team = GetClientTeam(client);
+	if (team != TEAM_SECURITY && team != TEAM_INSURGENT)
+		return Plugin_Continue;
+
 	ga_fTimePlayerLastActive[client] = AFK_Now();
 	ga_fTimeToNextWarning[client] = 0.0;
 	return Plugin_Continue;
@@ -233,13 +240,14 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 	ga_fPlayerNextAfkScanAt[client] = now + gc_fTimerInterval;
 
 	int team = ga_iPlayerTeam[client];
+	bool isPlayingTeam = (team == TEAM_SECURITY || team == TEAM_INSURGENT);
 
-	if (gc_bIsDeadPlayersExcluded && (team == TEAM_SECURITY || team == TEAM_INSURGENT) && !IsPlayerAlive(client) && ga_bIsPlayerPickedSquad[client]) {
+	if (isPlayingTeam && gc_bIsDeadPlayersExcluded && !IsPlayerAlive(client) && ga_bIsPlayerPickedSquad[client]) {
 		ga_fTimePlayerLastActive[client] = now;
 		return Plugin_Continue;
 	}
 
-	if (mouse[0] != 0 || mouse[1] != 0 || buttons != ga_iPlayerLastButtons[client]) {
+	if (isPlayingTeam && (mouse[0] != 0 || mouse[1] != 0 || buttons != ga_iPlayerLastButtons[client])) {
 		ga_fTimePlayerLastActive[client] = now;
 		ga_iPlayerLastButtons[client] = buttons;
 		ga_fTimeToNextWarning[client] = 0.0;
@@ -250,7 +258,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 	float moveTime = GetMoveTimeForClient(client);
 	float kickTime = GetKickTimeForClient(client);
 
-	if (moveTime > 0.0 && (team == TEAM_SECURITY || team == TEAM_INSURGENT) && g_iNumberHumanPlayersInGame >= gc_iMinPlayersInGameBeforeMove && idle >= moveTime && !g_bIsGameEnd) {
+	if (moveTime > 0.0 && isPlayingTeam && g_iNumberHumanPlayersInGame >= gc_iMinPlayersInGameBeforeMove && idle >= moveTime && !g_bIsGameEnd) {
 		MovePlayerToSpectator(client, idle);
 		return Plugin_Continue;
 	}
@@ -269,7 +277,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 	const float BIG = 999999.0;
 	float moveLeft = BIG, kickLeft = BIG;
 
-	if (moveTime > 0.0 && (team == TEAM_SECURITY || team == TEAM_INSURGENT) && g_iNumberHumanPlayersInGame >= gc_iMinPlayersInGameBeforeMove) {
+	if (moveTime > 0.0 && isPlayingTeam && g_iNumberHumanPlayersInGame >= gc_iMinPlayersInGameBeforeMove) {
 		float t = moveTime - idle;
 		if (t > 0.0)
 			moveLeft = t;
@@ -317,8 +325,11 @@ void MovePlayerToSpectator(int client, float idle) {
 		strcopy(auth, sizeof(auth), "UNKNOWN");
 
 	LogAFK("MOVE: \"%s\" %s idle=%.1fs", name, auth, idle);
-	ResetPlayerGlobals(client);
 	ga_iPlayerTeam[client] = TEAM_SPECTATOR;
+	ga_iPlayerLastButtons[client] = 0;
+	ga_fTimeToNextWarning[client] = 0.0;
+	ga_bIsPlayerPickedSquad[client] = false;
+	ga_fPlayerNextAfkScanAt[client] = 0.0;
 }
 
 void KickForAFK(int client, float idle) {
