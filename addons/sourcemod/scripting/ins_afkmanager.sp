@@ -19,7 +19,7 @@ static const int gc_iMinPlayersInGameBeforeMove		= 2;		// def = 2
 static const int gc_iMinPlayersInGameBeforeKick		= 10;		// def = 10
 static const int gc_iNumberOfDaysToKeepLogs			= 7;		// def = 7
 
-static const char gc_sDatabaseConfig[]					= "ban_squad_class";		// afkmanager
+static const char gc_sDatabaseConfig[]					= "afkmanager";		// afkmanager
 static const int gc_iRepeatAfkWindow					= 86400;	// 24 hours
 static const float gc_fRepeatAfkMoveReduction			= 60.0;		// per previous AFK kick
 static const float gc_fRepeatAfkKickReduction			= 120.0;	// per previous AFK kick
