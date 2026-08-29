@@ -9,23 +9,23 @@
 #define BIPOD_CAPABILITY 1
 #define GAMEDATA_FILE "insurgency-bm.games"
 
-static const float BIPOD_SCAN_INTERVAL = 0.50;
+static const float BIPOD_SCAN_INTERVAL = 1.0;
 static const float MAX_WALL_DISTANCE = 38.0;
 static const float MAX_WALL_NORMAL_Z = 0.70;
 
-float ga_fPlayerNextBipodScanAt[MAXPLAYERS + 1] = {0.0, ...};
 int ga_iBipodWeaponRef[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
 bool ga_bWeaponSupportsBipod[MAXPLAYERS + 1] = {false, ...};
 
 GameData g_hGameData = null;
 Handle g_hSupportsBipod = null;
 Handle g_hSetBipodState = null;
+Handle g_hBipodScanTimer = null;
 
 public Plugin myinfo = {
 	name        = "bipod_wallclip_fix",
 	author      = "Nullifidian",
 	description = "Prevents bipod wall-clipping exploits by automatically retracting deployed bipods near obstructions.",
-	version     = "1.0.2",
+	version     = "1.0.3",
 	url         = "https://steamcommunity.com/id/Nullifidian/"
 };
 
@@ -60,6 +60,7 @@ public void OnPluginStart() {
 	if (g_hSetBipodState == null)
 		SetFailState("[bipod_wallclip_fix] Could not create CINSPlayer::SetBipodState SDKCall.");
 
+	g_hBipodScanTimer = CreateTimer(BIPOD_SCAN_INTERVAL, Timer_BipodScan, _, TIMER_REPEAT);
 	HookEvent("weapon_deploy", Event_WeaponDeploy, EventHookMode_Post);
 	RequestFrame(Frame_InitialiseExistingClients);
 }
@@ -78,6 +79,7 @@ public void OnClientDisconnect(int client) {
 }
 
 public void OnPluginEnd() {
+	delete g_hBipodScanTimer;
 	delete g_hSetBipodState;
 	delete g_hSupportsBipod;
 	delete g_hGameData;
@@ -101,41 +103,37 @@ void Frame_CacheDeployedWeapon(any data) {
 }
 
 static void ResetClientState(int client) {
-	ga_fPlayerNextBipodScanAt[client] = 0.0;
 	ga_iBipodWeaponRef[client] = INVALID_ENT_REFERENCE;
 	ga_bWeaponSupportsBipod[client] = false;
 }
 
-public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon, int &subtype, int &cmdnum, int &tickcount, int &seed, int mouse[2]) {
-	if (!IsHumanAlive(client))
-		return Plugin_Continue;
+public Action Timer_BipodScan(Handle timer) {
+	for (int client = 1; client <= MaxClients; client++) {
+		if (!IsHumanAlive(client))
+			continue;
 
-	if (GetEntProp(client, Prop_Send, "m_iCurrentStance") != STANCE_PRONE)
-		return Plugin_Continue;
+		if (GetEntProp(client, Prop_Send, "m_iCurrentStance") != STANCE_PRONE)
+			continue;
 
-	int iWeapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-	if (iWeapon <= MaxClients || !IsValidEntity(iWeapon))
-		return Plugin_Continue;
+		int weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+		if (weapon <= MaxClients || !IsValidEntity(weapon))
+			continue;
 
-	if (ga_iBipodWeaponRef[client] != EntIndexToEntRef(iWeapon))
-		CacheWeaponBipodCapability(client);
+		if (ga_iBipodWeaponRef[client] != EntIndexToEntRef(weapon))
+			CacheWeaponBipodCapability(client);
 
-	if (!ga_bWeaponSupportsBipod[client])
-		return Plugin_Continue;
+		if (!ga_bWeaponSupportsBipod[client])
+			continue;
 
-	int iPlayerFlags = GetEntProp(client, Prop_Send, "m_iPlayerFlags");
-	if ((iPlayerFlags & PF_DEPLOY_BIPOD) == 0)
-		return Plugin_Continue;
+		if ((GetEntProp(client, Prop_Send, "m_iPlayerFlags") & PF_DEPLOY_BIPOD) == 0)
+			continue;
 
-	float now = GetGameTime();
-	if (now < ga_fPlayerNextBipodScanAt[client])
-		return Plugin_Continue;
-	ga_fPlayerNextBipodScanAt[client] = now + BIPOD_SCAN_INTERVAL;
+		float angles[3];
+		GetClientEyeAngles(client, angles);
+		if (IsWallTooClose(client, angles))
+			SDKCall(g_hSetBipodState, client, false);
+	}
 
-	if (!IsWallTooClose(client, angles))
-		return Plugin_Continue;
-
-	SDKCall(g_hSetBipodState, client, false);
 	return Plugin_Continue;
 }
 
