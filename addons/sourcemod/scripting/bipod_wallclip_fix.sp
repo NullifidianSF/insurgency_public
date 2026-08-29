@@ -4,7 +4,6 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define INS_SPECIAL1 (1 << 17)
 #define PF_DEPLOY_BIPOD (1 << 1)
 #define STANCE_PRONE 2
 #define BIPOD_CAPABILITY 1
@@ -20,12 +19,13 @@ bool ga_bWeaponSupportsBipod[MAXPLAYERS + 1] = {false, ...};
 
 GameData g_hGameData = null;
 Handle g_hSupportsBipod = null;
+Handle g_hSetBipodState = null;
 
 public Plugin myinfo = {
 	name        = "bipod_wallclip_fix",
 	author      = "Nullifidian",
 	description = "Prevents bipod wall-clipping exploits by automatically retracting deployed bipods near obstructions.",
-	version     = "1.0.0",
+	version     = "1.0.2",
 	url         = "https://steamcommunity.com/id/Nullifidian/"
 };
 
@@ -51,6 +51,15 @@ public void OnPluginStart() {
 	if (g_hSupportsBipod == null)
 		SetFailState("[bipod_wallclip_fix] Could not create CINSWeapon bipod capability SDKCall.");
 
+	StartPrepSDKCall(SDKCall_Player);
+	if (!PrepSDKCall_SetFromConf(g_hGameData, SDKConf_Signature, "CINSPlayer::SetBipodState")
+		|| !PrepSDKCall_AddParameter(SDKType_Bool, SDKPass_Plain))
+		SetFailState("[bipod_wallclip_fix] Missing CINSPlayer::SetBipodState signature in %s.txt", GAMEDATA_FILE);
+
+	g_hSetBipodState = EndPrepSDKCall();
+	if (g_hSetBipodState == null)
+		SetFailState("[bipod_wallclip_fix] Could not create CINSPlayer::SetBipodState SDKCall.");
+
 	HookEvent("weapon_deploy", Event_WeaponDeploy, EventHookMode_Post);
 	RequestFrame(Frame_InitialiseExistingClients);
 }
@@ -69,6 +78,7 @@ public void OnClientDisconnect(int client) {
 }
 
 public void OnPluginEnd() {
+	delete g_hSetBipodState;
 	delete g_hSupportsBipod;
 	delete g_hGameData;
 }
@@ -122,11 +132,11 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 		return Plugin_Continue;
 	ga_fPlayerNextBipodScanAt[client] = now + BIPOD_SCAN_INTERVAL;
 
-	if (!IsWallTooClose(client, angles) || (buttons & INS_SPECIAL1) != 0)
+	if (!IsWallTooClose(client, angles))
 		return Plugin_Continue;
 
-	buttons |= INS_SPECIAL1;
-	return Plugin_Changed;
+	SDKCall(g_hSetBipodState, client, false);
+	return Plugin_Continue;
 }
 
 static void CacheWeaponBipodCapability(int client) {
