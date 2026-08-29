@@ -29,6 +29,14 @@
 				"linux"		"7124"
 			}
 
+			// Float offset containing the engine time of the player's last jump. Read with GetEntDataFloat.
+			// This is an offset rather than an SDKCall because the equivalent Windows getter is not emitted in this build.
+			"CINSPlayer::LastJumpTime"
+			{
+				"windows"	"7464"
+				"linux"		"7484"
+			}
+
 			"CINSPlayer::DeveloperFlag"
 			{
 				"windows"	"6128"
@@ -45,6 +53,22 @@
 			{
 				"windows"	"17"
 				"linux"		"18"
+			}
+
+			// Internal CINSPlayer virtual query: bool (). Returns whether the game wants the
+			// active weapon dropped on death. The base implementation returns false in this build.
+			"CINSPlayer::ShouldDropActiveWeaponWhenKilled"
+			{
+				"windows"	"308"
+				"linux"		"309"
+			}
+
+			// Player SDKCall: bool (entity weapon). Native final check for whether this player
+			// may use or pick up a CBaseCombatWeapon. It can be detoured to enforce custom pickup rules.
+			"CINSPlayer::Weapon_CanUse"
+			{
+				"windows"	"280"
+				"linux"		"281"
 			}
 
 			// Byte offset from CINSPlayer to its embedded CINSPlayerShared state.
@@ -134,6 +158,137 @@
 				"windows"	"461"
 				"linux"		"462"
 			}
+
+			// Internal CINSWeapon virtual: QAngle (). Returns the weapon's live calculated
+			// spread angles through the C++ hidden Vector return buffer. Bind it as a vector return,
+			// not as a scalar float.
+			"CINSWeapon::GetSpreadAngles"
+			{
+				"windows"	"416"
+				"linux"		"417"
+			}
+
+			// Weapon SDKCall: void (entity toucher). Native ground-weapon touch handler used when
+			// an entity touches a dropped weapon. Hook it only when a lower-level pickup intercept is needed.
+			"CINSWeapon::DefaultTouch"
+			{
+				"windows"	"244"
+				"linux"		"245"
+			}
+
+			// Weapon SDKCall: void (entity picker). Called after a CBaseCombatCharacter picks up this weapon.
+			// Useful as a post-pickup notification hook, not for granting a weapon.
+			"CINSWeapon::OnPickedUp"
+			{
+				"windows"	"313"
+				"linux"		"314"
+			}
+
+			// Weapon SDKCall: int (). Returns the weapon's native inventory position/category.
+			// This is useful for classifying carried weapons without relying on a hard-coded classname list.
+			"CINSWeapon::GetPosition"
+			{
+				"windows"	"332"
+				"linux"		"333"
+			}
+
+			// Weapon SDKCall: int (). Returns the theater-defined loadout slot, or -1 when
+			// this weapon has no valid theater definition. Use it to classify weapon slots
+			// without relying on classname lists.
+			"CINSWeapon::GetSlot"
+			{
+				"windows"	"331"
+				"linux"		"332"
+			}
+
+			// Weapon SDKCall: const char *(). Returns the native internal weapon name.
+			// The returned pointer belongs to the engine and must not be retained.
+			"CINSWeapon::GetName"
+			{
+				"windows"	"333"
+				"linux"		"334"
+			}
+
+			// Weapon SDKCall: const char *(). Returns the native print-name string or token.
+			// The returned pointer belongs to the engine and must not be retained.
+			"CINSWeapon::GetPrintName"
+			{
+				"windows"	"334"
+				"linux"		"335"
+			}
+
+			// Weapon SDKCall: int (). Returns the native theater weapon-class identifier.
+			// Its numeric values should be mapped with a small diagnostic before gameplay use.
+			"CINSWeapon::GetWeaponClass"
+			{
+				"windows"	"379"
+				"linux"		"380"
+			}
+
+			// Weapon SDKCall: bool (). Returns whether this weapon is a melee weapon.
+			"CINSWeapon::IsMeleeWeapon"
+			{
+				"windows"	"417"
+				"linux"		"418"
+			}
+
+			// Weapon SDKCall: entity (). Returns this weapon as its melee base, or null when
+			// it is not a melee weapon. Treat the result as an engine-owned entity pointer.
+			"CINSWeapon::GetMeleeBase"
+			{
+				"windows"	"372"
+				"linux"		"373"
+			}
+
+			// Weapon SDKCall: entity (). Returns this weapon as its ballistic base, or null when
+			// it is not a ballistic weapon. Treat the result as an engine-owned entity pointer.
+			"CINSWeapon::GetBallisticBase"
+			{
+				"windows"	"373"
+				"linux"		"374"
+			}
+
+			// Weapon SDKCall: entity (). Returns this weapon as its grenade base, or null when
+			// it is not a grenade weapon. Treat the result as an engine-owned entity pointer.
+			"CINSWeapon::GetGrenadeBase"
+			{
+				"windows"	"374"
+				"linux"		"375"
+			}
+
+			// Weapon SDKCall: void (). Called when its owner attempts primary fire with no usable ammo.
+			// Prefer detouring it for dry-fire behaviour rather than invoking it manually.
+			"CINSWeapon::HandleFireOnEmpty"
+			{
+				"windows"	"278"
+				"linux"		"279"
+			}
+
+			// Weapon SDKCall: void (int soundType, float volume). Emits the weapon's native sound
+			// variant at the requested volume multiplier. Sound-type values are weapon-engine enums.
+			"CINSWeapon::WeaponSound"
+			{
+				"windows"	"302"
+				"linux"		"303"
+			}
+
+			// Float field offset on a point_controlpoint entity. This is the value used by
+			// CPoint_ControlPoint::SetCaptureTime(float); SetEntDataFloat with changeState true
+			// is the Windows-safe equivalent because that build inlines the setter.
+			"CPoint_ControlPoint::CaptureTime"
+			{
+				"windows"	"888"
+				"linux"		"908"
+			}
+
+			// Float field offset on a point_controlpoint entity. This is the value used by
+			// CPoint_ControlPoint::SetDeteriorateTime(float); SetEntDataFloat with changeState true
+			// is the Windows-safe equivalent because that build inlines the setter.
+			"CPoint_ControlPoint::DeteriorateTime"
+			{
+				"windows"	"892"
+				"linux"		"912"
+			}
 		}
 
 		"Signatures"
@@ -154,6 +309,23 @@
 				"library"	"server"
 				"windows"	"\x8B\x81\x18\x41\x00\x00\xC3\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\x55\x8B\xEC\x83\xEC\x10\x83\xB9\x90\x05\x00\x00\x00"
 				"linux"		"@_ZNK10CINSWeapon25GetWeaponDefinitionHandleEv"
+			}
+
+			// Entity SDKCall: Address (). Returns the native CINSPlayer owner of this weapon,
+			// or null when the weapon is not currently owned by a valid player.
+			"CINSWeapon::GetINSPlayerOwner"
+			{
+				"library"	"server"
+				"windows"	"\x8B\x91\x98\x04\x00\x00\x83\xFA\xFF\x74\x24\x0F\xB7\xC2\xC1\xEA\x10\x8D\x0C\x40\xA1\x2A\x2A\x2A\x2A\x39\x54\xC8\x08\x75\x10\x8B\x4C\xC8\x04\x85\xC9\x74\x08\x8B\x01\xFF\xA0\x30\x01\x00\x00\x33\xC0\xC3"
+				"linux"		"@_ZN10CINSWeapon17GetINSPlayerOwnerEv"
+			}
+
+			// Player SDKCall: Vector (). Returns the current stance-aware eye-height offset.
+			// Linux only: no safely identifiable Windows body has been found in this server build.
+			"CINSPlayer::GetCurrentViewOffset"
+			{
+				"library"	"server"
+				"linux"		"@_ZN10CINSPlayer20GetCurrentViewOffsetEv"
 			}
 
 			// Weapon SDKCall: int (). Returns the native primary ammo-type ID, including a compatible ammo override
@@ -319,12 +491,67 @@
 				"linux"		"@_ZN21CINSObjectiveResource30SetReinforcementWavesRemainingEii"
 			}
 
+			// Control-point SDKCall: bool (int team). Returns whether Security (2) or
+			// Insurgents (3) is currently locked out of this point; other team values return false.
+			"CPoint_ControlPoint::IsLockedForTeam"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x8B\x45\x08\x83\xF8\x02\x75\x0A\x8A\x81\x80\x03\x00\x00\x5D\xC2\x04\x00\x83\xF8\x03\x75\x0A\x8A\x81\x81\x03\x00\x00\x5D\xC2\x04\x00\x32\xC0\x5D\xC2\x04\x00"
+				"linux"		"@_ZN19CPoint_ControlPoint15IsLockedForTeamEi"
+			}
+
+			// Control-point SDKCall: void (CItemCarryBase *carryItem). Sets or clears the
+			// carry item required by this point. Pass Address_Null to remove the requirement.
+			"CPoint_ControlPoint::SetRequireCarryItem"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x56\x8B\xF1\x8B\x4D\x08\x85\xC9\x74\x12\x8B\x01\xFF\x50\x08\x8B\x00\x89\x86\x88\x03\x00\x00\x5E\x5D\xC2\x04\x00\xC7\x86\x88\x03\x00\x00\xFF\xFF\xFF\xFF\x5E\x5D\xC2\x04\x00"
+				"linux"		"@_ZN19CPoint_ControlPoint19SetRequireCarryItemEP14CItemCarryBase"
+			}
+
+			// Control-point SDKCall: void (int requiredPointIndex). Sets the prerequisite
+			// point index. Pass -1 when the point should have no prerequisite.
+			"CPoint_ControlPoint::SetRequiredPointIndex"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x51\x53\x56\x57\x8B\x7D\x08\x89\xB9\x84\x03\x00\x00\x8B\x89\x70\x03\x00\x00\x8B\x35\x2A\x2A\x2A\x2A\x81\xC6\x9C\x06\x00\x00\x89\x4D\xFC\x8B\x04\x8E\x8D\x1C\x8E\x8D\x4D\x08\x89\x7D\x08\x3B\x01\x74\x39\x80\xBE\xB8\xF9\xFF\xFF\x00\x8D\x8E\x64\xF9\xFF\xFF\x74\x0F"
+				"linux"		"@_ZN19CPoint_ControlPoint21SetRequiredPointIndexEi"
+			}
+
 			// Player SDKCall: bool (bool unknown). Performs a native player resupply.
 			"CINSPlayer::Resupply"
 			{
 				"library"	"server"
 				"windows"	"\x55\x8B\xEC\x57\x8B\xF9\x8B\x07\x8B\x80\x14\x01\x00\x00\xFF\xD0\x84\xC0\x75\x2A\x2A\xC0\x5F\x5D\xC2\x04\x00\x80\x7D\x08\x00\x75\x2A\x8B\x07\x8B\xCF\x8B\x80\x20\x08\x00\x00\xFF\xD0\x84\xC0\x74\x2A\x8B\xCF\xE8\x2A\x2A\x2A\x2A\x84\xC0\x74\x2A\x8B\xCF\xE8\x2A\x2A\x2A\x2A"
 				"linux"		"@_ZN10CINSPlayer8ResupplyEb"
+			}
+
+			// Player SDKCall: float (). Returns the calculated native resupply cooldown length in seconds.
+			// It is the delay duration, not the remaining time. Combine it with LastResupplyTime for a countdown.
+			"CINSPlayer::GetResupplyDelay"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x0C\x57\x8B\xF9\x8B\x0D\x2A\x2A\x2A\x2A\x85\xC9\x75\x2A\xD9\xEE\x5F\x8B\xE5\x5D\xC3\xE8\x2A\x2A\x2A\x2A\x84\xC0\x75\x2A\x8B\x0D\x2A\x2A\x2A\x2A\x53\x56\x6A\x04\xE8\x2A\x2A\x2A\x2A\x84\xC0\x0F\x84"
+				"linux"		"@_ZN10CINSPlayer16GetResupplyDelayEv"
+			}
+
+			// Player SDKCall: bool (). Checks the native resupply cooldown and game-rule permission.
+			// If cooling down, the engine also sends the player its normal #inventory_resupply_delay message.
+			"CINSPlayer::CanResupplyNow"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x51\x56\x8B\xF1\xE8\x2A\x2A\x2A\x2A\xF3\x0F\x10\x9E\xB8\x1B\x00\x00\xA1\x2A\x2A\x2A\x2A\x0F\x28\xC3\xD9\x5D\xFC\xF3\x0F\x10\x4D\xFC\xF3\x0F\x58\xC1\xF3\x0F\x10\x50\x0C\x0F\x2F\xC2\x76\x2A"
+				"linux"		"@_ZN10CINSPlayer14CanResupplyNowEv"
+			}
+
+			// Player detour: void (float damage, bool armourHit, CTakeDamageInfo *damageInfo,
+			// Vector *damageDirection, CGameTrace *trace). Runs native blood/armour/headshot particles.
+			// The final three parameters are raw engine structures, so use a detour unless their ABI is fully modelled.
+			"CINSPlayer::DoBloodEffect"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\xA1\x2A\x2A\x2A\x2A\x83\xEC\x44\x53\x56\x57\x8B\xF9\x85\xC0\x74\x2A\xFF\x40\x10\x8B\x40\x04\x85\xC0\x75\x2A\x8B\x5D\x14\xF3\x0F\x10\x0D\x2A\x2A\x2A\x2A\x8B\x87\xC8\x00\x00\x00\xC1\xE8\x0C\xF3\x0F\x10\x03"
+				"linux"		"@_ZN10CINSPlayer13DoBloodEffectEfbRK15CTakeDamageInfoRK6VectorP10CGameTrace"
 			}
 
 			// Player detour: bool (CBaseCombatWeapon *weapon). Native world-weapon pickup path.
@@ -336,6 +563,15 @@
 				"linux"		"@_ZN10CINSPlayer10BumpWeaponEP17CBaseCombatWeapon"
 			}
 
+			// Player SDKCall: bool (CBaseCombatWeapon *weapon). Native ammo-only pickup capability callback.
+			// In this server build it returns true without modifying the player or weapon, so it is not an ammo-grant function.
+			"CINSPlayer::Weapon_EquipAmmoOnly"
+			{
+				"library"	"server"
+				"windows"	"\xB0\x01\xC2\x04\x00\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC"
+				"linux"		"@_ZN10CINSPlayer20Weapon_EquipAmmoOnlyEP17CBaseCombatWeapon"
+			}
+
 			// Player SDKCall: bool (CBaseCombatWeapon *weapon, int switchReason).
 			// Performs the full native weapon-switch/deploy path. Pass 0 for the normal switch reason.
 			"CINSPlayer::Weapon_Switch"
@@ -343,6 +579,32 @@
 				"library"	"server"
 				"windows"	"\x55\x8B\xEC\xFF\x75\x0C\x6A\x00\xFF\x75\x08\xE8\x2A\x2A\x2A\x2A\x5D\xC2\x08\x00"
 				"linux"		"@_ZN10CINSPlayer13Weapon_SwitchEP17CBaseCombatWeaponi"
+			}
+
+			// Player SDKCall: bool (CBaseCombatWeapon *excludedWeapon). Finds another usable carried weapon and switches to it.
+			// Pass null to allow any usable weapon; pass the weapon being removed to avoid selecting it again.
+			"CINSPlayer::SwitchToNextBestWeapon"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x53\x56\x57\x8B\xD9\x33\xF6\x8D\x9B\x00\x00\x00\x00\x8B\x03\x8B\xCB\x56\xFF\x90\x80\x04\x00\x00\x8B\xF8\x85\xFF\x74\x15\x8B\x17\x8B\xCF\x8B\x92\x6C\x01\x00\x00\xFF\xD2\x84\xC0\x74\x05\x3B\x7D\x08\x75\x0F\x46"
+				"linux"		"@_ZN10CINSPlayer22SwitchToNextBestWeaponEP17CBaseCombatWeapon"
+			}
+
+			// Player SDKCall: bool (). Returns whether native inventory-menu conditions currently allow this player to open it.
+			"CINSPlayer::CanOpenInventoryMenu"
+			{
+				"library"	"server"
+				"windows"	"\x8B\x89\xC0\x1A\x00\x00\x8B\xC1\xC1\xE8\x07\xA8\x01\x74\x03\xB0\x01\xC3\xC1\xE9\x0B\x83\xE1\x01\x8A\xC1\xC3"
+				"linux"		"@_ZNK10CINSPlayer20CanOpenInventoryMenuEv"
+			}
+
+			// Player SDKCall: void (). Runs the native default-item grant path for the player's current class and inventory state.
+			// It can alter an existing loadout, so use it only as an intentional reset or recovery action.
+			"CINSPlayer::GiveDefaultItems"
+			{
+				"library"	"server"
+				"windows"	"\x56\x8B\xF1\x8D\x8E\xC4\x17\x00\x00\xE8\x2A\x2A\x2A\x2A\x8B\x06\x8B\xCE\x6A\x01\xFF\x90\xEC\x05\x00\x00\x8B\x06\x8B\xCE\x8B\x80\x40\x08\x00\x00\xFF\xD0\x84\xC0\x74\x3E"
+				"linux"		"@_ZN10CINSPlayer16GiveDefaultItemsEv"
 			}
 
 			// Player SDKCall: Address (int ammoIndex). Returns the player's native CINSWeaponMagazines container for the ammo type.
@@ -380,6 +642,33 @@
 				"linux"		"@_ZN16CPlayerInventory12RefundWeaponEi"
 			}
 
+			// Raw CPlayerInventory SDKCall: int (int weaponDefinition, int fireMode, int slotIndex). Buys one native weapon purchase.
+			// Use -1 for fireMode and slotIndex to let the game choose its normal defaults. Returns 0 on success.
+			"CPlayerInventory::PurchaseWeapon"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x50\x56\x8B\xF1\x8B\x4E\x04\x83\xF9\xFF\x0F\x84\x2A\x2A\x2A\x2A\x8B\x15\x2A\x2A\x2A\x2A"
+				"linux"		"@_ZN16CPlayerInventory14PurchaseWeaponEi16eWeaponFireModesi"
+			}
+
+			// Raw CPlayerInventory SDKCall: int (int gearDefinition). Buys and equips one native theater gear item.
+			// Pass the embedded inventory address from CINSPlayer::PlayerInventory as the this pointer. Returns 0 on success.
+			"CPlayerInventory::PurchasePlayerGear"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x14\x56\x8B\xF1\x8B\x4E\x04\x83\xF9\xFF\x0F\x84\x2A\x2A\x2A\x2A\x8B\x15\x2A\x2A\x2A\x2A"
+				"linux"		"@_ZN16CPlayerInventory18PurchasePlayerGearEi"
+			}
+
+			// Raw CPlayerInventory SDKCall: int (int gearDefinition, int replacementGearDefinition). Refunds a native gear purchase.
+			// Pass -1 as replacementGearDefinition when nothing replaces it. Returns 0 on success.
+			"CPlayerInventory::RefundPlayerGear"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x14\x53\x8B\xD9\x56\x89\x5D\xFC\x8B\x53\x04\x83\xFA\xFF\x0F\x84\x2A\x2A\x2A\x2A"
+				"linux"		"@_ZN16CPlayerInventory16RefundPlayerGearEii"
+			}
+
 			// Raw CPlayerInventory SDKCall: void (). Refunds every native weapon and gear purchase except melee.
 			// Pass the embedded inventory address from CINSPlayer::PlayerInventory as the this pointer.
 			"CPlayerInventory::RefundAll"
@@ -387,6 +676,51 @@
 				"library"	"server"
 				"windows"	"\x53\x8B\xD9\x56\x57\x8B\x73\x40\x4E\x78\x2D\x8D\x3C\xF5\x00\x00\x00\x00\x2B\xFE\xC1\xE7\x03"
 				"linux"		"@_ZN16CPlayerInventory9RefundAllEv"
+			}
+
+			// Raw CPlayerInventory SDKCall: int (int purchaseIndex). Refunds every upgrade on one native weapon purchase.
+			// Pass the embedded inventory address from CINSPlayer::PlayerInventory as the this pointer. Returns 0 on success.
+			"CPlayerInventory::RefundAllUpgradesForWeapon"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x24\x53\x56\x8B\x75\x08\x8B\xD9\x89\x5D\xF4\x85\xF6\x0F\x88\x2A\x2A\x2A\x2A"
+				"linux"		"@_ZN16CPlayerInventory26RefundAllUpgradesForWeaponEi"
+			}
+
+			// Raw CPlayerInventory SDKCall: int (int purchaseIndex, int upgradeDefinition). Refunds one installed native weapon upgrade.
+			// Pass the embedded inventory address from CINSPlayer::PlayerInventory as the this pointer. Returns 0 on success.
+			"CPlayerInventory::RefundWeaponUpgrade"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x10\x56\x57\x8B\x7D\x08\x8B\xF1\x89\x75\xF8\x85\xFF\x0F\x88\x2A\x2A\x2A\x2A"
+				"linux"		"@_ZN16CPlayerInventory19RefundWeaponUpgradeEii"
+			}
+
+			// Raw CPlayerInventory SDKCall: int (int purchaseIndex, int upgradeDefinition). Buys and installs a native weapon upgrade.
+			// Pass the embedded inventory address from CINSPlayer::PlayerInventory as the this pointer. Returns 0 on success.
+			"CPlayerInventory::PurchaseWeaponUpgrade"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x14\x53\x8B\x5D\x08\x56\x8B\xF1\x85\xDB\x0F\x88\x2A\x2A\x2A\x2A\x3B\x5E\x40"
+				"linux"		"@_ZN16CPlayerInventory21PurchaseWeaponUpgradeEii"
+			}
+
+			// Raw CPlayerInventory SDKCall: int (int weaponDefinition, int classDefinition). Returns the native weapon cost with team and class modifiers.
+			// Pass -1 as classDefinition to omit the class-specific modifier. The this pointer is CINSPlayer::PlayerInventory.
+			"CPlayerInventory::GetWeaponCost"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x0C\x53\x57\x8B\xF9\x8B\x57\x04\x83\xFA\xFF\x0F\x84\x2A\x2A\x2A\x2A\x0F\xB7\xC2\xC1\xEA\x10\x8D\x0C\x40\xA1\x2A\x2A\x2A\x2A\x39\x54\xC8\x08\x0F\x85\x2A\x2A\x2A\x2A\x8B\x5C\xC8\x04\x85\xDB\x0F\x84\x2A\x2A\x2A\x2A\xA1\x2A\x2A\x2A\x2A\x56\x8B\x70\x14"
+				"linux"		"@_ZN16CPlayerInventory13GetWeaponCostEii"
+			}
+
+			// Raw CPlayerInventory SDKCall: int (int gearDefinition, int classDefinition). Returns the native gear cost with team and class modifiers.
+			// Pass -1 as classDefinition to omit the class-specific modifier. The this pointer is CINSPlayer::PlayerInventory.
+			"CPlayerInventory::GetGearCost"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x0C\x53\x57\x8B\xF9\x8B\x57\x04\x83\xFA\xFF\x0F\x84\x2A\x2A\x2A\x2A\x0F\xB7\xC2\xC1\xEA\x10\x8D\x0C\x40\xA1\x2A\x2A\x2A\x2A\x39\x54\xC8\x08\x0F\x85\x2A\x2A\x2A\x2A\x8B\x5C\xC8\x04\x85\xDB\x0F\x84\x2A\x2A\x2A\x2A\xA1\x2A\x2A\x2A\x2A\x56\x8B\x70\x20"
+				"linux"		"@_ZN16CPlayerInventory11GetGearCostEii"
 			}
 
 			// Player SDKCall: void (CINSPlayer *recipient). Transfers the player's weapons, ammo, magazines, gear, inventory template, and active weapon to recipient.
@@ -458,6 +792,86 @@
 				"linux"		"@_ZN10CINSPlayer11ResetRecoilEv"
 			}
 
+			// Static SDKCall: int (const char *particleName). Adds an existing particle-system name to the
+			// networked ParticleEffectNames table. Precache it during map start before dispatching it.
+			"PrecacheParticleSystem"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x8B\x0D\x2A\x2A\x2A\x2A\x6A\x00\x6A\xFF\xFF\x75\x08\x8B\x01\x6A\x01\xFF\x50\x20\x5D\xC3"
+				"linux"		"@_Z22PrecacheParticleSystemPKc"
+			}
+
+			// Static SDKCall: int (const char *particleName). Returns the particle-system index from the
+			// precached ParticleEffectNames table. Missing names emit a server warning and return 0.
+			"GetParticleSystemIndex"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x56\x8B\x75\x08\x85\xF6\x74\x2A\x8B\x0D\x2A\x2A\x2A\x2A\x56\x8B\x01\xFF\x50\x30\x3D\xFF\xFF\x00\x00\x75\x2A\x56\x68\x2A\x2A\x2A\x2A\xFF\x15\x2A\x2A\x2A\x2A\x83\xC4\x08\x33\xC0\x5E\x5D\xC3"
+				"linux"		"@_Z22GetParticleSystemIndexPKc"
+			}
+
+			// Static SDKCall: void (int particleIndex, Vector &origin, QAngle &angles, int attachment,
+			// CBaseEntity *entity, int attachmentIndex). Dispatches a precached ParticleEffect at a world
+			// position or entity attachment. The final attachmentIndex is accepted by the native ABI.
+			"DispatchParticleEffect"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x64\x8D\x4D\x9C\xE8\x2A\x2A\x2A\x2A\x8B\x45\x08\x8B\x4D\x18\x89\x45\xF0\x8B\x45\x0C\xF3\x0F\x10\x00\xF3\x0F\x11\x45\x9C\xF3\x0F\x10\x40\x04\xF3\x0F\x11\x45\xA0\xF3\x0F\x10\x40\x08\x8B\x45\x10\xF3\x0F\x11\x45\xA4\xF3\x0F\x10\x00\xF3\x0F\x11\x45\xC0\xF3\x0F\x10\x40\x04\xF3\x0F\x11\x45\xC4\xF3\x0F\x10\x40\x08\xF3\x0F\x11\x45\xC8"
+				"linux"		"@_Z22DispatchParticleEffectiRK6VectorRK6QAngle20ParticleAttachment_tP11CBaseEntityi"
+			}
+
+			// Static SDKCall: void (CBaseEntity *entity). Sends the native ParticleEffectStop event for
+			// every particle effect attached to the entity. It does not remove a one-shot world effect.
+			"StopParticleEffects"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x64\x8D\x4D\x9C\xE8\x2A\x2A\x2A\x2A\x8B\x4D\x08\x85\xC9\x74\x2A\x8B\x49\x18\x85\xC9\x74\x2A\xA1\x2A\x2A\x2A\x2A\x2B\x48\x5C\xC1\xF9\x04\x89\x4D\xD0\x8D\x45\x9C\x50\x68\x2A\x2A\x2A\x2A\xE8\x2A\x2A\x2A\x2A\x83\xC4\x08\x8B\xE5\x5D\xC3"
+				"linux"		"@_Z19StopParticleEffectsP11CBaseEntity"
+			}
+
+			// Static SDKCall: void (const char *particleName, Vector &start, Vector &end,
+			// int sourceEntity, int attachment, bool whiz). Sends the named tracer particle between two points.
+			"UTIL_ParticleTracer"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\xFF\x75\x08\xE8\x2A\x2A\x2A\x2A\x83\xC4\x04\x50\x68\x2A\x2A\x2A\x2A\xFF\x75\x1C\x51\xC7\x04\x24\x00\x00\x00\x00\xFF\x75\x18\xFF\x75\x14\xFF\x75\x10\xFF\x75\x0C\xE8\x2A\x2A\x2A\x2A\x83\xC4\x20\x5D\xC3"
+				"linux"		"@_Z19UTIL_ParticleTracerPKcRK6VectorS3_iib"
+			}
+
+			// Entity SDKCall: void (bool useCheapEffect). Ensures this animating entity has a native flame,
+			// then enables its cheap effect. The bool is accepted by the ABI but not read by this server build.
+			"CBaseAnimating::IgniteUseCheapEffect"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x56\x8B\xF1\x8B\x86\xCC\x00\x00\x00\xC1\xE8\x1C\xA8\x01\x75\x2A\x8B\x06\x6A\x01\x51\xC7\x04\x24\x00\x00\x00\x00\x6A\x00\x51\xC7\x04\x24\x00\x00\xF0\x41\xFF\x90\x7C\x03\x00\x00\x8B\x8E\x40\x03\x00\x00\x5E\x83\xF9\xFF\x74\x2A\x8B\x15\x2A\x2A\x2A\x2A\x0F\xB7\xC1\xC1\xE9\x10\x8D\x04\x40\x39\x4C\xC2\x08\x75\x2A\x8B\x44\xC2\x04\xEB\x2A\x33\xC0\x6A\x00\x68\x2A\x2A\x2A\x2A\x68\x2A\x2A\x2A\x2A\x6A\x00\x50\xE8\x2A\x2A\x2A\x2A\x83\xC4\x14\x85\xC0\x74\x2A\x8B\xC8\x5D\xE9\x2A\x2A\x2A\x2A\x5D\xC2\x04\x00"
+				"linux"		"@_ZN14CBaseAnimating20IgniteUseCheapEffectEb"
+			}
+
+			// Player SDKCall: void (). Flashes the player's viewmodel muzzle and the combat-character muzzle.
+			"CBasePlayer::DoMuzzleFlash"
+			{
+				"library"	"server"
+				"windows"	"\x56\x6A\x00\x8B\xF1\xE8\x2A\x2A\x2A\x2A\x85\xC0\x74\x2A\x8B\xC8\xE8\x2A\x2A\x2A\x2A\x8B\xCE\x5E\xE9\x2A\x2A\x2A\x2A"
+				"linux"		"@_ZN11CBasePlayer13DoMuzzleFlashEv"
+			}
+
+			// Entity SDKCall: void (). Advances an animating entity's networked muzzle-flash parity.
+			"CBaseAnimating::DoMuzzleFlash"
+			{
+				"library"	"server"
+				"windows"	"\x53\x8A\x99\x3D\x04\x00\x00\x56\x8D\xB1\x3D\x04\x00\x00\xFE\xC3\x80\xE3\x03\x38\x1E\x74\x2A\x80\xBE\x17\xFC\xFF\xFF\x00\x8D\x8E\xC3\xFB\xFF\xFF\x74\x2A\x80\x49\x58\x01\x88\x1E\x5E\x5B\xC3"
+				"linux"		"@_ZN14CBaseAnimating13DoMuzzleFlashEv"
+			}
+
+			// Player SDKCall: void (float damage, int damageType). Runs only the native hit-feedback branch:
+			// blood/impact effects and pain sounds selected by damageType. It does not apply actual damage.
+			"CINSPlayer::DamageEffect"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x8B\x45\x0C\x83\xEC\x0C\x56\x57\x8B\xF9\xA8\x02\x0F\x85\x2A\x2A\x2A\x2A\xA9\x00\x00\x00\x20\x0F\x85\x2A\x2A\x2A\x2A\xA8\x04\x0F\x84\x2A\x2A\x2A\x2A\x8B\x07\x8D\x4D\xF4\x51\x8B\xCF\xFF\x90\x08\x02\x00\x00\x8B\x17\x8B\xF0\xF3\x0F\x10\x45\x08\x51\x8B\xCF\xF3\x0F\x11\x04\x24\xFF\x92\x20\x01\x00\x00"
+				"linux"		"@_ZN10CINSPlayer12DamageEffectEfi"
+			}
+
 			// Player SDKCall: void (). Runs the native cold-world breathing particle check and sends its effect only when game conditions allow it.
 			"CINSPlayer::DoBreathingEffect"
 			{
@@ -498,12 +912,70 @@
 				"linux"		"@_ZN10CINSPlayer16FlashlightTurnOnEb"
 			}
 
+			// Player SDKCall: bool (int squadIndex, int slotIndex). Joins the requested squad and slot.
+			// Use -1 for slotIndex to let the game select the first available slot.
+			"CINSPlayer::JoinSquad"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x0C\x53\x8B\xD9\xE8\x2A\x2A\x2A\x2A\x84\xC0\x75\x2A\x5B\x8B\xE5\x5D\xC2\x08\x00\x57\x8B\x7D\x08\x3B\xBB\x78\x1E\x00\x00\x75\x2A\x8B\x4D\x0C\x3B\x8B\x7C\x1E\x00\x00\x74\x2A\x85\xC9\x79\x2A\x5F\x32\xC0\x5B\x8B\xE5\x5D\xC2\x08\x00"
+				"linux"		"@_ZN10CINSPlayer9JoinSquadEii"
+			}
+
+			// Player SDKCall: void (int team). Forces a native team change. Team 5 lets the game choose a valid team.
+			// The game validates the requested team; this does not choose a class, squad, or loadout.
+			"CINSPlayer::ForceChangeTeam"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x51\x53\x56\x8B\x75\x08\x8B\xD9\xC6\x45\x08\x00\x57\x8B\xFE\x83\xFE\x05\x75\x0B\xE8\x2A\x2A\x2A\x2A\x8B\xF8\xC6\x45\x08\x01\x57\xE8\x2A\x2A\x2A\x2A\x83\xC4\x04\x85\xC0\x75\x18\x57\x68\x2A\x2A\x2A\x2A\xFF\x15\x2A\x2A\x2A\x2A\x83\xC4\x08\x5F\x5E\x5B\x8B\xE5\x5D\xC2\x04\x00"
+				"linux"		"@_ZN10CINSPlayer15ForceChangeTeamEi"
+			}
+
+			// Player SDKCall: void (). Leaves the current squad and clears its native squad/slot state.
+			"CINSPlayer::ResetSquad"
+			{
+				"library"	"server"
+				"windows"	"\x56\x8B\xF1\xE8\x2A\x2A\x2A\x2A\x84\xC0\x74\x2A\x8B\xCE\xE8\x2A\x2A\x2A\x2A\x50\xE8\x2A\x2A\x2A\x2A\x83\xC4\x04\x85\xC0\x74\x2A\x56\x8B\xC8\xE8\x2A\x2A\x2A\x2A\x8B\xCE\xE8\x2A\x2A\x2A\x2A\xC7\x86\x78\x1E\x00\x00\xFF\xFF\xFF\xFF\xC7\x86\x7C\x1E\x00\x00\xFF\xFF\xFF\xFF"
+				"linux"		"@_ZN10CINSPlayer10ResetSquadEv"
+			}
+
+			// Player SDKCall: bool (). Returns true only when the player occupies squad slot 0.
+			"CINSPlayer::IsSquadLeader"
+			{
+				"library"	"server"
+				"windows"	"\x33\xC0\x39\x81\x7C\x1E\x00\x00\x0F\x94\xC0\xC3"
+				"linux"		"@_ZNK10CINSPlayer13IsSquadLeaderEv"
+			}
+
 			// Player SDKCall: void (bool sprinting). Changes sprint state but does not create movement.
 			"CINSPlayer::SetSprinting"
 			{
 				"library"	"server"
 				"windows"	"\x55\x8B\xEC\x51\x80\x7D\x08\x00\x53\x56\x57\x8B\xF9\x0F\x84\x2A\x2A\x2A\x2A\x8B\x1D\x2A\x2A\x2A\x2A\xF3\x0F\x10\x87\x18\x18\x00\x00\xF3\x0F\x11\x45\x08\x8B\x45\x08\xF3\x0F\x10\x43\x0C\xF3\x0F\x11\x45\xFC\x3B\x45\xFC\x74\x2C\x80\x79\x54\x00\x74\x06\x80\x49\x58\x01\xEB\x17\x8B\x51\x18\x85\xD2\x74\x10\x8D\x87\x18\x18\x00\x00\x2B\xC1\x8B\xCA\x50\xE8\x2A\x2A\x2A\x2A\x8B\x43\x0C\x89\x87\x18\x18\x00\x00\xF3\x0F\x10\x87\xC8\x1B\x00\x00\xF3\x0F\x11\x45\x08\xF3\x0F\x10\x87\xC4\x1B\x00\x00"
 				"linux"		"@_ZN10CINSPlayer12SetSprintingEb"
+			}
+
+			// Player SDKCall: float (). Returns the engine time of the player's most recent landing.
+			"CINSPlayer::GetLastLandTime"
+			{
+				"library"	"server"
+				"windows"	"\xD9\x81\x2C\x1D\x00\x00\xC3\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\xCC\x8B\x81\xF4\x1A\x00\x00\xC3"
+				"linux"		"@_ZNK10CINSPlayer15GetLastLandTimeEv"
+			}
+
+			// Player SDKCall: bool (). Returns true while the player is prone and moving under the native crawl rules.
+			"CINSPlayer::IsCrawling"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x51\x57\x8B\xF9\x83\xBF\xF0\x1A\x00\x00\x02\x75\x2A\x56\x8D\x8F\xE0\x1A\x00\x00\xE8\x2A\x2A\x2A\x2A"
+				"linux"		"@_ZNK10CINSPlayer10IsCrawlingEv"
+			}
+
+			// Player SDKCall: bool (). Returns true during the native automatic-crouch interval.
+			"CINSPlayer::IsAutoCrouched"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x51\xF3\x0F\x10\x81\x18\x1D\x00\x00\x0F\x57\xC9\x0F\x2F\xC1\x56\x76\x2A\xF3\x0F\x10\x81\x18\x1D\x00\x00"
+				"linux"		"@_ZNK10CINSPlayer14IsAutoCrouchedEv"
 			}
 
 			// Player SDKCall: void (bool sliding). True starts the native slide; false ends it.
@@ -555,6 +1027,16 @@
 				"linux"		"@_ZNK10CINSPlayer14GetPlayerFlagsEv"
 			}
 
+			// Player SDKCall: Address (int index). Returns an internal 20-byte damager-history record,
+			// or Address_Null when index is outside the list. It does not return a player entity.
+			// Treat the returned memory as read-only until the record layout is separately mapped.
+			"CINSPlayer::GetDamagerHistory"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x8B\x45\x08\x8B\xD1\x3B\x82\x98\x17\x00\x00\x7C\x2A\x33\xC0\x5D\xC2\x04\x00"
+				"linux"		"@_ZN10CINSPlayer17GetDamagerHistoryEi"
+			}
+
 			// Player SDKCall: bool (int playerFlag). Returns whether all bits in playerFlag are set.
 			"CINSPlayer::HasPlayerFlag"
 			{
@@ -577,6 +1059,15 @@
 				"library"	"server"
 				"windows"	"\x55\x8B\xEC\x56\x8B\x75\x08\x57\x8D\xB9\xC0\x1A\x00\x00\xF7\xD6\x23\x37\x39\x37\x74\x11\x8B\x87\xA0\xFD\xFF\xFF\x8D\x8F\xA0\xFD\xFF\xFF\x57\xFF\x10\x89\x37\x5F\x5E\x5D\xC2\x04\x00"
 				"linux"		"@_ZN10CINSPlayer16RemovePlayerFlagEi"
+			}
+
+			// Player SDKCall: void (bool deployed). Updates the native bipod state, transition timer, and bipod position.
+			// Pass false to retract a deployed bipod without simulating a player button press.
+			"CINSPlayer::SetBipodState"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x80\x7D\x08\x00\x53\x56\x8B\xF1\x8D\x9E\xC0\x1A\x00\x00\x57\x8B\x3B\x74\x2A\x83\xCF\x02\x39\x3B\x74\x2A\x8B\x83\xA0\xFD\xFF\xFF\x8D\x8B\xA0\xFD\xFF\xFF\x53\xFF\x10\x89\x3B\x83\xBE\xF0\x1A\x00\x00\x01"
+				"linux"		"@_ZN10CINSPlayer13SetBipodStateEb"
 			}
 
 			// Player SDKCall: void (Vector &muzzleOrigin, QAngle &muzzleAngles). Writes native muzzle position and direction.
@@ -802,6 +1293,42 @@
 				"library"	"server"
 				"windows"	"\x55\x8B\xEC\x8B\x55\x08\x83\xEC\x08\x56\x8B\xF1\x85\xD2\x0F\x84\x2A\x2A\x2A\x2A\x8B\x06\x57\x6A\x00\x52\xFF\x90\x70\x04\x00\x00\x8D\xBE\xB8\xB3\x00\x00"
 				"linux"		"@_ZN11CINSNextBot16ChooseBestWeaponEP10CINSWeaponf"
+			}
+
+			// NextBot SDKCall: bool (int difficulty). Changes one bot's native difficulty. Valid values are 0 through 3.
+			// Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::ChangeDifficulty"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x8B\x45\x08\x83\xF8\x04\x7C\x2A\x32\xC0\x5D\xC2\x04\x00\x53\x56\x8D\xB1\x4C\x20\x00\x00\x89\x81\x74\x22\x00\x00"
+				"linux"		"@_ZN11CINSNextBot16ChangeDifficultyENS_15BotDifficulty_eE"
+			}
+
+			// NextBot SDKCall: void (int radialCommand, int issuer, Vector target, int priority, int markedObjective, float duration).
+			// Adds a native order at a world position. Requires a CINSNextBot address, not a normal player entity index/address.
+			"CINSNextBot::AddOrder"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x2C\x56\x8B\xF1\x8D\x4D\xD4\xE8\x2A\x2A\x2A\x2A\xF3\x0F\x10\x45\x10\x8D\x4D\xD4\x8B\x45\x08"
+				"linux"		"@_ZN11CINSNextBot8AddOrderE15eRadialCommandsi6Vector13OrderPriorityif"
+			}
+
+			// Checkpoint SDKCall/detour: void (int checkpointIndex). Starts a native counterattack and changes its blockzones and timers.
+			// Call only when deliberately controlling the checkpoint state.
+			"CINSRules_Checkpoint::CounterWaveStarted"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x51\xA1\x2A\x2A\x2A\x2A\x53\x56\x57\xF3\x0F\x10\x40\x0C\x8B\xF9\xF3\x0F\x11\x45\xFC\x8B\x07\xFF\x90\xD8\x02\x00\x00\x8B\x5D\x08\x48\x3B\xD8\x0F\x8D\x2A\x2A\x2A\x2A\x8B\x0D\x2A\x2A\x2A\x2A\x81\xF9\x2A\x2A\x2A\x2A\x75\x16\xF3\x0F\x10\x05\x2A\x2A\x2A\x2A\xF3\x0F\x11\x45\x08\x81\x75\x08\x2A\x2A\x2A\x2A\xEB\x0A\x8B\x01\x8B\x40\x30\xFF\xD0\xD9\x5D\x08"
+				"linux"		"@_ZN20CINSRules_Checkpoint18CounterWaveStartedEi"
+			}
+
+			// Checkpoint SDKCall/detour: void (). Finishes the active native counterattack and advances or ends the checkpoint round.
+			// Call only when deliberately controlling the checkpoint state.
+			"CINSRules_Checkpoint::CounterWaveFinished"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x51\xA1\x2A\x2A\x2A\x2A\x53\x56\x57\x8B\x98\x5C\x07\x00\x00\x8B\xF9\x8B\xB4\x98\x3C\x04\x00\x00\xE8\x2A\x2A\x2A\x2A\x3B\xF0\x0F\x84\x2A\x2A\x2A\x2A\x8B\x07\x8B\xCF\x6A\x00\xFF\x90\x90\x04\x00\x00\x8B\xCF\xC6\x87\x64\x05\x00\x00\x00\xC7\x87\x68\x05\x00\x00\x00\x00\x00\x00"
+				"linux"		"@_ZN20CINSRules_Checkpoint19CounterWaveFinishedEv"
 			}
 		}
 	}
