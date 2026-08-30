@@ -7,7 +7,7 @@
 #include <clientprefs>
 #include <dbi>
 
-#define PL_VERSION		"2.72"
+#define PL_VERSION		"2.82"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 // Optional MySQL entry in databases.cfg. Local SQLite is used when it is not configured.
 #define BLUEPRINT_DATABASE_CONFIG "props_blueprints"
@@ -59,6 +59,16 @@
 #define PROP_ROTATE_STEP			30.0
 #define PROP_DAMAGE_TAKE			100.0	// Amount of damage the prop takes each time a bot touches it, limited by PROP_TOUCH_COOLDOWN.
 #define PROP_TOUCH_COOLDOWN			0.50
+#define SECURITY_DOOR_OPEN_SOUND		"physics/doors/metaldoors/metal_door_01_open.wav"
+#define SECURITY_DOOR_CLOSE_SOUND		"physics/doors/metaldoors/metal_door_01_close.wav"
+#define SECURITY_DOOR_IMPACT_SOUND	"physics/metal/metalbox_bullet_impact_03.wav"
+#define SECURITY_DOOR_MOVE_VOLUME	0.75
+#define SECURITY_DOOR_SLIDE_DISTANCE	96.0
+#define SECURITY_DOOR_PLAYER_HULL_RADIUS	24.0
+#define SECURITY_DOOR_CLOSE_DELAY		1.25
+#define SECURITY_DOOR_CLOSE_RETRY		0.25
+#define SECURITY_DOOR_TOUCH_COOLDOWN	0.25
+#define SECURITY_DOOR_IMPACT_SOUND_COOLDOWN 3.0
 #define PROP_GLOWHP_PERCENT			0.25
 #define PROP_HALFHP_PERCENT			0.50
 #define PROP_HALFHP_FLASH_TIME		1.00
@@ -180,6 +190,7 @@ enum PropId {
 	Prop_EmbassyCenter02,
 	Prop_IedJammer,
 	Prop_AmmoCacheSmall,
+	Prop_MarketPrisonDoor,
 
 	Prop_Count
 };
@@ -197,7 +208,8 @@ static const PropDef g_PropDefs[] = {
 	{ "models/static_props/container_01_open2.mdl",			6, true, PROP_HEALTH },
 	{ "models/embassy/embassy_center_02.mdl",				8, true, 8000 },
 	{ "models/sernix/ied_jammer/ied_jammer.mdl",			5, false, 1000 },
-	{ AMMO_CACHE_MODEL,										8, false, 1000 }
+	{ AMMO_CACHE_MODEL,										8, false, 1000 },
+	{ "models/static_props/prop_market_prison_door.mdl",	2, false,	4000}
 };
 
 #define PROP_COUNT (sizeof(g_PropDefs))
@@ -244,6 +256,11 @@ float	ga_fPressedJumpTime[MAXPLAYERS + 1] = {0.0, ...};
 float	ga_fPropMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
 float	ga_fShopMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
 float	ga_fWireSoundCooldown[MAXENTITIES + 1] = {0.0, ...};
+float	ga_fSecurityDoorNextTouch[MAXENTITIES + 1] = {0.0, ...};
+float	ga_fSecurityDoorImpactSound[MAXENTITIES + 1] = {0.0, ...};
+float	ga_fSecurityDoorClosedOrigin[MAXENTITIES + 1][3];
+bool	ga_bSecurityDoorOpen[MAXENTITIES + 1] = {false, ...};
+Handle	ga_hSecurityDoorCloseTimer[MAXENTITIES + 1] = {INVALID_HANDLE, ...};
 
 float	g_fAmmoResupplyRange;
 float	g_fAmmoResupplyRangeSqr;
@@ -344,6 +361,10 @@ public void OnPluginStart() {
 		ga_iAmmoIconHolderRef[i] = INVALID_ENT_REFERENCE;
 		ga_iAmmoIconSpriteRef[i] = INVALID_ENT_REFERENCE;
 		ga_bPropHalfHpWarned[i] = false;
+		ga_fSecurityDoorNextTouch[i] = 0.0;
+		ga_fSecurityDoorImpactSound[i] = 0.0;
+		ga_bSecurityDoorOpen[i] = false;
+		ga_hSecurityDoorCloseTimer[i] = INVALID_HANDLE;
 	}
 
 	g_hCookiePropRotateStep = RegClientCookie("bm_prop_rotate_step", "Props: rotation step (degrees)", CookieAccess_Private);
@@ -432,6 +453,10 @@ public void OnMapStart() {
 		ga_iTrackedPropOwner[i]  = 0;
 		ga_iTrackedPropId[i]     = -1;
 		ga_bPropHalfHpWarned[i]  = false;
+		ga_fSecurityDoorNextTouch[i] = 0.0;
+		ga_fSecurityDoorImpactSound[i] = 0.0;
+		ga_bSecurityDoorOpen[i] = false;
+		ga_hSecurityDoorCloseTimer[i] = INVALID_HANDLE;
 	}
 
 	if (g_hJammers != null)
@@ -2101,6 +2126,9 @@ bool CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 			case Prop_Mattress: {
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchMattress);
 			}
+			case Prop_MarketPrisonDoor: {
+				SDKHook(prop, SDKHook_Touch, SHook_OnTouchSecurityDoor);
+			}
 			default: {
 				SDKHook(prop, SDKHook_Touch, SHook_OnTouchPropTakeDamage);
 			}
@@ -2311,6 +2339,158 @@ public Action SHook_OnTouchPropTakeDamage(int entity, int touch) {
 	ga_fLastTouchTime[touch] = GameTime + PROP_TOUCH_COOLDOWN;
 	DoDamageToEnt(entity, touch);
 	return Plugin_Continue;
+}
+
+public Action SHook_OnTouchSecurityDoor(int entity, int touch) {
+	if (touch < 1 || touch > MaxClients || !IsClientInGame(touch) || !IsPlayerAlive(touch))
+		return Plugin_Continue;
+
+	if (IsFakeClient(touch) || GetClientTeam(touch) != TEAM_SECURITY) {
+		if (GetClientTeam(touch) == TEAM_INSURGENT) {
+			float gameTime = GetGameTime();
+			if (ga_fLastTouchTime[touch] <= gameTime) {
+				ga_fLastTouchTime[touch] = gameTime + PROP_TOUCH_COOLDOWN;
+				DoDamageToEnt(entity, touch);
+				if (ga_fSecurityDoorImpactSound[entity] <= gameTime) {
+					ga_fSecurityDoorImpactSound[entity] = gameTime + SECURITY_DOOR_IMPACT_SOUND_COOLDOWN;
+					PlaySecurityDoorSound(entity, SECURITY_DOOR_IMPACT_SOUND);
+				}
+			}
+		}
+		return Plugin_Continue;
+	}
+	if (IsAnyPlayerStandingOnEntity(entity))
+		return Plugin_Continue;
+
+	float gameTime = GetGameTime();
+	if (ga_fSecurityDoorNextTouch[entity] > gameTime)
+		return Plugin_Continue;
+
+	ga_fSecurityDoorNextTouch[entity] = gameTime + SECURITY_DOOR_TOUCH_COOLDOWN;
+	if (ga_bSecurityDoorOpen[entity]) {
+		ScheduleSecurityDoorClose(entity, SECURITY_DOOR_CLOSE_DELAY);
+		return Plugin_Continue;
+	}
+
+	float closedOrigin[3];
+	float doorAngles[3];
+	GetEntPropVector(entity, Prop_Data, "m_vecAbsOrigin", closedOrigin);
+	GetEntPropVector(entity, Prop_Send, "m_angRotation", doorAngles);
+
+	float playerOrigin[3];
+	float right[3];
+	GetClientAbsOrigin(touch, playerOrigin);
+	GetAngleVectors(doorAngles, NULL_VECTOR, right, NULL_VECTOR);
+
+	float playerOffsetX = playerOrigin[0] - closedOrigin[0];
+	float playerOffsetY = playerOrigin[1] - closedOrigin[1];
+	float firstDirection = ((playerOffsetX * right[0]) + (playerOffsetY * right[1]) >= 0.0) ? -1.0 : 1.0;
+
+	for (int i = 0; i < 2; i++) {
+		float direction = (i == 0) ? firstDirection : -firstDirection;
+		float openOrigin[3];
+		openOrigin[0] = closedOrigin[0] + (right[0] * SECURITY_DOOR_SLIDE_DISTANCE * direction);
+		openOrigin[1] = closedOrigin[1] + (right[1] * SECURITY_DOOR_SLIDE_DISTANCE * direction);
+		openOrigin[2] = closedOrigin[2];
+
+		if (GetVectorDistance(openOrigin, closedOrigin, true) < 1.0)
+			continue;
+		if (SecurityDoorWouldTrapPlayer(entity, openOrigin))
+			continue;
+
+		ga_fSecurityDoorClosedOrigin[entity][0] = closedOrigin[0];
+		ga_fSecurityDoorClosedOrigin[entity][1] = closedOrigin[1];
+		ga_fSecurityDoorClosedOrigin[entity][2] = closedOrigin[2];
+		ga_bSecurityDoorOpen[entity] = true;
+		TeleportEntity(entity, openOrigin, NULL_VECTOR, NULL_VECTOR);
+		PlaySecurityDoorSound(entity, SECURITY_DOOR_OPEN_SOUND, SECURITY_DOOR_MOVE_VOLUME);
+		ScheduleSecurityDoorClose(entity, SECURITY_DOOR_CLOSE_DELAY);
+		break;
+	}
+
+	return Plugin_Continue;
+}
+
+static bool SecurityDoorWouldTrapPlayer(int entity, const float doorOrigin[3]) {
+	float clearance = GetSecurityDoorPlayerClearance(entity);
+	float clearanceSqr = clearance * clearance;
+	for (int client = 1; client <= MaxClients; client++) {
+		if (!IsClientInGame(client) || !IsPlayerAlive(client))
+			continue;
+
+		float playerOrigin[3];
+		GetClientAbsOrigin(client, playerOrigin);
+		if (FloatAbs(playerOrigin[2] - doorOrigin[2]) > 128.0)
+			continue;
+
+		float offsetX = playerOrigin[0] - doorOrigin[0];
+		float offsetY = playerOrigin[1] - doorOrigin[1];
+		if ((offsetX * offsetX) + (offsetY * offsetY) < clearanceSqr)
+			return true;
+	}
+	return false;
+}
+
+static float GetSecurityDoorPlayerClearance(int entity) {
+	if (!HasEntProp(entity, Prop_Send, "m_vecMins") || !HasEntProp(entity, Prop_Send, "m_vecMaxs"))
+		return SECURITY_DOOR_SLIDE_DISTANCE;
+
+	float mins[3];
+	float maxs[3];
+	GetEntPropVector(entity, Prop_Send, "m_vecMins", mins);
+	GetEntPropVector(entity, Prop_Send, "m_vecMaxs", maxs);
+
+	float horizontalX = FloatAbs(mins[0]);
+	float horizontalY = FloatAbs(mins[1]);
+	if (FloatAbs(maxs[0]) > horizontalX)
+		horizontalX = FloatAbs(maxs[0]);
+	if (FloatAbs(maxs[1]) > horizontalY)
+		horizontalY = FloatAbs(maxs[1]);
+
+	return SquareRoot((horizontalX * horizontalX) + (horizontalY * horizontalY)) + SECURITY_DOOR_PLAYER_HULL_RADIUS;
+}
+
+static bool IsAnyPlayerStandingOnEntity(int entity) {
+	for (int client = 1; client <= MaxClients; client++) {
+		if (!IsClientInGame(client) || !IsPlayerAlive(client))
+			continue;
+		if (GetEntPropEnt(client, Prop_Send, "m_hGroundEntity") == entity)
+			return true;
+	}
+	return false;
+}
+
+static void ScheduleSecurityDoorClose(int entity, float delay) {
+	if (ga_hSecurityDoorCloseTimer[entity] != INVALID_HANDLE)
+		KillTimer(ga_hSecurityDoorCloseTimer[entity]);
+
+	ga_hSecurityDoorCloseTimer[entity] = CreateTimer(delay, Timer_CloseSecurityDoor, EntIndexToEntRef(entity), TIMER_FLAG_NO_MAPCHANGE);
+}
+
+public Action Timer_CloseSecurityDoor(Handle timer, int doorRef) {
+	int entity = EntRefToEntIndex(doorRef);
+	if (!IsValidNonClientEntity(entity) || ga_hSecurityDoorCloseTimer[entity] != timer)
+		return Plugin_Stop;
+
+	ga_hSecurityDoorCloseTimer[entity] = INVALID_HANDLE;
+	if (!ga_bSecurityDoorOpen[entity])
+		return Plugin_Stop;
+
+	if (SecurityDoorWouldTrapPlayer(entity, ga_fSecurityDoorClosedOrigin[entity])) {
+		ScheduleSecurityDoorClose(entity, SECURITY_DOOR_CLOSE_RETRY);
+		return Plugin_Stop;
+	}
+
+	TeleportEntity(entity, ga_fSecurityDoorClosedOrigin[entity], NULL_VECTOR, NULL_VECTOR);
+	ga_bSecurityDoorOpen[entity] = false;
+	PlaySecurityDoorSound(entity, SECURITY_DOOR_CLOSE_SOUND, SECURITY_DOOR_MOVE_VOLUME);
+	return Plugin_Stop;
+}
+
+static void PlaySecurityDoorSound(int entity, const char[] sound, float volume = SNDVOL_NORMAL) {
+	float origin[3];
+	GetEntPropVector(entity, Prop_Data, "m_vecAbsOrigin", origin);
+	EmitAmbientSound(sound, origin, SOUND_FROM_WORLD, SNDLEVEL_NORMAL, SND_NOFLAGS, volume);
 }
 
 void DoDamageToEnt(int entity, int client) {
@@ -2586,6 +2766,14 @@ public Action Timer_RemoveParticle(Handle timer, int particleRef) {
 }
 
 public Action PropOnTakeDamage(int entity, int &attacker, int &inflictor, float &damage, int &damagetype) {
+	if (GetTrackedPropId(entity) == MID(Prop_MarketPrisonDoor)
+		&& attacker >= 1
+		&& attacker <= MaxClients
+		&& IsClientInGame(attacker)
+		&& GetClientTeam(attacker) == TEAM_SECURITY) {
+		return Plugin_Handled;
+	}
+
 	int health = GetEntProp(entity, Prop_Data, "m_iHealth");
 	if (ShouldFlashHalfHp(entity, health, damage))
 		FlashPropHalfHp(entity);
@@ -2685,6 +2873,11 @@ bool GlowLowHp(int entity, int health) {
 public void OnEntityDestroyed(int entity) {
 	if (entity <= MaxClients || entity > MAXENTITIES)
 		return;
+
+	ga_fSecurityDoorNextTouch[entity] = 0.0;
+	ga_fSecurityDoorImpactSound[entity] = 0.0;
+	ga_bSecurityDoorOpen[entity] = false;
+	ga_hSecurityDoorCloseTimer[entity] = INVALID_HANDLE;
 
 	int trackedPropId = GetTrackedPropId(entity);
 	JC_RemoveJammer(entity);
@@ -2971,6 +3164,9 @@ void PrecacheFiles() {
 	PrecacheSound(SND_SUPPLYREFUND, true);
 	PrecacheSound(SND_BUYBUILDPOINTS, true);
 	PrecacheSound(SND_CANTBUY, true);
+	PrecacheSound(SECURITY_DOOR_OPEN_SOUND, true);
+	PrecacheSound(SECURITY_DOOR_CLOSE_SOUND, true);
+	PrecacheSound(SECURITY_DOOR_IMPACT_SOUND, true);
 
 	PrecacheModel(AMMO_ICON_SPRITE, true);
 }

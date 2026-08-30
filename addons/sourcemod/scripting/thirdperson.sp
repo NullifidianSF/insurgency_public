@@ -19,7 +19,7 @@ public Plugin myinfo = {
 	name		= "thirdperson",
 	author		= "Nullifidian",
 	description	= "third person view command",
-	version		= "2.0.1",
+	version		= "2.0.2",
 	url			= ""
 };
 
@@ -34,15 +34,18 @@ public void OnPluginStart() {
 	}
 
 	g_hClientCookie = RegClientCookie("TpCookie", "third person view cookie", CookieAccess_Private);
+	LoadTranslations("common.phrases");
 
 	HookEvent("round_start", Event_RoundStart, EventHookMode_PostNoCopy);
 	HookEvent("player_spawn", Event_PlayerSpawn);
 	HookEvent("player_death", Event_PlayerDeath);
 	HookEvent("weapon_ironsight", Event_WeaponIronsight, EventHookMode_Pre);
 	HookEvent("weapon_lower_sight", Event_WeaponLowerSight, EventHookMode_Pre);
+	HookEvent("weapon_deploy", Event_WeaponDeploy, EventHookMode_Post);
 	
 	RegConsoleCmd("fp", cmd_firstPerson, "Set your view to first person");
 	RegConsoleCmd("tp", cmd_thirdPerson, "Set your view to third person");
+	RegAdminCmd("sm_tpinfo", Command_TpInfo, ADMFLAG_BAN, "Show a player's third-person settings");
 
 	if (g_bLateLoad) {
 		for (int i = 1; i <= MaxClients; i++) {
@@ -131,6 +134,34 @@ public Action cmd_firstPerson(int client, int args) {
 	ReplyToCommand(client, "TP off");
 	ga_iSetting[client] = 0;
 	
+	return Plugin_Handled;
+}
+
+public Action Command_TpInfo(int client, int args) {
+	if (args < 1) {
+		ReplyToCommand(client, "Usage: sm_tpinfo <target>");
+		return Plugin_Handled;
+	}
+
+	char sTargetArg[MAX_TARGET_LENGTH];
+	GetCmdArg(1, sTargetArg, sizeof(sTargetArg));
+
+	int targets[MAXPLAYERS];
+	char sTargetName[MAX_TARGET_LENGTH];
+	bool tnIsMl;
+	int targetCount = ProcessTargetString(sTargetArg, client, targets, sizeof(targets), COMMAND_FILTER_CONNECTED | COMMAND_FILTER_NO_BOTS, sTargetName, sizeof(sTargetName), tnIsMl);
+	if (targetCount <= 0) {
+		ReplyToTargetError(client, targetCount);
+		return Plugin_Handled;
+	}
+
+	for (int i = 0; i < targetCount; i++) {
+		int target = targets[i];
+		char sSetting[32];
+		GetThirdPersonSettingName(ga_iSetting[target], sSetting, sizeof(sSetting));
+		ReplyToCommand(client, "%N: TP %s | FP ADS %s", target, sSetting, ga_iFpsAds[target] ? "ON" : "OFF");
+	}
+
 	return Plugin_Handled;
 }
 
@@ -247,6 +278,25 @@ public Action Event_WeaponLowerSight(Event event, const char[] name, bool dontBr
 	return Plugin_Continue;
 }
 
+public Action Event_WeaponDeploy(Event event, const char[] name, bool dontBroadcast) {
+	int client = GetClientOfUserId(event.GetInt("userid"));
+	if (!IsClientInGame(client) || IsFakeClient(client) || ga_iSetting[client] == 0 || !ga_iFpsAds[client]) {
+		return Plugin_Continue;
+	}
+
+	RequestFrame(Frame_RestoreThirdPersonAfterWeaponDeploy, GetClientUserId(client));
+	return Plugin_Continue;
+}
+
+void Frame_RestoreThirdPersonAfterWeaponDeploy(any data) {
+	int client = GetClientOfUserId(data);
+	if (!client || !IsClientInGame(client) || IsFakeClient(client) || !IsPlayerAlive(client) || ga_iSetting[client] == 0 || !ga_iFpsAds[client]) {
+		return;
+	}
+
+	RestoreThirdPerson(client);
+}
+
 void RestoreThirdPerson(int client) {
 	SendConVarValue(client, g_cvThirdPerson, "1");
 	switch (ga_iSetting[client]) {
@@ -257,6 +307,20 @@ void RestoreThirdPerson(int client) {
 		case 6: ClientCommand(client, "r_screenoverlay thirdperson/crosshair/dot/blue_small.vtf");
 		case 7: ClientCommand(client, "r_screenoverlay thirdperson/crosshair/dot/blue_medium.vtf");
 		case 8: ClientCommand(client, "r_screenoverlay thirdperson/crosshair/dot/blue_large.vtf");
+	}
+}
+
+void GetThirdPersonSettingName(int setting, char[] buffer, int maxlen) {
+	switch (setting) {
+		case 0: strcopy(buffer, maxlen, "OFF");
+		case 1: strcopy(buffer, maxlen, "ON (no crosshair)");
+		case 3: strcopy(buffer, maxlen, "small red dot");
+		case 4: strcopy(buffer, maxlen, "medium red dot");
+		case 5: strcopy(buffer, maxlen, "large red dot");
+		case 6: strcopy(buffer, maxlen, "small blue dot");
+		case 7: strcopy(buffer, maxlen, "medium blue dot");
+		case 8: strcopy(buffer, maxlen, "large blue dot");
+		default: strcopy(buffer, maxlen, "unknown");
 	}
 }
 
