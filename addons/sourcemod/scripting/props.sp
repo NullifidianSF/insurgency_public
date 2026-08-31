@@ -7,7 +7,7 @@
 #include <clientprefs>
 #include <dbi>
 
-#define PL_VERSION		"3.13"
+#define PL_VERSION		"3.14"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 // Optional MySQL entry in databases.cfg. Local SQLite is used when it is not configured.
 #define BLUEPRINT_DATABASE_CONFIG "props_blueprints"
@@ -66,7 +66,7 @@
 #define SECURITY_DOOR_MOVE_VOLUME	0.75
 #define SECURITY_DOOR_SLIDE_DISTANCE	96.0
 #define SECURITY_DOOR_PLAYER_HULL_RADIUS	24.0
-#define SECURITY_DOOR_CLOSE_DELAY		1.25
+#define SECURITY_DOOR_CLOSE_DELAY		2.0
 #define SECURITY_DOOR_CLOSE_RETRY		0.25
 #define SECURITY_DOOR_TOUCH_COOLDOWN	0.25
 #define SECURITY_DOOR_IMPACT_SOUND_COOLDOWN 3.0
@@ -2541,6 +2541,57 @@ public Action SHook_OnTouchSecurityDoor(int entity, int touch) {
 }
 
 static bool SecurityDoorWouldTrapPlayer(int entity, const float doorOrigin[3]) {
+	if (!HasEntProp(entity, Prop_Send, "m_vecMins") || !HasEntProp(entity, Prop_Send, "m_vecMaxs"))
+		return SecurityDoorWouldTrapPlayerCircular(entity, doorOrigin);
+
+	float doorMins[3], doorMaxs[3], doorAngles[3];
+	GetEntPropVector(entity, Prop_Send, "m_vecMins", doorMins);
+	GetEntPropVector(entity, Prop_Send, "m_vecMaxs", doorMaxs);
+	GetEntPropVector(entity, Prop_Send, "m_angRotation", doorAngles);
+
+	float axisForward[3], axisRight[3], axisUp[3];
+	GetAngleVectors(doorAngles, axisForward, axisRight, axisUp);
+
+	for (int client = 1; client <= MaxClients; client++) {
+		if (!IsClientInGame(client) || !IsPlayerAlive(client))
+			continue;
+
+		float playerOrigin[3], playerMins[3], playerMaxs[3], playerCenter[3];
+		GetClientAbsOrigin(client, playerOrigin);
+		GetClientMins(client, playerMins);
+		GetClientMaxs(client, playerMaxs);
+		for (int axis = 0; axis < 3; axis++)
+			playerCenter[axis] = playerOrigin[axis] + ((playerMins[axis] + playerMaxs[axis]) * 0.5);
+
+		float relative[3];
+		relative[0] = playerCenter[0] - doorOrigin[0];
+		relative[1] = playerCenter[1] - doorOrigin[1];
+		relative[2] = playerCenter[2] - doorOrigin[2];
+
+		float playerExtentX = (playerMaxs[0] - playerMins[0]) * 0.5;
+		float playerExtentY = (playerMaxs[1] - playerMins[1]) * 0.5;
+		float playerExtentZ = (playerMaxs[2] - playerMins[2]) * 0.5;
+		float localX = (relative[0] * axisForward[0]) + (relative[1] * axisForward[1]) + (relative[2] * axisForward[2]);
+		float localY = (relative[0] * axisRight[0]) + (relative[1] * axisRight[1]) + (relative[2] * axisRight[2]);
+		float localZ = (relative[0] * axisUp[0]) + (relative[1] * axisUp[1]) + (relative[2] * axisUp[2]);
+		float expandX = (FloatAbs(axisForward[0]) * playerExtentX) + (FloatAbs(axisForward[1]) * playerExtentY) + (FloatAbs(axisForward[2]) * playerExtentZ);
+		float expandY = (FloatAbs(axisRight[0]) * playerExtentX) + (FloatAbs(axisRight[1]) * playerExtentY) + (FloatAbs(axisRight[2]) * playerExtentZ);
+		float expandZ = (FloatAbs(axisUp[0]) * playerExtentX) + (FloatAbs(axisUp[1]) * playerExtentY) + (FloatAbs(axisUp[2]) * playerExtentZ);
+
+		if (localX < doorMins[0] - expandX || localX > doorMaxs[0] + expandX)
+			continue;
+		if (localY < doorMins[1] - expandY || localY > doorMaxs[1] + expandY)
+			continue;
+		if (localZ < doorMins[2] - expandZ || localZ > doorMaxs[2] + expandZ)
+			continue;
+
+		// The moved door's oriented bounds overlap this player's collision hull.
+		return true;
+	}
+	return false;
+}
+
+static bool SecurityDoorWouldTrapPlayerCircular(int entity, const float doorOrigin[3]) {
 	float clearance = GetSecurityDoorPlayerClearance(entity);
 	float clearanceSqr = clearance * clearance;
 	for (int client = 1; client <= MaxClients; client++) {
