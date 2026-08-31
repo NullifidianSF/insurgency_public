@@ -7,7 +7,7 @@
 #include <clientprefs>
 #include <dbi>
 
-#define PL_VERSION		"3.14"
+#define PL_VERSION		"3.21"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 // Optional MySQL entry in databases.cfg. Local SQLite is used when it is not configured.
 #define BLUEPRINT_DATABASE_CONFIG "props_blueprints"
@@ -85,7 +85,7 @@
 #define PROP_SELECTION_B			255
 #define PROP_BATCH_DATA_SIZE		10
 #define RECENT_PROP_COUNT		5
-#define PROP_MENU_NAVIGATION_HINT	"AIM: Back | ATTACK: Next"
+#define PROP_MENU_NAVIGATION_HINT	"LEAN LEFT: Back | LEAN RIGHT: Next"
 
 #define BLUEPRINT_SLOT_COUNT		5
 #define BLUEPRINT_MIN_PROPS		2
@@ -1253,15 +1253,11 @@ static bool HandlePropMenuNavigation(int client, int pressed, int &buttons, bool
 	if (pressed & (BTN_SPRINT | BTN_SPRINT_TOGGLE))
 		return false;
 
-	if (pressed & (BTN_AIM | BTN_AIM_TOGGLE)) {
-		buttons &= ~(BTN_AIM | BTN_AIM_TOGGLE);
-		buttonsChanged = true;
+	if (pressed & BTN_LEAN_LEFT) {
 		ClientCommand(client, "slot7");
 		return true;
 	}
-	if (pressed & BTN_ATTACK1) {
-		buttons &= ~BTN_ATTACK1;
-		buttonsChanged = true;
+	if (pressed & BTN_LEAN_RIGHT) {
 		ClientCommand(client, "slot8");
 		return true;
 	}
@@ -1317,17 +1313,17 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 		return buttonsChanged ? Plugin_Changed : Plugin_Continue;
 	}
 
-	if (pressed & BTN_USE) {
+	if ((pressed & BTN_USE) && ga_iPropHolding[client] == INVALID_ENT_REFERENCE)
+		QueuePropSelectionToggle(client);
+	if (pressed & (BTN_AIM | BTN_AIM_TOGGLE)) {
 		if (ga_iPropHolding[client] == INVALID_ENT_REFERENCE)
 			OnButtonPress(client, BTN_USE, vel);
 		else {
 			QueueHeldPropPlacement(client, vel);
-			buttons &= ~BTN_USE;
+			buttons &= ~(BTN_AIM | BTN_AIM_TOGGLE);
 			buttonsChanged = true;
 		}
 	}
-	if ((pressed & BTN_RELOAD) && ga_iPropHolding[client] == INVALID_ENT_REFERENCE)
-		QueuePropSelectionToggle(client);
 
 	int ent = EntRefToEntIndex(ga_iPropHolding[client]);
 	if (ent <= MaxClients || !IsValidEntity(ent)) {
@@ -3135,12 +3131,12 @@ public Action Panel_HelpInfo(int client) {
 	DrawPanelText(panel, sPropLimit);
 	DrawPanelText(panel, " ");
 	DrawPanelText(panel, "Knife controls:");
-	DrawPanelText(panel, "Use = Pick up or place a prop");
-	DrawPanelText(panel, "Reload = Highlight/unhighlight your prop (blue)");
+	DrawPanelText(panel, "Aim = Pick up or place a prop");
+	DrawPanelText(panel, "Use = Highlight/unhighlight your prop (blue)");
 	DrawPanelText(panel, "Move a selected prop = Move the whole group");
 	DrawPanelText(panel, "Rotation menu: Reload = Reset rotation");
-	DrawPanelText(panel, "Aim = Back | Attack = Next page");
-	DrawPanelText(panel, "Aim Back while moving a built prop = Place if valid");
+	DrawPanelText(panel, "Lean Left = Back | Lean Right = Next page");
+	DrawPanelText(panel, "Lean Left from Rotation = Place built prop if valid");
 	DrawPanelText(panel, "Bipod = Build menu | Cycle Firemode = Shop");
 	DrawPanelText(panel, "!prophelp = Open this help");
 	DrawPanelText(panel, " ");
@@ -3325,7 +3321,7 @@ public Action Hook_WeaponSwitch(int client, int entity) {
 
 	if (ga_bHoldingMeleeWeapon[client]) {
 		ga_bHoldingMeleeWeapon[client] = true;
-		PrintCenterText(client, "Bipod = Build menu | USE = Pick up prop | !prophelp = Help");
+		PrintCenterText(client, "Bipod = Build menu | AIM = Pick up prop | !prophelp = Help");
 	}
 	else {
 		ga_bHoldingMeleeWeapon[client] = false;
@@ -3863,7 +3859,7 @@ void OpenRotationMenu(int client) {
 	if (step <= 0.0)
 		step = PROP_ROTATE_STEP;
 
-	rotationMenu.SetTitle("Rotation\nStep: %.1f°\nUSE: Place\n%s\nRELOAD: Reset rotation", step, PROP_MENU_NAVIGATION_HINT);
+	rotationMenu.SetTitle("Rotation\nStep: %.1f°\nAIM: Place\n%s\nRELOAD: Reset rotation", step, PROP_MENU_NAVIGATION_HINT);
 
 	rotationMenu.AddItem("y+", "+Yaw");
 	rotationMenu.AddItem("y-", "-Yaw");
