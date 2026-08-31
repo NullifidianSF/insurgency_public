@@ -7,7 +7,7 @@
 #include <clientprefs>
 #include <dbi>
 
-#define PL_VERSION		"2.82"
+#define PL_VERSION		"3.13"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 // Optional MySQL entry in databases.cfg. Local SQLite is used when it is not configured.
 #define BLUEPRINT_DATABASE_CONFIG "props_blueprints"
@@ -40,7 +40,8 @@
 #define BTN_ACCESSORY       (1 << 28)
 #define BTN_STANCE_TOGGLE   (1 << 29)
 
-#define PF_DEPLOY_BIPOD	(1 << 1)
+#define PF_DEPLOY_BIPOD			(1 << 1)
+#define PF_WEAPON_RESTRICTED	(1 << 10)
 
 #define DAMAGE_NO					0
 #define DAMAGE_EVENTS_ONLY			1
@@ -83,6 +84,8 @@
 #define PROP_SELECTION_G			160
 #define PROP_SELECTION_B			255
 #define PROP_BATCH_DATA_SIZE		10
+#define RECENT_PROP_COUNT		5
+#define PROP_MENU_NAVIGATION_HINT	"AIM: Back | ATTACK: Next"
 
 #define BLUEPRINT_SLOT_COUNT		5
 #define BLUEPRINT_MIN_PROPS		2
@@ -214,6 +217,7 @@ static const PropDef g_PropDefs[] = {
 
 #define PROP_COUNT (sizeof(g_PropDefs))
 PropId ga_iModelIndex[MAXPLAYERS + 1] = {Prop_BarbWire, ...};
+int ga_iRecentPropModels[MAXPLAYERS + 1][RECENT_PROP_COUNT];
 
 int		ga_iPropHolding[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
 int		ga_iHoldHp[MAXPLAYERS + 1];
@@ -235,8 +239,13 @@ int		ga_iMattressKiller[MAXPLAYERS + 1];
 
 bool	ga_bHelpMenuOpen[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bPropRotateMenuOpen[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bRotationMenuVisible[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bBuildMenuOpen[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bShopMenuOpen[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bShopOpenedFromPropMenu[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bPropAuxMenuOpen[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bPropMenuWeaponLockApplied[MAXPLAYERS + 1] = {false, ...};
+bool	ga_bPropMenuWasWeaponRestricted[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bHoldingMeleeWeapon[MAXPLAYERS + 1] = {false, ...};
 bool	g_bLateLoad;
 bool	ga_bBipodForced[MAXPLAYERS + 1] = {false, ...};
@@ -244,6 +253,7 @@ bool	ga_bPlayerRefund[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bFirstTimeJoinedSquad[MAXPLAYERS + 1] = {true, ...};
 
 bool	ga_bPlacingNow[MAXPLAYERS + 1] = { false, ... };
+bool	ga_bPlaceQueued[MAXPLAYERS + 1] = { false, ... };
 float	ga_fLastPlaceTime[MAXPLAYERS + 1] = { 0.0, ... };
 bool	ga_bJustPlaced[MAXPLAYERS + 1] = { false, ... };
 const float gc_fPlaceDebounce = 0.20;
@@ -366,7 +376,6 @@ public void OnPluginStart() {
 		ga_bSecurityDoorOpen[i] = false;
 		ga_hSecurityDoorCloseTimer[i] = INVALID_HANDLE;
 	}
-
 	g_hCookiePropRotateStep = RegClientCookie("bm_prop_rotate_step", "Props: rotation step (degrees)", CookieAccess_Private);
 
 	HookEvent("player_death",      Event_PlayerDeath_Pre, EventHookMode_Pre);
@@ -394,6 +403,7 @@ public void OnPluginStart() {
 			ga_iMattressKiller[i]         = 0;
 			ga_bMattressJumpArmed[i]      = false;
 			ga_iLastInflictorPropId[i]    = -1;
+			ResetRecentPropModels(i);
 
 			ga_iResupplyCounter[i] = g_iResupplyDelay;
 
@@ -492,11 +502,16 @@ public void OnClientPostAdminCheck(int client) {
 	ga_fPropMenuCooldown[client] = 0.0;
 	ga_fPressedJumpTime[client]  = 0.0;
 	ga_bPlacingNow[client]       = false;
+	ga_bPlaceQueued[client]      = false;
 	ga_fLastPlaceTime[client]    = 0.0;
 	ga_bJustPlaced[client]       = false;
 	ga_bPickupQueued[client]     = false;
 	ga_bSelectionQueued[client]  = false;
 	ga_bHeldPreviewPosValid[client] = false;
+	ga_bRotationMenuVisible[client] = false;
+	ga_bShopOpenedFromPropMenu[client] = false;
+	ga_bPropMenuWeaponLockApplied[client] = false;
+	ga_bPropMenuWasWeaponRestricted[client] = false;
 	ClearPropSelections(client);
 	ClearSelectablePropFlash(client);
 	ga_fNextSelectableFlash[client] = 0.0;
@@ -512,6 +527,7 @@ public void OnClientPostAdminCheck(int client) {
 	ga_iMattressKiller[client]         = 0;
 	ga_bMattressJumpArmed[client]      = false;
 	ga_iLastInflictorPropId[client]    = -1;
+	ResetRecentPropModels(client);
 
 	ga_iResupplyCounter[client] = g_iResupplyDelay;
 
@@ -551,10 +567,17 @@ public void OnClientDisconnect(int client) {
 		return;
 
 	ga_iLastButtons[client] = 0;
+	ga_bRotationMenuVisible[client] = false;
+	ga_bShopOpenedFromPropMenu[client] = false;
 	ga_bPickupQueued[client] = false;
 	ga_bSelectionQueued[client] = false;
+	ga_bPlaceQueued[client] = false;
 	ga_bHeldPreviewPosValid[client] = false;
+	ga_bPropAuxMenuOpen[client] = false;
+	ga_bPropMenuWeaponLockApplied[client] = false;
+	ga_bPropMenuWasWeaponRestricted[client] = false;
 	ga_iLastInflictorPropId[client] = -1;
+	ResetRecentPropModels(client);
 
 	ga_iLastMattressOwner[client]      = 0;
 	ga_fLastMattressLaunchTime[client] = 0.0;
@@ -643,6 +666,7 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 		ga_bJustPlaced[i] = false;
 		ga_bMattressJumpArmed[i] = false;
 		ga_bSelectionQueued[i] = false;
+		ga_bPlaceQueued[i] = false;
 		ClearPropSelections(i);
 		ClearSelectablePropFlash(i);
 		ga_fNextSelectableFlash[i] = 0.0;
@@ -663,6 +687,7 @@ public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadca
 	ga_iResupplyCounter[client] = g_iResupplyDelay;
 	ga_iLastInflictorPropId[client] = -1;
 	ga_bMattressJumpArmed[client] = false;
+	SetPropMenuWeaponLock(client, false);
 	UpdateClientWeaponState(client);
 	return Plugin_Continue;
 }
@@ -714,6 +739,7 @@ public Action Event_PlayerDeath_Pre(Event event, const char[] name, bool dontBro
 	ClearPropSelections(victim);
 	ClearSelectablePropFlash(victim);
 	ga_fNextSelectableFlash[victim] = 0.0;
+	SetPropMenuWeaponLock(victim, false);
 	StopHolding(victim);
 	return Plugin_Continue;
 }
@@ -1200,6 +1226,7 @@ void StopHolding(int client, bool now = false, bool keepGroupPreview = false) {
 	}
 	ga_bHeldPreviewPosValid[client] = false;
 	ga_bPickupQueued[client] = false;
+	ga_bPlaceQueued[client] = false;
 
 	int ref = ga_iPropHolding[client];
 	if (ref == INVALID_ENT_REFERENCE)
@@ -1215,11 +1242,60 @@ void StopHolding(int client, bool now = false, bool keepGroupPreview = false) {
 		SafeKillRef(ref);
 }
 
+static bool HandlePropMenuNavigation(int client, int pressed, int &buttons, bool &buttonsChanged) {
+	bool holdingProp = ga_iPropHolding[client] != INVALID_ENT_REFERENCE;
+	if (!AnyPropMenuFlagOpen(client))
+		return false;
+	if (holdingProp && !ga_bPropRotateMenuOpen[client])
+		return false;
+	if (GetClientMenu(client) != MenuSource_Normal)
+		return false;
+	if (pressed & (BTN_SPRINT | BTN_SPRINT_TOGGLE))
+		return false;
+
+	if (pressed & (BTN_AIM | BTN_AIM_TOGGLE)) {
+		buttons &= ~(BTN_AIM | BTN_AIM_TOGGLE);
+		buttonsChanged = true;
+		ClientCommand(client, "slot7");
+		return true;
+	}
+	if (pressed & BTN_ATTACK1) {
+		buttons &= ~BTN_ATTACK1;
+		buttonsChanged = true;
+		ClientCommand(client, "slot8");
+		return true;
+	}
+
+	return false;
+}
+
+static bool HandleRotationReset(int client, int pressed, int &buttons) {
+	if (!(pressed & BTN_RELOAD) || !ga_bRotationMenuVisible[client] || ga_iPropHolding[client] == INVALID_ENT_REFERENCE)
+		return false;
+
+	buttons &= ~BTN_RELOAD;
+	ResetHeldPropRotation(client);
+	return true;
+}
+
 public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon) {
 	if (!IsClientInGame(client) || !IsPlayerAlive(client) || IsFakeClient(client))
 		return Plugin_Continue;
 
-	int pressed = buttons & ~ga_iLastButtons[client];
+	int inputButtons = buttons;
+	bool buttonsChanged = false;
+	SyncPropMenuWeaponLock(client);
+
+	int pressed = inputButtons & ~ga_iLastButtons[client];
+	if (HandleRotationReset(client, pressed, buttons)) {
+		ga_iLastButtons[client] = inputButtons;
+		return Plugin_Changed;
+	}
+	if (HandlePropMenuNavigation(client, pressed, buttons, buttonsChanged)) {
+		ga_iLastButtons[client] = inputButtons;
+		return buttonsChanged ? Plugin_Changed : Plugin_Continue;
+	}
+
 	if (pressed & BTN_JUMP)
 		OnButtonPress(client, BTN_JUMP, vel);
 	if (pressed & (BTN_SPRINT | BTN_SPRINT_TOGGLE | BTN_ATTACK1))
@@ -1233,15 +1309,24 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 	if (pressed & BTN_FIREMODE)
 		OnButtonPress(client, BTN_FIREMODE, vel);
 
-	ga_iLastButtons[client] = buttons;
+	ga_iLastButtons[client] = inputButtons;
 
 	if (!ga_bHoldingMeleeWeapon[client]) {
 		if (ga_hHighlightedMattressRefs[client] != null && ga_hHighlightedMattressRefs[client].Length > 0)
 			ClearMattressStackHighlights(client);
-		return Plugin_Continue;
+		return buttonsChanged ? Plugin_Changed : Plugin_Continue;
 	}
 
-	if ((pressed & BTN_USE) && ga_iPropHolding[client] == INVALID_ENT_REFERENCE)
+	if (pressed & BTN_USE) {
+		if (ga_iPropHolding[client] == INVALID_ENT_REFERENCE)
+			OnButtonPress(client, BTN_USE, vel);
+		else {
+			QueueHeldPropPlacement(client, vel);
+			buttons &= ~BTN_USE;
+			buttonsChanged = true;
+		}
+	}
+	if ((pressed & BTN_RELOAD) && ga_iPropHolding[client] == INVALID_ENT_REFERENCE)
 		QueuePropSelectionToggle(client);
 
 	int ent = EntRefToEntIndex(ga_iPropHolding[client]);
@@ -1249,7 +1334,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 		ga_iPropHolding[client] = INVALID_ENT_REFERENCE;
 		ga_bHeldPreviewPosValid[client] = false;
 		ClearMattressStackHighlights(client);
-		return Plugin_Continue;
+		return buttonsChanged ? Plugin_Changed : Plugin_Continue;
 	}
 
 	float vAng[3];
@@ -1261,7 +1346,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 
 	// Avoid mutating nearby props during the engine's PlayerUse scan.
 	if (buttons & BTN_USE)
-		return Plugin_Continue;
+		return buttonsChanged ? Plugin_Changed : Plugin_Continue;
 
 	if (!ga_bHeldPreviewPosValid[client]
 		|| GetVectorDistance(vPos, ga_fLastHeldPreviewPos[client], true) > gc_fHeldPropTeleportMinDeltaSqr) {
@@ -1278,7 +1363,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 	UpdateBatchMovePreviews(client, vPos, heldAngles, vel);
 	UpdateMattressStackHighlights(client, vPos);
 
-	return Plugin_Continue;
+	return buttonsChanged ? Plugin_Changed : Plugin_Continue;
 }
 
 static void QueuePropSelectionToggle(int client) {
@@ -1294,6 +1379,43 @@ static void QueuePropSelectionToggle(int client) {
 	pack.WriteCell(EntIndexToEntRef(target));
 	ga_bSelectionQueued[client] = true;
 	RequestFrame(NF_DeferredPropSelectionToggle, pack);
+}
+
+static void QueueHeldPropPlacement(int client, const float vel[3]) {
+	if (ga_bPlaceQueued[client])
+		return;
+
+	DataPack pack = new DataPack();
+	pack.WriteCell(GetClientSerial(client));
+	pack.WriteCell(ga_iPropHolding[client]);
+	pack.WriteFloat(vel[0]);
+	pack.WriteFloat(vel[1]);
+	pack.WriteFloat(vel[2]);
+	ga_bPlaceQueued[client] = true;
+	RequestFrame(NF_DeferredHeldPropPlacement, pack);
+}
+
+static void NF_DeferredHeldPropPlacement(any data) {
+	DataPack pack = view_as<DataPack>(data);
+	pack.Reset();
+
+	int client = GetClientFromSerial(pack.ReadCell());
+	int heldRef = pack.ReadCell();
+	float vel[3];
+	vel[0] = pack.ReadFloat();
+	vel[1] = pack.ReadFloat();
+	vel[2] = pack.ReadFloat();
+	delete pack;
+
+	if (client < 1 || client > MaxClients)
+		return;
+
+	ga_bPlaceQueued[client] = false;
+	if (!IsClientInGame(client) || !IsPlayerAlive(client) || IsFakeClient(client)
+		|| !ga_bHoldingMeleeWeapon[client] || ga_iPropHolding[client] != heldRef)
+		return;
+
+	OnButtonPress(client, BTN_USE, vel);
 }
 
 static void NF_DeferredPropSelectionToggle(any data) {
@@ -1587,10 +1709,6 @@ void OnButtonPress(int client, int button, float vel[3]) {
 		return;
 	}
 
-	if ((button & BTN_AIM) || (button & BTN_AIM_TOGGLE)) {
-		if (ga_bJustPlaced[client]) return;
-	}
-
 	if (button & BTN_SPECIAL1) {
 		if (!ga_bHoldingMeleeWeapon[client]) {
 			if (WeaponWithBipod(client)) {
@@ -1659,7 +1777,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 		}
 	}
 
-	if ((button & BTN_AIM) || (button & BTN_AIM_TOGGLE)) {
+	if (button & BTN_USE) {
 		if (!ga_bHoldingMeleeWeapon[client])
 			return;
 
@@ -1704,6 +1822,8 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			return;
 		}
 		else {
+			if (!(button & BTN_USE))
+				return;
 			if (ga_bJustPlaced[client])
 				return;
 
@@ -1752,6 +1872,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			GetEntPropVector(ent, Prop_Send, "m_angRotation", vAng);
 
 			int health = GetEntProp(ent, Prop_Data, "m_iHealth");
+			bool movingExisting = ga_iPropOwner[client] > 0;
 			StopHolding(client, false, movingBatch || holdingBlueprint);
 			bool placed = CreateProp(client, vPos, vAng, health, true, holdingBlueprint);
 			if (placed && holdingBlueprint)
@@ -1768,6 +1889,14 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			RequestFrame(ClearJustPlaced_NextFrame, GetClientSerial(client));
 
 			PrintCenterText(client, "Prop: %d/%d", (ga_hPropPlaced[client] != null) ? ga_hPropPlaced[client].Length : 0, PROP_LIMIT);
+			int selectedModelId = MID(ga_iModelIndex[client]);
+			int selectedCost = g_PropDefs[selectedModelId].cost;
+			if (placed && !holdingBlueprint && !movingBatch && !movingExisting && (g_iAllFree == 1 || HasEnoughResources(client, selectedCost))) {
+				DataPack pack;
+				CreateDataTimer(0.10, Timer_RepeatSinglePropPlacement, pack, TIMER_FLAG_NO_MAPCHANGE);
+				pack.WriteCell(GetClientSerial(client));
+				pack.WriteCell(selectedModelId);
+			}
 		}
 		return;
 	}
@@ -2954,13 +3083,17 @@ public Action Panel_HelpInfo(int client) {
 	FormatEx(sPropLimit, sizeof(sPropLimit), "Prop limit: %d/%d \n(at max oldest deleted)", (ga_hPropPlaced[client] != null) ? ga_hPropPlaced[client].Length : 0, PROP_LIMIT);
 	DrawPanelText(panel, sPropLimit);
 	DrawPanelText(panel, " ");
-	DrawPanelText(panel, "Aim = To place/move prop");
-	DrawPanelText(panel, "Use on your prop = Select it (blue)");
-	DrawPanelText(panel, "Move a selected prop = Move the group");
-	DrawPanelText(panel, "Bipod = Build menu");
-	DrawPanelText(panel, "Cycle Firemode = Shop menu");
+	DrawPanelText(panel, "Knife controls:");
+	DrawPanelText(panel, "Use = Pick up or place a prop");
+	DrawPanelText(panel, "Reload = Highlight/unhighlight your prop (blue)");
+	DrawPanelText(panel, "Move a selected prop = Move the whole group");
+	DrawPanelText(panel, "Rotation menu: Reload = Reset rotation");
+	DrawPanelText(panel, "Aim = Back | Attack = Next page");
+	DrawPanelText(panel, "Aim Back while moving a built prop = Place if valid");
+	DrawPanelText(panel, "Bipod = Build menu | Cycle Firemode = Shop");
+	DrawPanelText(panel, "!prophelp = Open this help");
 	DrawPanelText(panel, " ");
-	DrawPanelItem(panel, "Sprint or Shoot = Close menu");
+	DrawPanelItem(panel, "Sprint or Shoot = Cancel and close menu");
 	SetPanelKeys(panel, (1 << 0 | 1 << 1 | 1 << 2 | 1 << 3 | 1 << 4 | 1 << 5 | 1 << 6 | 1 << 7 | 1 << 8));
 	panel.Send(client, PanelHandler1, 60);
 	delete panel;
@@ -3141,10 +3274,11 @@ public Action Hook_WeaponSwitch(int client, int entity) {
 
 	if (ga_bHoldingMeleeWeapon[client]) {
 		ga_bHoldingMeleeWeapon[client] = true;
-		PrintCenterText(client, "Bipod = Build menu. !prophelp = Open help menu.");
+		PrintCenterText(client, "Bipod = Build menu | USE = Pick up prop | !prophelp = Help");
 	}
 	else {
 		ga_bHoldingMeleeWeapon[client] = false;
+		SetPropMenuWeaponLock(client, false);
 		ClearPropSelections(client);
 		StopHolding(client);
 	}
@@ -3187,7 +3321,7 @@ bool IsCollidingWithPlayer(int client, const float vPos[3]) {
 
 bool HasEnoughResources(int client, int cost) { return ga_iPlayerBuildPoints[client] >= cost; }
 
-void OpenShopMenu(int client, bool cooldown = true) {
+void OpenShopMenu(int client, bool cooldown = true, bool openedFromPropMenu = false) {
 	float GameTime = GetGameTime();
 	if (cooldown && (ga_fShopMenuCooldown[client] > GameTime)) {
 		PrintCenterText(client, "You must wait before opening the menu again.");
@@ -3200,10 +3334,12 @@ void OpenShopMenu(int client, bool cooldown = true) {
 		PrintToChat(client, "Since you recently refunded or changed class, you can only purchase build points after the team completes the current objective.");
 		return;
 	}
+	if (cooldown)
+		ga_bShopOpenedFromPropMenu[client] = openedFromPropMenu;
 
 	int playerTokens = GetEntProp(client, Prop_Send, "m_nAvailableTokens");
 	Menu buyMenu = new Menu(BuyMenuHandler);
-	buyMenu.SetTitle("Buy build points. (You have: %d)", ga_iPlayerBuildPoints[client]);
+	buyMenu.SetTitle("Buy build points. (You have: %d)\n%s", ga_iPlayerBuildPoints[client], PROP_MENU_NAVIGATION_HINT);
 
 	char itemBuffer[128];
 
@@ -3229,6 +3365,7 @@ void OpenShopMenu(int client, bool cooldown = true) {
 
 	buyMenu.ExitBackButton = true;
 	ga_bShopMenuOpen[client] = true;
+	SetPropMenuWeaponLock(client, true);
 	buyMenu.Display(client, MENU_STAYOPENTIME);
 }
 
@@ -3237,14 +3374,20 @@ public int BuyMenuHandler(Menu menu, MenuAction action, int client, int param) {
 		case MenuAction_End:
 			delete menu;
 		case MenuAction_Cancel: {
-			if (client >= 1 && client <= MaxClients)
+			if (client >= 1 && client <= MaxClients) {
+				bool returnToPropMenu = ga_bShopOpenedFromPropMenu[client] && param == MenuCancel_ExitBack;
 				ga_bShopMenuOpen[client] = false;
+				ga_bShopOpenedFromPropMenu[client] = false;
+				if (returnToPropMenu)
+					OpenPropSelectionMenu(client);
+			}
 		}
 		case MenuAction_Select: {
 			if (client < 1 || client > MaxClients)
 				return 0;
 			if (param < 0) {
 				ga_bShopMenuOpen[client] = false;
+				ga_bShopOpenedFromPropMenu[client] = false;
 				return 0;
 			}
 
@@ -3252,10 +3395,12 @@ public int BuyMenuHandler(Menu menu, MenuAction action, int client, int param) {
 			int style;
 			if (!menu.GetItem(param, item, sizeof(item), style, display, sizeof(display))) {
 				ga_bShopMenuOpen[client] = false;
+				ga_bShopOpenedFromPropMenu[client] = false;
 				return 0;
 			}
 			if (style & ITEMDRAW_SPACER || style & ITEMDRAW_DISABLED) {
 				ga_bShopMenuOpen[client] = false;
+				ga_bShopOpenedFromPropMenu[client] = false;
 				return 0;
 			}
 
@@ -3289,18 +3434,26 @@ public int BuyMenuHandler(Menu menu, MenuAction action, int client, int param) {
 }
 
 void OpenRefundConfirmMenu(int client) {
+	ga_bPropAuxMenuOpen[client] = true;
+	SetPropMenuWeaponLock(client, true);
 	Menu confirm = new Menu(RefundConfirmHandler);
-	confirm.SetTitle("Refund %d supply and destroy ALL your props?\n\nAre you sure?", ga_iTokensSpent[client]);
+	confirm.SetTitle("Refund %d supply and destroy ALL your props?\n%s\n\nAre you sure?", ga_iTokensSpent[client], PROP_MENU_NAVIGATION_HINT);
 	confirm.AddItem("yes", "Yes - refund and deconstruct");
 	confirm.AddItem("no", "No - go back");
-	confirm.ExitBackButton = false;
+	confirm.ExitBackButton = true;
 	confirm.Display(client, 10);
 }
 
 public int RefundConfirmHandler(Menu menu, MenuAction action, int client, int param) {
 	if (action == MenuAction_End)
 		delete menu;
+	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients) {
+		ga_bPropAuxMenuOpen[client] = false;
+		if (param == MenuCancel_ExitBack)
+			OpenShopMenu(client, false);
+	}
 	else if (action == MenuAction_Select) {
+		ga_bPropAuxMenuOpen[client] = false;
 		if (param < 0)
 			return 0;
 
@@ -3314,6 +3467,7 @@ public int RefundConfirmHandler(Menu menu, MenuAction action, int client, int pa
 			DeconstructAllProps(client);
 			RefundAllSupply(client);
 			ga_bShopMenuOpen[client] = false;
+			ga_bShopOpenedFromPropMenu[client] = false;
 			CancelClientMenu(client);
 		}
 		else
@@ -3323,7 +3477,43 @@ public int RefundConfirmHandler(Menu menu, MenuAction action, int client, int pa
 }
 
 bool AnyPropMenuFlagOpen(int client) {
-	return ga_bHelpMenuOpen[client] || ga_bPropRotateMenuOpen[client] || ga_bBuildMenuOpen[client] || ga_bShopMenuOpen[client];
+	return ga_bHelpMenuOpen[client] || ga_bPropRotateMenuOpen[client] || ga_bBuildMenuOpen[client] || ga_bShopMenuOpen[client] || ga_bPropAuxMenuOpen[client];
+}
+
+static void SetPropMenuWeaponLock(int client, bool enable) {
+	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
+		return;
+
+	int flags = GetEntProp(client, Prop_Send, "m_iPlayerFlags");
+	if (enable) {
+		if (ga_iPropHolding[client] != INVALID_ENT_REFERENCE && !ga_bPropRotateMenuOpen[client])
+			return;
+		if (ga_bPropMenuWeaponLockApplied[client])
+			return;
+
+		ga_bPropMenuWasWeaponRestricted[client] = (flags & PF_WEAPON_RESTRICTED) != 0;
+		ga_bPropMenuWeaponLockApplied[client] = true;
+		if (!ga_bPropMenuWasWeaponRestricted[client])
+			SetEntProp(client, Prop_Send, "m_iPlayerFlags", flags | PF_WEAPON_RESTRICTED);
+		return;
+	}
+
+	if (!ga_bPropMenuWeaponLockApplied[client])
+		return;
+
+	if (!ga_bPropMenuWasWeaponRestricted[client])
+		SetEntProp(client, Prop_Send, "m_iPlayerFlags", flags & ~PF_WEAPON_RESTRICTED);
+
+	ga_bPropMenuWeaponLockApplied[client] = false;
+	ga_bPropMenuWasWeaponRestricted[client] = false;
+}
+
+static void SyncPropMenuWeaponLock(int client) {
+	bool shouldLock = ga_bHoldingMeleeWeapon[client]
+		&& (ga_iPropHolding[client] == INVALID_ENT_REFERENCE || ga_bPropRotateMenuOpen[client])
+		&& AnyPropMenuFlagOpen(client)
+		&& GetClientMenu(client) == MenuSource_Normal;
+	SetPropMenuWeaponLock(client, shouldLock);
 }
 
 void CloseAllPropMenus(int client, bool sendSlot9IfNeeded = true) {
@@ -3331,6 +3521,11 @@ void CloseAllPropMenus(int client, bool sendSlot9IfNeeded = true) {
 		return;
 
 	bool bOurMenuOpen = AnyPropMenuFlagOpen(client);
+	if (bOurMenuOpen) {
+		if (ga_iPropHolding[client] != INVALID_ENT_REFERENCE)
+			StopHolding(client);
+		ga_iPropOwner[client] = 0;
+	}
 
 	if (bOurMenuOpen && GetClientMenu(client) != MenuSource_None)
 		CancelClientMenu(client);
@@ -3340,8 +3535,12 @@ void CloseAllPropMenus(int client, bool sendSlot9IfNeeded = true) {
 
 	ga_bHelpMenuOpen[client] = false;
 	ga_bPropRotateMenuOpen[client] = false;
+	ga_bRotationMenuVisible[client] = false;
 	ga_bBuildMenuOpen[client] = false;
 	ga_bShopMenuOpen[client] = false;
+	ga_bShopOpenedFromPropMenu[client] = false;
+	ga_bPropAuxMenuOpen[client] = false;
+	SetPropMenuWeaponLock(client, false);
 }
 
 void DeconstructAllProps(int client) {
@@ -3395,18 +3594,67 @@ void RefundAllSupply(int client, bool immediateKill = false, bool silent = false
 public Action cmd_prophelp(int client, int args) {
 	if (client > 0 && IsClientInGame(client) && !ga_bHelpMenuOpen[client]) {
 		ga_bHelpMenuOpen[client] = true;
+		SetPropMenuWeaponLock(client, true);
 		Panel_HelpInfo(client);
 	}
 	return Plugin_Handled;
 }
 
+static bool HasRecentPropModels(int client) {
+	for (int slot = 0; slot < RECENT_PROP_COUNT; slot++) {
+		if (ga_iRecentPropModels[client][slot] >= 0 && ga_iRecentPropModels[client][slot] < PROP_COUNT)
+			return true;
+	}
+
+	return false;
+}
+
+static void SelectPropForHolding(int client, int modelId) {
+	ga_bBuildMenuOpen[client] = false;
+	RecordRecentPropModel(client, modelId);
+	ga_iModelIndex[client] = view_as<PropId>(modelId);
+
+	char modelName[64];
+	GetModelName(g_PropDefs[modelId].model, modelName, sizeof(modelName));
+	int maxHealth = g_PropDefs[modelId].health;
+	if (maxHealth < 1)
+		maxHealth = PROP_HEALTH;
+
+	PrintCenterText(client, "Selected prop: %s (Cost: %d)\nHealth: %d/%d", modelName, g_PropDefs[modelId].cost, maxHealth, maxHealth);
+
+	int ent = EntRefToEntIndex(ga_iPropHolding[client]);
+	if (ent <= MaxClients || !IsValidEntity(ent)) {
+		HoldProp(client);
+		OpenRotationMenu(client);
+		return;
+	}
+
+	float vPos[3], vAng[3];
+	GetEntPropVector(ent, Prop_Send, "m_vecOrigin", vPos);
+	GetEntPropVector(ent, Prop_Send, "m_angRotation", vAng);
+
+	StopHolding(client);
+
+	if (!ga_iPropOwner[client])
+		CreateProp(client, vPos, vAng);
+	else
+		ga_iPropOwner[client] = 0;
+
+	OpenRotationMenu(client);
+}
+
 void OpenPropSelectionMenu(int client) {
 	ga_bBuildMenuOpen[client] = true;
+	SetPropMenuWeaponLock(client, true);
+	NormalizeRecentPropModels(client);
 
 	Menu propMenu = new Menu(PropSelectionMenuHandler);
-	propMenu.SetTitle("Select Prop.\n(build points: %d)", ga_iPlayerBuildPoints[client]);
+	propMenu.SetTitle("Select Prop.\n(build points: %d)\n%s", ga_iPlayerBuildPoints[client], PROP_MENU_NAVIGATION_HINT);
 
 	char itemBuffer[128], modelName[64], indexStr[8];
+	propMenu.AddItem("97", "Blueprints");
+	if (HasRecentPropModels(client))
+		propMenu.AddItem("96", "Recent props");
 
 	for (int i = 0; i < PROP_COUNT; i++) {
 		if (g_iAllFree == 0 && !HasEnoughResources(client, g_PropDefs[i].cost))
@@ -3422,7 +3670,6 @@ void OpenPropSelectionMenu(int client) {
 		propMenu.AddItem(indexStr, itemBuffer);
 	}
 
-	propMenu.AddItem("97", "Blueprints");
 	if (ga_hPropPlaced[client] != null && ga_hPropPlaced[client].Length > 0)
 		propMenu.AddItem("99", "Deconstruct all props");
 	propMenu.AddItem("98", "Open shop menu (Cycle Firemode)");
@@ -3447,6 +3694,64 @@ void OpenPropSelectionMenu(int client) {
 	propMenu.Display(client, MENU_STAYOPENTIME);
 }
 
+static void OpenRecentPropsMenu(int client) {
+	Menu recentMenu = new Menu(RecentPropsMenuHandler);
+	recentMenu.SetTitle("Recent props\n(build points: %d)\n%s", ga_iPlayerBuildPoints[client], PROP_MENU_NAVIGATION_HINT);
+
+	char itemBuffer[128], modelName[64], indexStr[8];
+	for (int slot = 0; slot < RECENT_PROP_COUNT; slot++) {
+		int modelId = ga_iRecentPropModels[client][slot];
+		if (modelId < 0 || modelId >= PROP_COUNT)
+			continue;
+
+		int maxHealth = g_PropDefs[modelId].health;
+		if (maxHealth < 1)
+			maxHealth = PROP_HEALTH;
+
+		GetModelName(g_PropDefs[modelId].model, modelName, sizeof(modelName));
+		IntToString(modelId, indexStr, sizeof(indexStr));
+		if (g_iAllFree == 0 && !HasEnoughResources(client, g_PropDefs[modelId].cost)) {
+			FormatEx(itemBuffer, sizeof(itemBuffer), "%s (HP: %d) - Cost: %d (Can't afford)", modelName, maxHealth, g_PropDefs[modelId].cost);
+			recentMenu.AddItem(indexStr, itemBuffer, ITEMDRAW_DISABLED);
+		}
+		else {
+			FormatEx(itemBuffer, sizeof(itemBuffer), "%s (HP: %d) - Cost: %d", modelName, maxHealth, (g_iAllFree == 0 ? g_PropDefs[modelId].cost : 0));
+			recentMenu.AddItem(indexStr, itemBuffer);
+		}
+	}
+
+	recentMenu.ExitBackButton = true;
+	recentMenu.Display(client, MENU_STAYOPENTIME);
+}
+
+public int RecentPropsMenuHandler(Menu menu, MenuAction action, int client, int param) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Select) {
+		char indexStr[8];
+		int style;
+		if (!menu.GetItem(param, indexStr, sizeof(indexStr), style) || style & ITEMDRAW_DISABLED) {
+			ga_bBuildMenuOpen[client] = false;
+			return 0;
+		}
+
+		int modelId = StringToInt(indexStr);
+		if (modelId >= 0 && modelId < PROP_COUNT)
+			SelectPropForHolding(client, modelId);
+		else {
+			ga_bBuildMenuOpen[client] = false;
+			PrintToChat(client, "Invalid prop selection.");
+		}
+	}
+	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients) {
+		if (param == MenuCancel_ExitBack)
+			OpenPropSelectionMenu(client);
+		else
+			ga_bBuildMenuOpen[client] = false;
+	}
+	return 0;
+}
+
 public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, int param) {
 	if (action == MenuAction_End)
 		delete menu;
@@ -3468,53 +3773,25 @@ public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, in
 		}
 
 		int selectedIndex = StringToInt(indexStr);
-		if (selectedIndex >= 0 && selectedIndex < PROP_COUNT) {
-			ga_bBuildMenuOpen[client] = false;
-			ga_iModelIndex[client] = view_as<PropId>(selectedIndex);
-
-			char modelName[64];
-			GetModelName(g_PropDefs[selectedIndex].model, modelName, sizeof(modelName));
-			int maxHealth = g_PropDefs[selectedIndex].health;
-			if (maxHealth < 1)
-				maxHealth = PROP_HEALTH;
-
-			PrintCenterText(client, "Selected prop: %s (Cost: %d)\nHealth: %d/%d", modelName, g_PropDefs[selectedIndex].cost, maxHealth, maxHealth);
-
-			int ent = EntRefToEntIndex(ga_iPropHolding[client]);
-			if (ent <= MaxClients || !IsValidEntity(ent)) {
-				HoldProp(client);
-				OpenRotationMenu(client);
-				return 0;
-			}
-
-			float vPos[3], vAng[3];
-			GetEntPropVector(ent, Prop_Send, "m_vecOrigin", vPos);
-			GetEntPropVector(ent, Prop_Send, "m_angRotation", vAng);
-
-			StopHolding(client);
-
-			if (!ga_iPropOwner[client])
-				CreateProp(client, vPos, vAng);
-			else
-				ga_iPropOwner[client] = 0;
-
-			OpenRotationMenu(client);
-		}
+		if (selectedIndex >= 0 && selectedIndex < PROP_COUNT)
+			SelectPropForHolding(client, selectedIndex);
 		else if (selectedIndex == 99) {
 			ga_bBuildMenuOpen[client] = false;
 			OpenDeconstructConfirmMenu(client);
 		}
-	else if (selectedIndex == 98) {
+		else if (selectedIndex == 98) {
 			ga_bBuildMenuOpen[client] = false;
 			if (ga_iPropHolding[client] != INVALID_ENT_REFERENCE)
 				StopHolding(client);
 
-		OpenShopMenu(client);
-	}
-	else if (selectedIndex == 97) {
-		ga_bBuildMenuOpen[client] = false;
-		OpenBlueprintMenu(client);
-	}
+			OpenShopMenu(client, true, true);
+		}
+		else if (selectedIndex == 97) {
+			ga_bBuildMenuOpen[client] = false;
+			OpenBlueprintMenu(client);
+		}
+		else if (selectedIndex == 96)
+			OpenRecentPropsMenu(client);
 		else {
 			ga_bBuildMenuOpen[client] = false;
 			PrintToChat(client, "Invalid prop selection.");
@@ -3527,13 +3804,15 @@ public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, in
 
 void OpenRotationMenu(int client) {
 	ga_bPropRotateMenuOpen[client] = true;
+	ga_bRotationMenuVisible[client] = true;
+	SetPropMenuWeaponLock(client, true);
 
 	Menu rotationMenu = new Menu(RotationMenuHandler);
 	float step = ga_fPropRotateStep[client];
 	if (step <= 0.0)
 		step = PROP_ROTATE_STEP;
 
-	rotationMenu.SetTitle("Rotation\nStep: %.1f°", step);
+	rotationMenu.SetTitle("Rotation\nStep: %.1f°\nUSE: Place\n%s\nRELOAD: Reset rotation", step, PROP_MENU_NAVIGATION_HINT);
 
 	rotationMenu.AddItem("y+", "+Yaw");
 	rotationMenu.AddItem("y-", "-Yaw");
@@ -3550,7 +3829,7 @@ void OpenRotationMenu(int client) {
 	FormatEx(stepItem, sizeof(stepItem), "Rotation step: %.1f° (change)", step);
 	rotationMenu.AddItem("rotstep", stepItem);
 
-	rotationMenu.ExitBackButton = false;
+	rotationMenu.ExitBackButton = true;
 	rotationMenu.Display(client, 60);
 }
 
@@ -3602,13 +3881,14 @@ static void SaveRotateStepCookie(int client) {
 }
 
 void OpenRotateStepMenu(int client) {
+	ga_bRotationMenuVisible[client] = false;
 	Menu m = new Menu(RotateStepMenuHandler);
 
 	float cur = ga_fPropRotateStep[client];
 	if (!IsValidRotateStep(cur))
 		cur = PROP_ROTATE_STEP;
 
-	m.SetTitle("Rotation step\nCurrent: %.0f°", cur);
+	m.SetTitle("Rotation step\nCurrent: %.0f°\n%s", cur, PROP_MENU_NAVIGATION_HINT);
 
 	int curDeg = RoundToNearest(cur);
 
@@ -3656,10 +3936,72 @@ public int RotateStepMenuHandler(Menu menu, MenuAction action, int client, int p
 	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients) {
 		if (param == MenuCancel_ExitBack)
 			OpenRotationMenu(client);
-		else
+		else {
 			ga_bPropRotateMenuOpen[client] = false;
+			ga_bRotationMenuVisible[client] = false;
+		}
 	}
 	return 0;
+}
+
+static void ResetHeldPropRotation(int client, bool reopenMenu = false) {
+	int ent = EntRefToEntIndex(ga_iPropHolding[client]);
+	if (ent <= MaxClients || !IsValidEntity(ent)) {
+		ga_bPropRotateMenuOpen[client] = false;
+		ga_bRotationMenuVisible[client] = false;
+		return;
+	}
+
+	float vRot[3] = {0.0, 0.0, 0.0};
+	SetEntPropVector(ent, Prop_Send, "m_angRotation", vRot);
+
+	int hp = ga_iHoldHp[client];
+	int maxHealth = ga_iHoldMaxHp[client];
+	if (maxHealth <= 0) {
+		hp = GetEntProp(ent, Prop_Data, "m_iHealth");
+		maxHealth = GetEntProp(ent, Prop_Data, "m_iMaxHealth");
+		if (maxHealth <= 0)
+			maxHealth = PROP_HEALTH;
+		if (hp < 0)
+			hp = 0;
+
+		ga_iHoldHp[client] = hp;
+		ga_iHoldMaxHp[client] = maxHealth;
+	}
+	PrintCenterText(client, "Rotation reset\nHealth: %d/%d", hp, maxHealth);
+
+	if (!ga_bHoldingBlueprint[client] && (ga_hBatchMoveData[client] == null || ga_hBatchMoveData[client].Length == 0)) {
+		int mid = MID(ga_iModelIndex[client]);
+		ga_fPropRotations[client][mid][0] = 0.0;
+		ga_fPropRotations[client][mid][1] = 0.0;
+		ga_fPropRotations[client][mid][2] = 0.0;
+	}
+
+	if (reopenMenu)
+		OpenRotationMenu(client);
+}
+
+static bool TryPlaceExistingHeldPropOnBack(int client) {
+	if (ga_iPropOwner[client] < 1 || ga_iPropHolding[client] == INVALID_ENT_REFERENCE)
+		return false;
+	if (!IsPlayerOnGround(client))
+		return false;
+
+	int ent = EntRefToEntIndex(ga_iPropHolding[client]);
+	if (!IsValidNonClientEntity(ent))
+		return false;
+
+	float vel[3] = {0.0, 0.0, 0.0};
+	float lastPlaceTime = ga_fLastPlaceTime[client];
+	ga_fLastPlaceTime[client] = 0.0;
+	OnButtonPress(client, BTN_USE, vel);
+
+	if (ga_iPropHolding[client] != INVALID_ENT_REFERENCE) {
+		ga_fLastPlaceTime[client] = lastPlaceTime;
+		return false;
+	}
+
+	return true;
 }
 
 public int RotationMenuHandler(Menu menu, MenuAction action, int client, int param) {
@@ -3715,6 +4057,7 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 		int ent = EntRefToEntIndex(ga_iPropHolding[client]);
 		if (ent <= MaxClients || !IsValidEntity(ent)) {
 			ga_bPropRotateMenuOpen[client] = false;
+			ga_bRotationMenuVisible[client] = false;
 			return 0;
 		}
 
@@ -3738,9 +4081,8 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 		else if (strcmp(item, "z-") == 0)
 			vRot[2] -= step;
 		else if (strcmp(item, "reset") == 0) {
-			vRot[0] = 0.0;
-			vRot[1] = 0.0;
-			vRot[2] = 0.0;
+			ResetHeldPropRotation(client, true);
+			return 0;
 		}
 
 		vRot[0] = BM_NormalizeAngle360(vRot[0]);
@@ -3775,26 +4117,41 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 
 		OpenRotationMenu(client);
 	}
-	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients)
+	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients) {
 		ga_bPropRotateMenuOpen[client] = false;
+		ga_bRotationMenuVisible[client] = false;
+		if (param == MenuCancel_ExitBack && !TryPlaceExistingHeldPropOnBack(client))
+			StopHolding(client);
+		ga_iPropOwner[client] = 0;
+		if (param == MenuCancel_ExitBack)
+			OpenPropSelectionMenu(client);
+	}
 	return 0;
 }
 
 void OpenDeconstructConfirmMenu(int client) {
 	int count = (ga_hPropPlaced[client] != null) ? ga_hPropPlaced[client].Length : 0;
 
+	ga_bPropAuxMenuOpen[client] = true;
+	SetPropMenuWeaponLock(client, true);
 	Menu confirm = new Menu(DeconstructConfirmHandler);
-	confirm.SetTitle("Deconstruct ALL your props? (%d placed)\n\nAre you sure?", count);
+	confirm.SetTitle("Deconstruct ALL your props? (%d placed)\n%s\n\nAre you sure?", count, PROP_MENU_NAVIGATION_HINT);
 	confirm.AddItem("yes", "Yes - deconstruct all props");
 	confirm.AddItem("no",  "No - go back");
-	confirm.ExitBackButton = false;
+	confirm.ExitBackButton = true;
 	confirm.Display(client, 10);
 }
 
 public int DeconstructConfirmHandler(Menu menu, MenuAction action, int client, int param) {
 	if (action == MenuAction_End)
 		delete menu;
+	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients) {
+		ga_bPropAuxMenuOpen[client] = false;
+		if (param == MenuCancel_ExitBack)
+			OpenPropSelectionMenu(client);
+	}
 	else if (action == MenuAction_Select) {
+		ga_bPropAuxMenuOpen[client] = false;
 		if (param < 0)
 			return 0;
 
@@ -4090,9 +4447,64 @@ static bool CaptureHeldBlueprintLayout(int client, ArrayList &layout) {
 	return true;
 }
 
+static void ResetRecentPropModels(int client) {
+	for (int slot = 0; slot < RECENT_PROP_COUNT; slot++)
+		ga_iRecentPropModels[client][slot] = -1;
+}
+
+static void NormalizeRecentPropModels(int client) {
+	int uniqueModels[RECENT_PROP_COUNT];
+	int uniqueCount = 0;
+
+	for (int slot = 0; slot < RECENT_PROP_COUNT; slot++) {
+		int modelId = ga_iRecentPropModels[client][slot];
+		if (modelId < 0 || modelId >= PROP_COUNT)
+			continue;
+
+		bool duplicate = false;
+		for (int previous = 0; previous < uniqueCount; previous++) {
+			if (uniqueModels[previous] == modelId) {
+				duplicate = true;
+				break;
+			}
+		}
+		if (duplicate)
+			continue;
+
+		uniqueModels[uniqueCount] = modelId;
+		uniqueCount++;
+	}
+
+	for (int slot = 0; slot < RECENT_PROP_COUNT; slot++)
+		ga_iRecentPropModels[client][slot] = (slot < uniqueCount) ? uniqueModels[slot] : -1;
+}
+
+static void RecordRecentPropModel(int client, int modelId) {
+	if (modelId < 0 || modelId >= PROP_COUNT)
+		return;
+
+	NormalizeRecentPropModels(client);
+
+	int remaining[RECENT_PROP_COUNT];
+	int remainingCount = 0;
+	for (int slot = 0; slot < RECENT_PROP_COUNT && remainingCount < RECENT_PROP_COUNT - 1; slot++) {
+		int recentModelId = ga_iRecentPropModels[client][slot];
+		if (recentModelId < 0 || recentModelId >= PROP_COUNT || recentModelId == modelId)
+			continue;
+
+		remaining[remainingCount] = recentModelId;
+		remainingCount++;
+	}
+
+	ga_iRecentPropModels[client][0] = modelId;
+	for (int slot = 1; slot < RECENT_PROP_COUNT; slot++)
+		ga_iRecentPropModels[client][slot] = (slot - 1 < remainingCount) ? remaining[slot - 1] : -1;
+}
+
 static void OpenBlueprintSaveSlotsMenu(int client) {
+	ga_bRotationMenuVisible[client] = false;
 	Menu menu = new Menu(BlueprintSaveSlotMenuHandler);
-	menu.SetTitle("Save Blueprint\nChoose a slot");
+	menu.SetTitle("Save Blueprint\nChoose a slot\n%s", PROP_MENU_NAVIGATION_HINT);
 
 	for (int slot = 0; slot < BLUEPRINT_SLOT_COUNT; slot++) {
 		char info[8], display[192];
@@ -4137,13 +4549,18 @@ public int BlueprintSaveSlotMenuHandler(Menu menu, MenuAction action, int client
 			Menu confirm = new Menu(BlueprintOverwriteMenuHandler);
 			char yesInfo[8];
 			IntToString(slot, yesInfo, sizeof(yesInfo));
-			confirm.SetTitle("Overwrite Blueprint Slot %d?", slot + 1);
+			confirm.SetTitle("Overwrite Blueprint Slot %d?\n%s", slot + 1, PROP_MENU_NAVIGATION_HINT);
 			confirm.AddItem(yesInfo, "Yes, overwrite");
 			confirm.AddItem("-1", "No");
+			confirm.ExitBackButton = true;
 			confirm.Display(client, MENU_STAYOPENTIME);
 		} else {
 			PromptBlueprintName(client, slot);
 		}
+	}
+	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients) {
+		if (param == MenuCancel_ExitBack)
+			OpenRotationMenu(client);
 	}
 	return 0;
 }
@@ -4159,6 +4576,10 @@ public int BlueprintOverwriteMenuHandler(Menu menu, MenuAction action, int clien
 			PromptBlueprintName(client, slot);
 		else
 			OpenRotationMenu(client);
+	}
+	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients) {
+		if (param == MenuCancel_ExitBack)
+			OpenBlueprintSaveSlotsMenu(client);
 	}
 	return 0;
 }
@@ -4494,7 +4915,7 @@ static void OpenBlueprintMenu(int client) {
 
 	int blueprintCount = 0;
 	Menu menu = new Menu(BlueprintMenuHandler);
-	menu.SetTitle("Blueprints\nBuild points: %d", ga_iPlayerBuildPoints[client]);
+	menu.SetTitle("Blueprints\nBuild points: %d\n%s", ga_iPlayerBuildPoints[client], PROP_MENU_NAVIGATION_HINT);
 	for (int slot = 0; slot < BLUEPRINT_SLOT_COUNT; slot++) {
 		ArrayList list = ga_hBlueprintProps[client][slot];
 		if (list == null || list.Length == 0)
@@ -4520,6 +4941,8 @@ static void OpenBlueprintMenu(int client) {
 	}
 
 	menu.ExitBackButton = true;
+	ga_bPropAuxMenuOpen[client] = true;
+	SetPropMenuWeaponLock(client, true);
 	menu.Display(client, MENU_STAYOPENTIME);
 }
 
@@ -4527,12 +4950,16 @@ public int BlueprintMenuHandler(Menu menu, MenuAction action, int client, int pa
 	if (action == MenuAction_End)
 		delete menu;
 	else if (action == MenuAction_Select) {
+		ga_bPropAuxMenuOpen[client] = false;
 		char info[8];
 		menu.GetItem(param, info, sizeof(info));
 		StartBlueprintHold(client, StringToInt(info));
 	}
-	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients && param == MenuCancel_ExitBack)
-		OpenPropSelectionMenu(client);
+	else if (action == MenuAction_Cancel && client >= 1 && client <= MaxClients) {
+		ga_bPropAuxMenuOpen[client] = false;
+		if (param == MenuCancel_ExitBack)
+			OpenPropSelectionMenu(client);
+	}
 	return 0;
 }
 
@@ -4674,6 +5101,16 @@ public void OnMapEnd() {
 			delete ga_hBatchMoveData[i];
 			ga_hBatchMoveData[i] = null;
 		}
+		if (ga_hPendingBlueprintNameTimer[i] != INVALID_HANDLE) {
+			KillTimer(ga_hPendingBlueprintNameTimer[i]);
+			ga_hPendingBlueprintNameTimer[i] = INVALID_HANDLE;
+		}
+		if (ga_hPendingBlueprintProps[i] != null) {
+			delete ga_hPendingBlueprintProps[i];
+			ga_hPendingBlueprintProps[i] = null;
+		}
+		ga_iPendingBlueprintSlot[i] = -1;
+		ga_bPlaceQueued[i] = false;
 		ClearBlueprintHold(i, true);
 	}
 	if (g_hAmmoCacheRefs != null) {
@@ -4691,6 +5128,8 @@ public void OnPluginEnd() {
 	for (int i = 1; i <= MaxClients; i++) {
 		if (!IsClientInGame(i) || IsFakeClient(i))
 			continue;
+
+		SetPropMenuWeaponLock(i, false);
 
 		// Deferred entity cleanup will not run after a plugin reload.
 		KillNowRef(ga_iPropHolding[i]);
@@ -4861,4 +5300,25 @@ static void ClearJustPlaced_NextFrame(any serial) {
 	int client = GetClientFromSerial(serial);
 	if (client >= 1 && client <= MaxClients)
 		ga_bJustPlaced[client] = false;
+}
+
+public Action Timer_RepeatSinglePropPlacement(Handle timer, DataPack pack) {
+	pack.Reset();
+
+	int client = GetClientFromSerial(pack.ReadCell());
+	int modelId = pack.ReadCell();
+
+	if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
+		return Plugin_Stop;
+	if (modelId < 0 || modelId >= PROP_COUNT || ga_iPropHolding[client] != INVALID_ENT_REFERENCE)
+		return Plugin_Stop;
+	if (!ga_bHoldingMeleeWeapon[client])
+		return Plugin_Stop;
+	if (g_iAllFree == 0 && !HasEnoughResources(client, g_PropDefs[modelId].cost))
+		return Plugin_Stop;
+
+	ga_iModelIndex[client] = view_as<PropId>(modelId);
+	HoldProp(client);
+	OpenRotationMenu(client);
+	return Plugin_Stop;
 }
