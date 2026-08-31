@@ -7,7 +7,7 @@
 #include <clientprefs>
 #include <dbi>
 
-#define PL_VERSION		"3.21"
+#define PL_VERSION		"3.28"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 // Optional MySQL entry in databases.cfg. Local SQLite is used when it is not configured.
 #define BLUEPRINT_DATABASE_CONFIG "props_blueprints"
@@ -1887,6 +1887,9 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			PrintCenterText(client, "Prop: %d/%d", (ga_hPropPlaced[client] != null) ? ga_hPropPlaced[client].Length : 0, PROP_LIMIT);
 			int selectedModelId = MID(ga_iModelIndex[client]);
 			int selectedCost = g_PropDefs[selectedModelId].cost;
+			if (placed && !holdingBlueprint && !movingBatch && !movingExisting)
+				RecordRecentPropModel(client, selectedModelId);
+
 			if (placed && !holdingBlueprint && !movingBatch && !movingExisting && (g_iAllFree == 1 || HasEnoughResources(client, selectedCost))) {
 				DataPack pack;
 				CreateDataTimer(0.10, Timer_RepeatSinglePropPlacement, pack, TIMER_FLAG_NO_MAPCHANGE);
@@ -3658,7 +3661,6 @@ static bool HasRecentPropModels(int client) {
 
 static void SelectPropForHolding(int client, int modelId) {
 	ga_bBuildMenuOpen[client] = false;
-	RecordRecentPropModel(client, modelId);
 	ga_iModelIndex[client] = view_as<PropId>(modelId);
 
 	char modelName[64];
