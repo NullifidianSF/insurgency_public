@@ -7,7 +7,7 @@
 #include <clientprefs>
 #include <dbi>
 
-#define PL_VERSION		"3.28"
+#define PL_VERSION		"3.44"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 // Optional MySQL entry in databases.cfg. Local SQLite is used when it is not configured.
 #define BLUEPRINT_DATABASE_CONFIG "props_blueprints"
@@ -64,7 +64,7 @@
 #define SECURITY_DOOR_CLOSE_SOUND		"physics/doors/metaldoors/metal_door_01_close.wav"
 #define SECURITY_DOOR_IMPACT_SOUND	"physics/metal/metalbox_bullet_impact_03.wav"
 #define SECURITY_DOOR_MOVE_VOLUME	0.75
-#define SECURITY_DOOR_SLIDE_DISTANCE	96.0
+#define SECURITY_DOOR_SLIDE_DISTANCE_FALLBACK	96.0
 #define SECURITY_DOOR_PLAYER_HULL_RADIUS	24.0
 #define SECURITY_DOOR_CLOSE_DELAY		2.0
 #define SECURITY_DOOR_CLOSE_RETRY		0.25
@@ -2502,7 +2502,7 @@ public Action SHook_OnTouchSecurityDoor(int entity, int touch) {
 
 	float closedOrigin[3];
 	float doorAngles[3];
-	GetEntPropVector(entity, Prop_Data, "m_vecAbsOrigin", closedOrigin);
+	GetEntPropVector(entity, Prop_Send, "m_vecOrigin", closedOrigin);
 	GetEntPropVector(entity, Prop_Send, "m_angRotation", doorAngles);
 
 	float playerOrigin[3];
@@ -2513,12 +2513,13 @@ public Action SHook_OnTouchSecurityDoor(int entity, int touch) {
 	float playerOffsetX = playerOrigin[0] - closedOrigin[0];
 	float playerOffsetY = playerOrigin[1] - closedOrigin[1];
 	float firstDirection = ((playerOffsetX * right[0]) + (playerOffsetY * right[1]) >= 0.0) ? -1.0 : 1.0;
+	float slideDistance = GetSecurityDoorSlideDistance(entity);
 
 	for (int i = 0; i < 2; i++) {
 		float direction = (i == 0) ? firstDirection : -firstDirection;
 		float openOrigin[3];
-		openOrigin[0] = closedOrigin[0] + (right[0] * SECURITY_DOOR_SLIDE_DISTANCE * direction);
-		openOrigin[1] = closedOrigin[1] + (right[1] * SECURITY_DOOR_SLIDE_DISTANCE * direction);
+		openOrigin[0] = closedOrigin[0] + (right[0] * slideDistance * direction);
+		openOrigin[1] = closedOrigin[1] + (right[1] * slideDistance * direction);
 		openOrigin[2] = closedOrigin[2];
 
 		if (GetVectorDistance(openOrigin, closedOrigin, true) < 1.0)
@@ -2540,54 +2541,82 @@ public Action SHook_OnTouchSecurityDoor(int entity, int touch) {
 }
 
 static bool SecurityDoorWouldTrapPlayer(int entity, const float doorOrigin[3]) {
-	if (!HasEntProp(entity, Prop_Send, "m_vecMins") || !HasEntProp(entity, Prop_Send, "m_vecMaxs"))
+	float doorMins[3], doorMaxs[3];
+	if (!GetSecurityDoorBounds(entity, doorMins, doorMaxs))
 		return SecurityDoorWouldTrapPlayerCircular(entity, doorOrigin);
 
-	float doorMins[3], doorMaxs[3], doorAngles[3];
-	GetEntPropVector(entity, Prop_Send, "m_vecMins", doorMins);
-	GetEntPropVector(entity, Prop_Send, "m_vecMaxs", doorMaxs);
+	float doorAngles[3];
 	GetEntPropVector(entity, Prop_Send, "m_angRotation", doorAngles);
 
 	float axisForward[3], axisRight[3], axisUp[3];
 	GetAngleVectors(doorAngles, axisForward, axisRight, axisUp);
 
+	return SecurityDoorBoxWouldTrapAnyPlayer(doorOrigin, doorMins, doorMaxs, axisForward, axisRight, axisUp);
+}
+
+static bool GetSecurityDoorBounds(int entity, float mins[3], float maxs[3]) {
+	if (!HasEntProp(entity, Prop_Send, "m_vecMins") || !HasEntProp(entity, Prop_Send, "m_vecMaxs"))
+		return false;
+
+	GetEntPropVector(entity, Prop_Send, "m_vecMins", mins);
+	GetEntPropVector(entity, Prop_Send, "m_vecMaxs", maxs);
+	float doorWidth = maxs[1] - mins[1];
+	mins[1] += doorWidth;
+	maxs[1] += doorWidth;
+	return true;
+}
+
+static bool SecurityDoorBoxWouldTrapAnyPlayer(const float doorOrigin[3], const float doorMins[3], const float doorMaxs[3], const float axisForward[3], const float axisRight[3], const float axisUp[3]) {
 	for (int client = 1; client <= MaxClients; client++) {
 		if (!IsClientInGame(client) || !IsPlayerAlive(client))
 			continue;
 
-		float playerOrigin[3], playerMins[3], playerMaxs[3], playerCenter[3];
-		GetClientAbsOrigin(client, playerOrigin);
-		GetClientMins(client, playerMins);
-		GetClientMaxs(client, playerMaxs);
-		for (int axis = 0; axis < 3; axis++)
-			playerCenter[axis] = playerOrigin[axis] + ((playerMins[axis] + playerMaxs[axis]) * 0.5);
-
-		float relative[3];
-		relative[0] = playerCenter[0] - doorOrigin[0];
-		relative[1] = playerCenter[1] - doorOrigin[1];
-		relative[2] = playerCenter[2] - doorOrigin[2];
-
-		float playerExtentX = (playerMaxs[0] - playerMins[0]) * 0.5;
-		float playerExtentY = (playerMaxs[1] - playerMins[1]) * 0.5;
-		float playerExtentZ = (playerMaxs[2] - playerMins[2]) * 0.5;
-		float localX = (relative[0] * axisForward[0]) + (relative[1] * axisForward[1]) + (relative[2] * axisForward[2]);
-		float localY = (relative[0] * axisRight[0]) + (relative[1] * axisRight[1]) + (relative[2] * axisRight[2]);
-		float localZ = (relative[0] * axisUp[0]) + (relative[1] * axisUp[1]) + (relative[2] * axisUp[2]);
-		float expandX = (FloatAbs(axisForward[0]) * playerExtentX) + (FloatAbs(axisForward[1]) * playerExtentY) + (FloatAbs(axisForward[2]) * playerExtentZ);
-		float expandY = (FloatAbs(axisRight[0]) * playerExtentX) + (FloatAbs(axisRight[1]) * playerExtentY) + (FloatAbs(axisRight[2]) * playerExtentZ);
-		float expandZ = (FloatAbs(axisUp[0]) * playerExtentX) + (FloatAbs(axisUp[1]) * playerExtentY) + (FloatAbs(axisUp[2]) * playerExtentZ);
-
-		if (localX < doorMins[0] - expandX || localX > doorMaxs[0] + expandX)
-			continue;
-		if (localY < doorMins[1] - expandY || localY > doorMaxs[1] + expandY)
-			continue;
-		if (localZ < doorMins[2] - expandZ || localZ > doorMaxs[2] + expandZ)
-			continue;
-
-		// The moved door's oriented bounds overlap this player's collision hull.
-		return true;
+		if (SecurityDoorBoxWouldTrapPlayer(client, doorOrigin, doorMins, doorMaxs, axisForward, axisRight, axisUp))
+			return true;
 	}
 	return false;
+}
+
+static float GetSecurityDoorSlideDistance(int entity) {
+	float doorMins[3], doorMaxs[3];
+	if (!GetSecurityDoorBounds(entity, doorMins, doorMaxs))
+		return SECURITY_DOOR_SLIDE_DISTANCE_FALLBACK;
+
+	float slideDistance = FloatAbs(doorMaxs[1] - doorMins[1]);
+	return (slideDistance > 0.0) ? slideDistance : SECURITY_DOOR_SLIDE_DISTANCE_FALLBACK;
+}
+
+static bool SecurityDoorBoxWouldTrapPlayer(int client, const float doorOrigin[3], const float doorMins[3], const float doorMaxs[3], const float axisForward[3], const float axisRight[3], const float axisUp[3]) {
+	float playerOrigin[3], playerMins[3], playerMaxs[3], playerCenter[3];
+	GetClientAbsOrigin(client, playerOrigin);
+	GetClientMins(client, playerMins);
+	GetClientMaxs(client, playerMaxs);
+	for (int axis = 0; axis < 3; axis++)
+		playerCenter[axis] = playerOrigin[axis] + ((playerMins[axis] + playerMaxs[axis]) * 0.5);
+
+	float relative[3];
+	relative[0] = playerCenter[0] - doorOrigin[0];
+	relative[1] = playerCenter[1] - doorOrigin[1];
+	relative[2] = playerCenter[2] - doorOrigin[2];
+
+	float playerExtentX = (playerMaxs[0] - playerMins[0]) * 0.5;
+	float playerExtentY = (playerMaxs[1] - playerMins[1]) * 0.5;
+	float playerExtentZ = (playerMaxs[2] - playerMins[2]) * 0.5;
+	float localX = (relative[0] * axisForward[0]) + (relative[1] * axisForward[1]) + (relative[2] * axisForward[2]);
+	float localY = (relative[0] * axisRight[0]) + (relative[1] * axisRight[1]) + (relative[2] * axisRight[2]);
+	float localZ = (relative[0] * axisUp[0]) + (relative[1] * axisUp[1]) + (relative[2] * axisUp[2]);
+	float expandX = (FloatAbs(axisForward[0]) * playerExtentX) + (FloatAbs(axisForward[1]) * playerExtentY) + (FloatAbs(axisForward[2]) * playerExtentZ);
+	float expandY = (FloatAbs(axisRight[0]) * playerExtentX) + (FloatAbs(axisRight[1]) * playerExtentY) + (FloatAbs(axisRight[2]) * playerExtentZ);
+	float expandZ = (FloatAbs(axisUp[0]) * playerExtentX) + (FloatAbs(axisUp[1]) * playerExtentY) + (FloatAbs(axisUp[2]) * playerExtentZ);
+
+	if (localX < doorMins[0] - expandX || localX > doorMaxs[0] + expandX)
+		return false;
+	if (localY < doorMins[1] - expandY || localY > doorMaxs[1] + expandY)
+		return false;
+	if (localZ < doorMins[2] - expandZ || localZ > doorMaxs[2] + expandZ)
+		return false;
+
+	return true;
 }
 
 static bool SecurityDoorWouldTrapPlayerCircular(int entity, const float doorOrigin[3]) {
@@ -2597,27 +2626,27 @@ static bool SecurityDoorWouldTrapPlayerCircular(int entity, const float doorOrig
 		if (!IsClientInGame(client) || !IsPlayerAlive(client))
 			continue;
 
-		float playerOrigin[3];
-		GetClientAbsOrigin(client, playerOrigin);
-		if (FloatAbs(playerOrigin[2] - doorOrigin[2]) > 128.0)
-			continue;
-
-		float offsetX = playerOrigin[0] - doorOrigin[0];
-		float offsetY = playerOrigin[1] - doorOrigin[1];
-		if ((offsetX * offsetX) + (offsetY * offsetY) < clearanceSqr)
+		if (SecurityDoorCircularWouldTrapPlayer(client, doorOrigin, clearanceSqr))
 			return true;
 	}
 	return false;
 }
 
-static float GetSecurityDoorPlayerClearance(int entity) {
-	if (!HasEntProp(entity, Prop_Send, "m_vecMins") || !HasEntProp(entity, Prop_Send, "m_vecMaxs"))
-		return SECURITY_DOOR_SLIDE_DISTANCE;
+static bool SecurityDoorCircularWouldTrapPlayer(int client, const float doorOrigin[3], float clearanceSqr) {
+	float playerOrigin[3];
+	GetClientAbsOrigin(client, playerOrigin);
+	if (FloatAbs(playerOrigin[2] - doorOrigin[2]) > 128.0)
+		return false;
 
-	float mins[3];
-	float maxs[3];
-	GetEntPropVector(entity, Prop_Send, "m_vecMins", mins);
-	GetEntPropVector(entity, Prop_Send, "m_vecMaxs", maxs);
+	float offsetX = playerOrigin[0] - doorOrigin[0];
+	float offsetY = playerOrigin[1] - doorOrigin[1];
+	return (offsetX * offsetX) + (offsetY * offsetY) < clearanceSqr;
+}
+
+static float GetSecurityDoorPlayerClearance(int entity) {
+	float mins[3], maxs[3];
+	if (!GetSecurityDoorBounds(entity, mins, maxs))
+		return GetSecurityDoorSlideDistance(entity);
 
 	float horizontalX = FloatAbs(mins[0]);
 	float horizontalY = FloatAbs(mins[1]);
@@ -5266,6 +5295,7 @@ void SetupConVars() {
 		"Maximum distance between the first selected prop and other selected props", _, true, 50.0, true, 1000.0);
 	g_fPropSelectionRadius = g_cvPropSelectionRadius.FloatValue;
 	g_cvPropSelectionRadius.AddChangeHook(OnConVarChanged);
+
 }
 
 public void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue) {
