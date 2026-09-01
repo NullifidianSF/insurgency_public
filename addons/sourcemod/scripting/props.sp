@@ -7,7 +7,7 @@
 #include <clientprefs>
 #include <dbi>
 
-#define PL_VERSION		"3.44"
+#define PL_VERSION		"3.45"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 // Optional MySQL entry in databases.cfg. Local SQLite is used when it is not configured.
 #define BLUEPRINT_DATABASE_CONFIG "props_blueprints"
@@ -1281,6 +1281,11 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 	int inputButtons = buttons;
 	bool buttonsChanged = false;
 	SyncPropMenuWeaponLock(client);
+	if (AnyPropMenuFlagOpen(client) && (inputButtons & (BTN_SPRINT | BTN_SPRINT_TOGGLE))) {
+		CloseAllPropMenus(client);
+		ga_iLastButtons[client] = inputButtons;
+		return Plugin_Continue;
+	}
 
 	int pressed = inputButtons & ~ga_iLastButtons[client];
 	if (HandleRotationReset(client, pressed, buttons)) {
