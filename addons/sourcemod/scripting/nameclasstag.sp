@@ -4,7 +4,9 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PL_VERSION	"1.0.1"
+#define PL_VERSION	"1.0.2"
+
+#define CLASS_CHANGE_TAG_DELAY	0.50
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
@@ -105,6 +107,14 @@ public void OnClientDisconnect(int client)
 
 void SetClientName_Safe(int client, const char[] name)
 {
+	char currentName[MAX_NAME_LENGTH];
+	GetClientName(client, currentName, sizeof(currentName));
+
+	if (StrEqual(currentName, name))
+	{
+		return;
+	}
+
 	g_iIgnoreNameChange[client]++;
 	SetClientName(client, name);
 }
@@ -183,7 +193,9 @@ public Action Event_PlayerPickSquad_Post(Event event, const char[] name, bool do
 		g_hApplyTimer[client] = null;
 	}
 
-	g_hApplyTimer[client] = CreateTimer(0.1, Timer_ApplyTags, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
+	// The squad-pick event can arrive before m_iPlayerClass has been updated.
+	// Wait until the new class slot is established before refreshing the tag.
+	g_hApplyTimer[client] = CreateTimer(CLASS_CHANGE_TAG_DELAY, Timer_ApplyTags, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
 	return Plugin_Continue;
 }
 
