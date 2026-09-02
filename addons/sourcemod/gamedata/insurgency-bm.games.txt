@@ -35,6 +35,13 @@
 				"linux"		"48"
 			}
 
+			// Number of spare magazines in the native container returned by CINSPlayer::GetMagazines.
+			"CINSWeaponMagazines::Count"
+			{
+				"windows"	"20"
+				"linux"		"20"
+			}
+
 			"CINSPlayer::LastResupplyTime"
 			{
 				"windows"	"7096"
@@ -640,8 +647,9 @@
 				"linux"		"@_ZN10CINSPlayer12GetMagazinesEi"
 			}
 
-			// Player SDKCall: int (int amount, int ammoIndex, int magazineCount, bool suppressPickupSound, int maxAmmo).
-			// For loose ammo, magazineCount is ignored. For magazine ammo, it is passed to the native magazine allocator.
+			// Player SDKCall: int (int amount, int ammoIndex, int magazineSize, bool suppressPickupSound, int maxAmmo).
+			// For magazine ammo, amount is the requested magazine count, magazineSize is the rounds per magazine,
+			// and maxAmmo caps the native magazine container. For loose ammo, magazineSize is ignored.
 			"CINSPlayer::GiveAmmo"
 			{
 				"library"	"server"
@@ -664,6 +672,15 @@
 				"library"	"server"
 				"windows"	"\x55\x8B\xEC\x83\xEC\x08\x56\x8B\xF1\x8B\x4E\x04\x83\xF9\xFF\x0F\x84\x2A\x2A\x2A\x2A\x8B\x15\x2A\x2A\x2A\x2A\x0F\xB7\xC1\xC1\xE9\x10\x8D\x04\x40\x39\x4C\xC2\x08\x0F\x85\x2A\x2A\x2A\x2A\x83\x7C\xC2\x04\x00\x0F\x84\x2A\x2A\x2A\x2A\x8B\x4E\x04\x83\xF9\xFF\x74\x15\x0F\xB7\xC1\xC1\xE9\x10\x8D\x04\x40\x39\x4C\xC2\x08\x75\x06\x8B\x4C\xC2\x04\xEB\x02\x33\xC9\xE8\x2A\x2A\x2A\x2A\x84\xC0\x0F\x84\x2A\x2A\x2A\x2A\x57\x8B\x7D\x08\x85\xFF\x0F\x88\x2A\x2A\x2A\x2A"
 				"linux"		"@_ZN16CPlayerInventory12RefundWeaponEi"
+			}
+
+			// Raw CPlayerInventory SDKCall: void (). Restores the selected class template to the theater default.
+			// Pass the embedded inventory address from CINSPlayer::PlayerInventory as the this pointer.
+			"CPlayerInventory::ResetClassToDefault"
+			{
+				"library"	"server"
+				"windows"	"\x6A\x01\xFF\x71\x50\xE8\x2A\x2A\x2A\x2A\xC3"
+				"linux"		"@_ZN16CPlayerInventory19ResetClassToDefaultEv"
 			}
 
 			// Raw CPlayerInventory SDKCall: int (int weaponDefinition, int fireMode, int slotIndex). Buys one native weapon purchase.
