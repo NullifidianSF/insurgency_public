@@ -7,7 +7,7 @@
 #include <clientprefs>
 #include <dbi>
 
-#define PL_VERSION		"3.45"
+#define PL_VERSION		"3.49"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 // Optional MySQL entry in databases.cfg. Local SQLite is used when it is not configured.
 #define BLUEPRINT_DATABASE_CONFIG "props_blueprints"
@@ -263,7 +263,6 @@ float	ga_fPropRotations[MAXPLAYERS + 1][PROP_COUNT][3];
 float	ga_fLastHeldPreviewPos[MAXPLAYERS + 1][3];
 float	ga_fLastTouchTime[MAXPLAYERS + 1] = {0.0, ...};
 float	ga_fPressedJumpTime[MAXPLAYERS + 1] = {0.0, ...};
-float	ga_fPropMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
 float	ga_fShopMenuCooldown[MAXPLAYERS + 1] = {0.0, ...};
 float	ga_fWireSoundCooldown[MAXENTITIES + 1] = {0.0, ...};
 float	ga_fSecurityDoorNextTouch[MAXENTITIES + 1] = {0.0, ...};
@@ -499,7 +498,6 @@ public void OnClientPostAdminCheck(int client) {
 
 	ga_fLastTouchTime[client]    = 0.0;
 	ga_fShopMenuCooldown[client] = 0.0;
-	ga_fPropMenuCooldown[client] = 0.0;
 	ga_fPressedJumpTime[client]  = 0.0;
 	ga_bPlacingNow[client]       = false;
 	ga_bPlaceQueued[client]      = false;
@@ -1749,13 +1747,14 @@ void OnButtonPress(int client, int button, float vel[3]) {
 			}
 		}
 		else {
-			float GameTime = GetGameTime();
-			if (ga_fPropMenuCooldown[client] > GameTime) {
-				PrintCenterText(client, "You must wait before opening the menu again.");
+			if (AnyPropMenuFlagOpen(client)) {
+				if (ga_iPropHolding[client] == INVALID_ENT_REFERENCE) {
+					CloseAllPropMenus(client, false);
+					OpenPropSelectionMenu(client);
+				}
 				return;
 			}
 
-			ga_fPropMenuCooldown[client] = MENU_COOLDOWN + GameTime;
 			OpenPropSelectionMenu(client);
 		}
 		return;
@@ -3732,7 +3731,8 @@ void OpenPropSelectionMenu(int client) {
 	NormalizeRecentPropModels(client);
 
 	Menu propMenu = new Menu(PropSelectionMenuHandler);
-	propMenu.SetTitle("Select Prop.\n(build points: %d)\n%s", ga_iPlayerBuildPoints[client], PROP_MENU_NAVIGATION_HINT);
+	int propCount = (ga_hPropPlaced[client] != null) ? ga_hPropPlaced[client].Length : 0;
+	propMenu.SetTitle("Select Prop.\nBuild points: %d | Props: %d/%d\n%s", ga_iPlayerBuildPoints[client], propCount, PROP_LIMIT, PROP_MENU_NAVIGATION_HINT);
 
 	char itemBuffer[128], modelName[64], indexStr[8];
 	propMenu.AddItem("97", "Blueprints");
