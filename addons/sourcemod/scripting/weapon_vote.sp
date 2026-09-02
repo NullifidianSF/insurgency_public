@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <dhooks>
 
-#define PL_VERSION "4.55"
+#define PL_VERSION "4.58"
 #define CONFIG_FILE "configs/weapon_vote_loadout_weapons.cfg"
 #define THEATER_ITEMS_FILE "configs/weapon_vote_theateritems.txt"
 #define GENERATED_CONFIG_FILE "configs/weapon_vote_loadout_weapons.generated.cfg"
@@ -18,10 +18,6 @@
 #define MAX_WEAPON_DISPLAY_NAME 64
 #define MAX_PLAYER_WEAPONS 48
 #define MAX_NATIVE_PURCHASES 48
-#define PURCHASE_SIZE 0x38
-#define PURCHASES_OFFSET 0x34
-#define PURCHASE_COUNT_OFFSET 0x40
-#define PURCHASE_SLOT_OFFSET 0x30
 
 enum {
 	WeaponSlot_Primary,
@@ -67,7 +63,7 @@ ConVar g_cvEnabled;
 ConVar g_cvStartDelay;
 ConVar g_cvVoteTime;
 ConVar g_cvRequiredRatio;
-ConVar g_cvMinVoters;
+ConVar g_cvMinPlayers;
 ConVar g_cvCooldown;
 ConVar g_cvAllowRevote;
 ConVar g_cvRounds;
@@ -76,8 +72,14 @@ ConVar g_cvRoundTime = null;
 int g_iPlayerInventoryOffset = -1;
 int g_iLastResupplyTimeOffset = -1;
 int g_iMyWeaponsOffset = -1;
+int g_iPurchaseSize = -1;
+int g_iPurchasesOffset = -1;
+int g_iPurchaseCountOffset = -1;
+int g_iPurchaseSlotOffset = -1;
 int g_iVotesYes;
 int g_iVotesNo;
+int g_iVoteEligiblePlayers;
+int g_iVoteRequiredYes;
 int g_iRoundsRemaining;
 float g_fNextVoteAt;
 float g_fVoteEnableAt;
@@ -230,6 +232,13 @@ public void OnPluginStart() {
 	if (g_iLastResupplyTimeOffset == -1)
 		SetFailState("[Weapon Vote] Missing CINSPlayer::LastResupplyTime offset.");
 
+	g_iPurchaseSize = gameData.GetOffset("CPlayerInventory::PurchaseSize");
+	g_iPurchasesOffset = gameData.GetOffset("CPlayerInventory::Purchases");
+	g_iPurchaseCountOffset = gameData.GetOffset("CPlayerInventory::PurchaseCount");
+	g_iPurchaseSlotOffset = gameData.GetOffset("CPlayerInventory::PurchaseSlot");
+	if (g_iPurchaseSize < 1 || g_iPurchasesOffset < 0 || g_iPurchaseCountOffset < 0 || g_iPurchaseSlotOffset < 0)
+		SetFailState("[Weapon Vote] Missing CPlayerInventory purchase-layout offsets.");
+
 	g_hPlayerResupplyDetour = new DynamicDetour(Address_Null, CallConv_THISCALL, ReturnType_Bool, ThisPointer_CBaseEntity);
 	if (!g_hPlayerResupplyDetour.SetFromConf(gameData, SDKConf_Signature, "CINSPlayer::Resupply")) {
 		delete gameData;
@@ -274,17 +283,17 @@ public void OnPluginStart() {
 	g_cvEnabled = CreateConVar("sm_weaponvote_enabled", "1",
 		"Enable player weapon votes. 0 = disabled, 1 = enabled.", _, true, 0.0, true, 1.0);
 
-	g_cvStartDelay = CreateConVar("sm_weaponvote_start_delay", "30.0",
+	g_cvStartDelay = CreateConVar("sm_weaponvote_start_delay", "60.0",
 		"Seconds after a map starts before players may use !weaponvote. Gives players time to join. 0 = no delay.", _, true, 0.0, true, 300.0);
 
-	g_cvVoteTime = CreateConVar("sm_weaponvote_vote_time", "20",
+	g_cvVoteTime = CreateConVar("sm_weaponvote_vote_time", "30",
 		"Seconds a weapon loadout vote remains open.", _, true, 5.0, true, 60.0);
 
-	g_cvRequiredRatio = CreateConVar("sm_weaponvote_required_ratio", "0.70",
-		"Yes-vote fraction of cast votes required to enable the selected loadout.", _, true, 0.01, true, 1.0);
+	g_cvRequiredRatio = CreateConVar("sm_weaponvote_required_ratio", "0.60",
+		"Fraction of eligible human team players who must vote Yes for a weapon vote to pass.", _, true, 0.01, true, 1.0);
 
-	g_cvMinVoters = CreateConVar("sm_weaponvote_min_voters", "6",
-		"Minimum number of cast votes required for a weapon loadout vote to pass.", _, true, 1.0, true, float(MAXPLAYERS));
+	g_cvMinPlayers = CreateConVar("sm_weaponvote_min_players", "2",
+		"Minimum eligible human team players required before a weapon vote can start.", _, true, 1.0, true, 48.0);
 
 	g_cvCooldown = CreateConVar("sm_weaponvote_cooldown", "300.0",
 		"Seconds before another player may start a weapon loadout vote.", _, true, 0.0);
@@ -345,11 +354,22 @@ public void OnMapStart() {
 	g_bVoteRunning = false;
 	g_bDisableVote = false;
 	g_bModeActive = false;
+	g_iVoteEligiblePlayers = 0;
+	g_iVoteRequiredYes = 0;
 	g_iRoundsRemaining = 0;
+	g_fNextVoteAt = 0.0;
 	ResetPendingLoadout();
 	ResetActiveLoadout();
 	for (int client = 1; client <= MaxClients; client++)
 		ClearCapturedResupplyWeapons(client);
+}
+
+public void OnMapEnd() {
+	if (g_hGeneratorTimer == null)
+		return;
+
+	delete g_hGeneratorTimer;
+	FinishWeaponVoteGenerator(false);
 }
 
 void PrecacheVoteSounds() {
@@ -494,30 +514,7 @@ public Action Command_WeaponVote(int client, int args) {
 		return Plugin_Handled;
 	}
 
-	if (g_bModeActive && !g_cvAllowRevote.BoolValue) {
-		if (args == 0)
-			ShowLoadoutMenu(client);
-		else
-			ReplyToCommand(client, "[Weapon Vote] A voted loadout is active. Use sm_weaponvote without an argument to vote to disable it.");
-
-		return Plugin_Handled;
-	}
-
-	if (args == 0) {
-		ShowLoadoutMenu(client);
-		return Plugin_Handled;
-	}
-
-	char weaponClass[MAX_WEAPON_CLASSNAME];
-	GetCmdArg(1, weaponClass, sizeof(weaponClass));
-	int index = g_aWeaponClasses.FindString(weaponClass);
-	if (index == -1) {
-		ReplyToCommand(client, "[Weapon Vote] '%s' is not listed in %s.", weaponClass, CONFIG_FILE);
-		return Plugin_Handled;
-	}
-
-	SelectWeapon(client, WeaponSlot_Primary, index);
-	ShowUpgradeMenu(client, WeaponSlot_Primary);
+	ShowLoadoutMenu(client);
 	return Plugin_Handled;
 }
 
@@ -1057,14 +1054,16 @@ void StartWeaponVote(int client) {
 	}
 
 	int eligiblePlayers = GetEligibleVoterCount();
-	if (eligiblePlayers < g_cvMinVoters.IntValue) {
-		ReplyToCommand(client, "[Weapon Vote] Cannot start: %d eligible human players are online, but at least %d are required.", eligiblePlayers, g_cvMinVoters.IntValue);
+	if (eligiblePlayers < g_cvMinPlayers.IntValue) {
+		ReplyToCommand(client, "[Weapon Vote] Cannot start: %d eligible human team players are online, but at least %d are required.", eligiblePlayers, g_cvMinPlayers.IntValue);
 		return;
 	}
 
 	CopyClientSelectionToPending(client);
 	g_iVotesYes = 0;
 	g_iVotesNo = 0;
+	g_iVoteEligiblePlayers = eligiblePlayers;
+	g_iVoteRequiredYes = RoundToCeil(float(eligiblePlayers) * g_cvRequiredRatio.FloatValue);
 	g_bDisableVote = false;
 	g_bVoteRunning = true;
 	g_fNextVoteAt = GetGameTime() + g_cvCooldown.FloatValue;
@@ -1075,7 +1074,7 @@ void StartWeaponVote(int client) {
 	Menu menu = new Menu(MenuHandler_WeaponVote, MenuAction_Select | MenuAction_VoteEnd | MenuAction_VoteCancel | MenuAction_End);
 	char loadout[160];
 	BuildLoadoutDescription(g_sPendingWeaponNames[WeaponSlot_Primary], g_sPendingWeaponNames[WeaponSlot_Secondary], loadout, sizeof(loadout));
-	menu.SetTitle("Use this loadout?\n%s", loadout);
+	menu.SetTitle("Use this loadout?\n%s\nNeeds %d Yes from %d eligible team players", loadout, g_iVoteRequiredYes, g_iVoteEligiblePlayers);
 	menu.AddItem("yes", "Yes");
 	menu.AddItem("no", "No");
 	menu.ExitButton = false;
@@ -1090,13 +1089,15 @@ void StartWeaponVote(int client) {
 
 void StartDisableWeaponVote(int client) {
 	int eligiblePlayers = GetEligibleVoterCount();
-	if (eligiblePlayers < g_cvMinVoters.IntValue) {
-		ReplyToCommand(client, "[Weapon Vote] Cannot start: %d eligible human players are online, but at least %d are required.", eligiblePlayers, g_cvMinVoters.IntValue);
+	if (eligiblePlayers < g_cvMinPlayers.IntValue) {
+		ReplyToCommand(client, "[Weapon Vote] Cannot start: %d eligible human team players are online, but at least %d are required.", eligiblePlayers, g_cvMinPlayers.IntValue);
 		return;
 	}
 
 	g_iVotesYes = 0;
 	g_iVotesNo = 0;
+	g_iVoteEligiblePlayers = eligiblePlayers;
+	g_iVoteRequiredYes = RoundToCeil(float(eligiblePlayers) * g_cvRequiredRatio.FloatValue);
 	g_bDisableVote = true;
 	g_bVoteRunning = true;
 	g_fNextVoteAt = GetGameTime() + g_cvCooldown.FloatValue;
@@ -1107,7 +1108,7 @@ void StartDisableWeaponVote(int client) {
 	Menu menu = new Menu(MenuHandler_WeaponVote, MenuAction_Select | MenuAction_VoteEnd | MenuAction_VoteCancel | MenuAction_End);
 	char loadout[160];
 	BuildLoadoutDescription(g_sActiveWeaponNames[WeaponSlot_Primary], g_sActiveWeaponNames[WeaponSlot_Secondary], loadout, sizeof(loadout));
-	menu.SetTitle("Disable this loadout?\n%s", loadout);
+	menu.SetTitle("Disable this loadout?\n%s\nNeeds %d Yes from %d eligible team players", loadout, g_iVoteRequiredYes, g_iVoteEligiblePlayers);
 	menu.AddItem("yes", "Yes");
 	menu.AddItem("no", "No");
 	menu.ExitButton = false;
@@ -1122,7 +1123,7 @@ void StartDisableWeaponVote(int client) {
 
 public int MenuHandler_WeaponVote(Menu menu, MenuAction action, int client, int item) {
 	if (action == MenuAction_Select) {
-		if (client < 1 || client > MaxClients || g_bClientVoted[client])
+		if (!IsEligibleVoter(client) || g_bClientVoted[client])
 			return 0;
 
 		g_bClientVoted[client] = true;
@@ -1135,8 +1136,7 @@ public int MenuHandler_WeaponVote(Menu menu, MenuAction action, int client, int 
 			g_iVotesNo++;
 	} else if (action == MenuAction_VoteEnd) {
 		int votesCast = g_iVotesYes + g_iVotesNo;
-		int requiredYes = RoundToCeil(float(votesCast) * g_cvRequiredRatio.FloatValue);
-		bool passed = votesCast >= g_cvMinVoters.IntValue && g_iVotesYes >= requiredYes;
+		bool passed = g_iVotesYes >= g_iVoteRequiredYes;
 		g_bVoteRunning = false;
 		char loadout[160];
 		if (g_bDisableVote)
@@ -1147,26 +1147,26 @@ public int MenuHandler_WeaponVote(Menu menu, MenuAction action, int client, int 
 		if (passed) {
 			if (g_bDisableVote) {
 				EndWeaponMode();
-				PrintToChatAll("\x04[Weapon Vote]\x01 Disable vote passed: %d Yes, %d No. Needed %d Yes from %d votes. Weapon loadout restriction ended.", g_iVotesYes, g_iVotesNo, requiredYes, votesCast);
-				LogWeaponVote("Disable vote passed for %s: %d yes, %d no. Needed %d yes from %d votes.", loadout, g_iVotesYes, g_iVotesNo, requiredYes, votesCast);
+				PrintToChatAll("\x04[Weapon Vote]\x01 Disable vote passed: %d Yes, %d No. Needed %d Yes from %d eligible team players. Weapon loadout restriction ended.", g_iVotesYes, g_iVotesNo, g_iVoteRequiredYes, g_iVoteEligiblePlayers);
+				LogWeaponVote("Disable vote passed for %s: %d yes, %d no. Needed %d yes from %d eligible team players; %d votes cast.", loadout, g_iVotesYes, g_iVotesNo, g_iVoteRequiredYes, g_iVoteEligiblePlayers, votesCast);
 				PlayVoteSound(SOUND_VOTE_PASSED);
 			} else {
-				LogWeaponVote("Loadout vote passed for %s: %d yes, %d no. Needed %d yes from %d votes.", loadout, g_iVotesYes, g_iVotesNo, requiredYes, votesCast);
-				EnableWeaponMode(votesCast, requiredYes);
+				LogWeaponVote("Loadout vote passed for %s: %d yes, %d no. Needed %d yes from %d eligible team players; %d votes cast.", loadout, g_iVotesYes, g_iVotesNo, g_iVoteRequiredYes, g_iVoteEligiblePlayers, votesCast);
+				EnableWeaponMode(g_iVoteRequiredYes, g_iVoteEligiblePlayers);
 			}
 		} else {
-			if (votesCast < g_cvMinVoters.IntValue)
-				PrintToChatAll("\x04[Weapon Vote]\x01 %s vote failed: only %d/%d votes were cast (%d Yes, %d No).", g_bDisableVote ? "Disable" : "Loadout", votesCast, g_cvMinVoters.IntValue, g_iVotesYes, g_iVotesNo);
-			else
-				PrintToChatAll("\x04[Weapon Vote]\x01 %s vote failed: %d Yes, %d No. Needed %d Yes from %d votes.", g_bDisableVote ? "Disable" : "Loadout", g_iVotesYes, g_iVotesNo, requiredYes, votesCast);
-
-			LogWeaponVote("%s vote failed for %s: %d yes, %d no. Needed %d yes from %d votes; minimum voters %d.", g_bDisableVote ? "Disable" : "Loadout", loadout, g_iVotesYes, g_iVotesNo, requiredYes, votesCast, g_cvMinVoters.IntValue);
+			PrintToChatAll("\x04[Weapon Vote]\x01 %s vote failed: %d Yes, %d No. Needed %d Yes from %d eligible team players.", g_bDisableVote ? "Disable" : "Loadout", g_iVotesYes, g_iVotesNo, g_iVoteRequiredYes, g_iVoteEligiblePlayers);
+			LogWeaponVote("%s vote failed for %s: %d yes, %d no. Needed %d yes from %d eligible team players; %d votes cast.", g_bDisableVote ? "Disable" : "Loadout", loadout, g_iVotesYes, g_iVotesNo, g_iVoteRequiredYes, g_iVoteEligiblePlayers, votesCast);
 			PlayVoteSound(SOUND_VOTE_FAILED);
 		}
 		g_bDisableVote = false;
+		g_iVoteEligiblePlayers = 0;
+		g_iVoteRequiredYes = 0;
 	} else if (action == MenuAction_VoteCancel) {
 		g_bVoteRunning = false;
 		g_bDisableVote = false;
+		g_iVoteEligiblePlayers = 0;
+		g_iVoteRequiredYes = 0;
 		PrintToChatAll("\x04[Weapon Vote]\x01 Vote cancelled.");
 		LogWeaponVote("Weapon vote cancelled.");
 	} else if (action == MenuAction_End)
@@ -1175,14 +1175,14 @@ public int MenuHandler_WeaponVote(Menu menu, MenuAction action, int client, int 
 	return 0;
 }
 
-void EnableWeaponMode(int votesCast, int requiredYes) {
+void EnableWeaponMode(int requiredYes, int eligiblePlayers) {
 	g_bModeActive = true;
 	CopyPendingLoadoutToActive();
 	g_iRoundsRemaining = g_cvRounds.IntValue;
 
 	char loadout[160];
 	BuildLoadoutDescription(g_sActiveWeaponNames[WeaponSlot_Primary], g_sActiveWeaponNames[WeaponSlot_Secondary], loadout, sizeof(loadout));
-	PrintToChatAll("\x04[Weapon Vote]\x01 Loadout vote passed: %d Yes, %d No. Needed %d Yes from %d votes. Loadout: %s.", g_iVotesYes, g_iVotesNo, requiredYes, votesCast, loadout);
+	PrintToChatAll("\x04[Weapon Vote]\x01 Loadout vote passed: %d Yes, %d No. Needed %d Yes from %d eligible team players. Loadout: %s.", g_iVotesYes, g_iVotesNo, requiredYes, eligiblePlayers, loadout);
 	PlayVoteSound(SOUND_VOTE_PASSED);
 	LogMessage("[Weapon Vote] Enabled %s for %d round(s).", loadout, g_iRoundsRemaining);
 
@@ -1258,7 +1258,7 @@ public MRESReturn Detour_PlayerBumpWeapon_Pre(int client, DHookReturn hReturn, D
 
 	char weaponClass[MAX_WEAPON_CLASSNAME];
 	GetEdictClassname(weapon, weaponClass, sizeof(weaponClass));
-	if (IsAllowedVotedWeapon(weaponClass))
+	if (IsAllowedWeaponForClient(client, weapon, weaponClass))
 		return MRES_Ignored;
 
 	// BumpWeapon drops the occupied slot itself. Refuse the pickup before that
@@ -1417,14 +1417,14 @@ void RemovePlayerPrimaryAndSecondary(int client) {
 	DestroyCarriedRestrictedWeapons(client);
 
 	Address inventory = GetEntityAddress(client) + view_as<Address>(g_iPlayerInventoryOffset);
-	Address purchases = view_as<Address>(LoadFromAddress(inventory + view_as<Address>(PURCHASES_OFFSET), NumberType_Int32));
-	int purchaseCount = LoadFromAddress(inventory + view_as<Address>(PURCHASE_COUNT_OFFSET), NumberType_Int32);
+	Address purchases = view_as<Address>(LoadFromAddress(inventory + view_as<Address>(g_iPurchasesOffset), NumberType_Int32));
+	int purchaseCount = LoadFromAddress(inventory + view_as<Address>(g_iPurchaseCountOffset), NumberType_Int32);
 	if (purchases == Address_Null || purchaseCount < 1 || purchaseCount > MAX_NATIVE_PURCHASES)
 		return;
 
 	for (int index = purchaseCount - 1; index >= 0; index--) {
-		Address purchase = purchases + view_as<Address>(index * PURCHASE_SIZE);
-		int slot = LoadFromAddress(purchase + view_as<Address>(PURCHASE_SLOT_OFFSET), NumberType_Int32);
+		Address purchase = purchases + view_as<Address>(index * g_iPurchaseSize);
+		int slot = LoadFromAddress(purchase + view_as<Address>(g_iPurchaseSlotOffset), NumberType_Int32);
 		if (slot == WeaponSlot_Primary || slot == WeaponSlot_Secondary)
 			SDKCall(g_hRefundWeapon, inventory, index);
 	}
@@ -1542,14 +1542,14 @@ void Frame_EnforceVotedWeaponSlots(any data) {
 
 bool HasNativePrimaryOrSecondaryPurchase(int client) {
 	Address inventory = GetEntityAddress(client) + view_as<Address>(g_iPlayerInventoryOffset);
-	Address purchases = view_as<Address>(LoadFromAddress(inventory + view_as<Address>(PURCHASES_OFFSET), NumberType_Int32));
-	int purchaseCount = LoadFromAddress(inventory + view_as<Address>(PURCHASE_COUNT_OFFSET), NumberType_Int32);
+	Address purchases = view_as<Address>(LoadFromAddress(inventory + view_as<Address>(g_iPurchasesOffset), NumberType_Int32));
+	int purchaseCount = LoadFromAddress(inventory + view_as<Address>(g_iPurchaseCountOffset), NumberType_Int32);
 	if (purchases == Address_Null || purchaseCount < 1 || purchaseCount > MAX_NATIVE_PURCHASES)
 		return false;
 
 	for (int index = 0; index < purchaseCount; index++) {
-		Address purchase = purchases + view_as<Address>(index * PURCHASE_SIZE);
-		int slot = LoadFromAddress(purchase + view_as<Address>(PURCHASE_SLOT_OFFSET), NumberType_Int32);
+		Address purchase = purchases + view_as<Address>(index * g_iPurchaseSize);
+		int slot = LoadFromAddress(purchase + view_as<Address>(g_iPurchaseSlotOffset), NumberType_Int32);
 		if (slot == WeaponSlot_Primary || slot == WeaponSlot_Secondary)
 			return true;
 	}
@@ -1563,7 +1563,7 @@ public Action Hook_WeaponEquip(int client, int weapon) {
 
 	char weaponClass[MAX_WEAPON_CLASSNAME];
 	GetEdictClassname(weapon, weaponClass, sizeof(weaponClass));
-	if (IsAllowedVotedWeapon(weaponClass))
+	if (IsAllowedWeaponForClient(client, weapon, weaponClass))
 		return Plugin_Continue;
 
 	RequestFrame(Frame_DropRestrictedWeapon, EntIndexToEntRef(weapon));
@@ -1585,7 +1585,7 @@ void Frame_DropRestrictedWeapon(any data) {
 
 	char weaponClass[MAX_WEAPON_CLASSNAME];
 	GetEdictClassname(weapon, weaponClass, sizeof(weaponClass));
-	if (IsAllowedVotedWeapon(weaponClass))
+	if (IsAllowedWeaponForClient(client, weapon, weaponClass))
 		return;
 
 	SDKHooks_DropWeapon(client, weapon, NULL_VECTOR, NULL_VECTOR);
@@ -1647,15 +1647,19 @@ bool IsAllowedUtilityWeapon(const char[] weaponClass) {
 		|| StrEqual(weaponClass, "weapon_firesupport");
 }
 
-bool IsAllowedVotedWeapon(const char[] weaponClass) {
+bool IsAllowedWeaponForClient(int client, int weapon, const char[] weaponClass) {
 	if (StrEqual(weaponClass, g_sActiveWeapons[WeaponSlot_Primary])
 		|| StrEqual(weaponClass, g_sActiveWeapons[WeaponSlot_Secondary]))
 		return true;
 	if (IsAllowedUtilityWeapon(weaponClass))
 		return true;
 
+	if (!IsUnderbarrelAttachmentWeapon(weaponClass)
+		|| GetEntPropEnt(weapon, Prop_Send, "m_hOwnerEntity") != client)
+		return false;
+
 	for (int slot = 0; slot < WeaponSlot_Count; slot++)
-		if (g_iActiveUpgrades[slot][UpgradeCategory_Underbarrel] > 0 && IsUnderbarrelAttachmentWeapon(weaponClass))
+		if (g_iActiveUpgrades[slot][UpgradeCategory_Underbarrel] > 0)
 			return true;
 
 	return false;
