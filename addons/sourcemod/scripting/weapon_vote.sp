@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <dhooks>
 
-#define PL_VERSION "4.58"
+#define PL_VERSION "4.72"
 #define CONFIG_FILE "configs/weapon_vote_loadout_weapons.cfg"
 #define THEATER_ITEMS_FILE "configs/weapon_vote_theateritems.txt"
 #define GENERATED_CONFIG_FILE "configs/weapon_vote_loadout_weapons.generated.cfg"
@@ -39,10 +39,12 @@ enum {
 
 Handle g_hDestroyItem = null;
 Handle g_hRefundWeapon = null;
+Handle g_hResetClassToDefault = null;
 Handle g_hInstallWeaponUpgrade = null;
 Handle g_hToggleUnderbarrelAccessory = null;
 Handle g_hGiveAmmo = null;
 Handle g_hGetMagazines = null;
+Handle g_hGiveDefaultItems = null;
 Handle g_hWeaponSwitch = null;
 DynamicDetour g_hPlayerResupplyDetour = null;
 DynamicDetour g_hPlayerBumpWeaponDetour = null;
@@ -54,6 +56,7 @@ ArrayList g_aGeneratorWeaponClasses = null;
 ArrayList g_aGeneratorWeaponDefinitions = null;
 ArrayList g_aGeneratorUpgradeNames = null;
 ArrayList g_aGeneratorUpgradeCategories = null;
+StringMap g_mAmmoUsesMagazines = null;
 File g_fGeneratedConfig = null;
 Handle g_hGeneratorTimer = null;
 Handle g_hWeaponVoteAdvertTimer = null;
@@ -68,6 +71,8 @@ ConVar g_cvCooldown;
 ConVar g_cvAllowRevote;
 ConVar g_cvRounds;
 ConVar g_cvReserveAmmo;
+ConVar g_cvLargeMagazineCapacity;
+ConVar g_cvLargeMagazineReserveAmmo;
 ConVar g_cvRoundTime = null;
 int g_iPlayerInventoryOffset = -1;
 int g_iLastResupplyTimeOffset = -1;
@@ -76,6 +81,7 @@ int g_iPurchaseSize = -1;
 int g_iPurchasesOffset = -1;
 int g_iPurchaseCountOffset = -1;
 int g_iPurchaseSlotOffset = -1;
+int g_iMagazineCountOffset = -1;
 int g_iVotesYes;
 int g_iVotesNo;
 int g_iVoteEligiblePlayers;
@@ -149,6 +155,18 @@ public void OnPluginStart() {
 		SetFailState("[Weapon Vote] Unable to prepare CPlayerInventory::RefundWeapon SDKCall.");
 	}
 
+	StartPrepSDKCall(SDKCall_Raw);
+	if (!PrepSDKCall_SetFromConf(gameData, SDKConf_Signature, "CPlayerInventory::ResetClassToDefault")) {
+		delete gameData;
+		SetFailState("[Weapon Vote] Missing CPlayerInventory::ResetClassToDefault signature.");
+	}
+
+	g_hResetClassToDefault = EndPrepSDKCall();
+	if (g_hResetClassToDefault == null) {
+		delete gameData;
+		SetFailState("[Weapon Vote] Unable to prepare CPlayerInventory::ResetClassToDefault SDKCall.");
+	}
+
 	StartPrepSDKCall(SDKCall_Entity);
 	if (!PrepSDKCall_SetFromConf(gameData, SDKConf_Signature, "CINSWeapon::InstallWeaponUpgrade")) {
 		delete gameData;
@@ -210,6 +228,18 @@ public void OnPluginStart() {
 	}
 
 	StartPrepSDKCall(SDKCall_Player);
+	if (!PrepSDKCall_SetFromConf(gameData, SDKConf_Signature, "CINSPlayer::GiveDefaultItems")) {
+		delete gameData;
+		SetFailState("[Weapon Vote] Missing CINSPlayer::GiveDefaultItems signature.");
+	}
+
+	g_hGiveDefaultItems = EndPrepSDKCall();
+	if (g_hGiveDefaultItems == null) {
+		delete gameData;
+		SetFailState("[Weapon Vote] Unable to prepare CINSPlayer::GiveDefaultItems SDKCall.");
+	}
+
+	StartPrepSDKCall(SDKCall_Player);
 	if (!PrepSDKCall_SetFromConf(gameData, SDKConf_Signature, "CINSPlayer::Weapon_Switch")) {
 		delete gameData;
 		SetFailState("[Weapon Vote] Missing CINSPlayer::Weapon_Switch signature.");
@@ -238,6 +268,10 @@ public void OnPluginStart() {
 	g_iPurchaseSlotOffset = gameData.GetOffset("CPlayerInventory::PurchaseSlot");
 	if (g_iPurchaseSize < 1 || g_iPurchasesOffset < 0 || g_iPurchaseCountOffset < 0 || g_iPurchaseSlotOffset < 0)
 		SetFailState("[Weapon Vote] Missing CPlayerInventory purchase-layout offsets.");
+
+	g_iMagazineCountOffset = gameData.GetOffset("CINSWeaponMagazines::Count");
+	if (g_iMagazineCountOffset < 0)
+		SetFailState("[Weapon Vote] Missing CINSWeaponMagazines::Count offset.");
 
 	g_hPlayerResupplyDetour = new DynamicDetour(Address_Null, CallConv_THISCALL, ReturnType_Bool, ThisPointer_CBaseEntity);
 	if (!g_hPlayerResupplyDetour.SetFromConf(gameData, SDKConf_Signature, "CINSPlayer::Resupply")) {
@@ -278,6 +312,7 @@ public void OnPluginStart() {
 	g_aGeneratorWeaponDefinitions = new ArrayList();
 	g_aGeneratorUpgradeNames = new ArrayList(ByteCountToCells(MAX_WEAPON_DISPLAY_NAME));
 	g_aGeneratorUpgradeCategories = new ArrayList();
+	g_mAmmoUsesMagazines = new StringMap();
 	LoadWeaponConfig();
 
 	g_cvEnabled = CreateConVar("sm_weaponvote_enabled", "1",
@@ -304,8 +339,14 @@ public void OnPluginStart() {
 	g_cvRounds = CreateConVar("sm_weaponvote_rounds", "1",
 		"Rounds the winning weapon loadout lasts. 0 = until the map changes.", _, true, 0.0, true, 99.0);
 
-	g_cvReserveAmmo = CreateConVar("sm_weaponvote_reserve_ammo", "7",
-		"Full reloads given with each voted weapon. Loose-ammo weapons receive this many weapon-capacity reloads. 0 = weapon starts loaded only.", _, true, 0.0, true, 100.0);
+	g_cvReserveAmmo = CreateConVar("sm_weaponvote_reserve_ammo", "8",
+		"Target maximum spare magazines for normal voted weapons. 0 = weapon starts loaded only.", _, true, 0.0, true, 100.0);
+
+	g_cvLargeMagazineCapacity = CreateConVar("sm_weaponvote_large_magazine_capacity", "100",
+		"Magazine capacity at which a weapon uses sm_weaponvote_large_magazine_reserve_ammo instead. 0 = disabled.", _, true, 0.0, true, 1000.0);
+
+	g_cvLargeMagazineReserveAmmo = CreateConVar("sm_weaponvote_large_magazine_reserve_ammo", "3",
+		"Target maximum spare magazines for weapons at or above sm_weaponvote_large_magazine_capacity.", _, true, 0.0, true, 100.0);
 
 	g_cvRoundTime = FindConVar("mp_roundtime");
 
@@ -424,10 +465,12 @@ public void OnPluginEnd() {
 	delete g_hPlayerResupplyDetour;
 	delete g_hDestroyItem;
 	delete g_hRefundWeapon;
+	delete g_hResetClassToDefault;
 	delete g_hInstallWeaponUpgrade;
 	delete g_hToggleUnderbarrelAccessory;
 	delete g_hGiveAmmo;
 	delete g_hGetMagazines;
+	delete g_hGiveDefaultItems;
 	delete g_hWeaponSwitch;
 	delete g_aWeaponClasses;
 	delete g_aWeaponNames;
@@ -437,6 +480,7 @@ public void OnPluginEnd() {
 	delete g_aGeneratorWeaponDefinitions;
 	delete g_aGeneratorUpgradeNames;
 	delete g_aGeneratorUpgradeCategories;
+	delete g_mAmmoUsesMagazines;
 	delete g_hGeneratorTimer;
 	delete g_hWeaponVoteAdvertTimer;
 	delete g_hWeaponVoteEnableTimer;
@@ -524,7 +568,7 @@ public Action Command_EndWeaponVote(int client, int args) {
 		return Plugin_Handled;
 	}
 
-	EndWeaponMode();
+	EndWeaponMode(true);
 	PrintToChatAll("\x04[Weapon Vote]\x01 Weapon loadout restriction ended.");
 	return Plugin_Handled;
 }
@@ -1146,7 +1190,7 @@ public int MenuHandler_WeaponVote(Menu menu, MenuAction action, int client, int 
 
 		if (passed) {
 			if (g_bDisableVote) {
-				EndWeaponMode();
+				EndWeaponMode(true);
 				PrintToChatAll("\x04[Weapon Vote]\x01 Disable vote passed: %d Yes, %d No. Needed %d Yes from %d eligible team players. Weapon loadout restriction ended.", g_iVotesYes, g_iVotesNo, g_iVoteRequiredYes, g_iVoteEligiblePlayers);
 				LogWeaponVote("Disable vote passed for %s: %d yes, %d no. Needed %d yes from %d eligible team players; %d votes cast.", loadout, g_iVotesYes, g_iVotesNo, g_iVoteRequiredYes, g_iVoteEligiblePlayers, votesCast);
 				PlayVoteSound(SOUND_VOTE_PASSED);
@@ -1191,20 +1235,25 @@ void EnableWeaponMode(int requiredYes, int eligiblePlayers) {
 			RequestFrame(Frame_ApplyWeaponMode, GetClientUserId(client));
 }
 
-void EndWeaponMode() {
+void EndWeaponMode(bool restoreDefaultLoadouts = false) {
 	char loadout[160];
 	BuildLoadoutDescription(g_sActiveWeaponNames[WeaponSlot_Primary], g_sActiveWeaponNames[WeaponSlot_Secondary], loadout, sizeof(loadout));
 	LogMessage("[Weapon Vote] Ended %s.", loadout);
 	g_bModeActive = false;
 	g_iRoundsRemaining = 0;
 	ResetActiveLoadout();
+
+	if (restoreDefaultLoadouts)
+		for (int client = 1; client <= MaxClients; client++)
+			if (IsEligibleVoter(client))
+				RequestFrame(Frame_RestoreDefaultTheaterLoadout, GetClientUserId(client));
 }
 
 public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast) {
+	int client = GetClientOfUserId(event.GetInt("userid"));
 	if (!g_bModeActive)
 		return;
 
-	int client = GetClientOfUserId(event.GetInt("userid"));
 	if (IsEligibleVoter(client))
 		RequestFrame(Frame_ApplyWeaponMode, GetClientUserId(client));
 }
@@ -1216,8 +1265,18 @@ public void Event_RoundEnd(Event event, const char[] name, bool dontBroadcast) {
 	g_iRoundsRemaining--;
 	if (g_iRoundsRemaining == 0) {
 		PrintToChatAll("\x04[Weapon Vote]\x01 Weapon loadout mode ended.");
-		EndWeaponMode();
+		EndWeaponMode(true);
 	}
+}
+
+void Frame_RestoreDefaultTheaterLoadout(any data) {
+	int client = GetClientOfUserId(data);
+	if (!IsEligibleVoter(client))
+		return;
+
+	Address inventory = GetEntityAddress(client) + view_as<Address>(g_iPlayerInventoryOffset);
+	SDKCall(g_hResetClassToDefault, inventory);
+	SDKCall(g_hGiveDefaultItems, client);
 }
 
 public MRESReturn Detour_PlayerResupply_Pre(int client, DHookReturn hReturn, DHookParam hParams) {
@@ -1362,15 +1421,60 @@ void GiveWeaponReserveAmmo(int client, int ammoType, int magazineCapacity, int[]
 		return;
 
 	int reloadCount = g_cvReserveAmmo.IntValue;
+	int largeMagazineCapacity = g_cvLargeMagazineCapacity.IntValue;
+	if (largeMagazineCapacity > 0 && magazineCapacity >= largeMagazineCapacity)
+		reloadCount = g_cvLargeMagazineReserveAmmo.IntValue;
+
 	if (reloadCount > 0) {
-		int magazinesBefore = SDKCall(g_hGetMagazines, client, ammoType);
-		SDKCall(g_hGiveAmmo, client, magazineCapacity, ammoType, reloadCount, true, -1);
-		int magazinesAfter = SDKCall(g_hGetMagazines, client, ammoType);
-		if (reloadCount > 1 && magazinesAfter <= magazinesBefore)
-			SDKCall(g_hGiveAmmo, client, magazineCapacity * (reloadCount - 1), ammoType, 0, true, -1);
+		bool usesMagazines;
+		if (GetCachedAmmoMagazineType(ammoType, usesMagazines)) {
+			GiveReserveAmmo(client, ammoType, magazineCapacity, reloadCount, usesMagazines);
+		} else {
+			Address magazineContainer = view_as<Address>(SDKCall(g_hGetMagazines, client, ammoType));
+			int magazinesBefore = GetMagazineCount(magazineContainer);
+			SDKCall(g_hGiveAmmo, client, reloadCount, ammoType, magazineCapacity, true, reloadCount);
+			usesMagazines = GetMagazineCount(magazineContainer) > magazinesBefore;
+			CacheAmmoMagazineType(ammoType, usesMagazines);
+			if (!usesMagazines)
+				GiveReserveAmmo(client, ammoType, magazineCapacity, reloadCount, false);
+		}
 	}
 
 	suppliedAmmoTypes[suppliedAmmoCount++] = ammoType;
+}
+
+void GiveReserveAmmo(int client, int ammoType, int magazineCapacity, int reloadCount, bool usesMagazines) {
+	if (usesMagazines) {
+		SDKCall(g_hGiveAmmo, client, reloadCount, ammoType, magazineCapacity, true, reloadCount);
+		return;
+	}
+
+	int reserveRounds = reloadCount * magazineCapacity;
+	SDKCall(g_hGiveAmmo, client, reserveRounds, ammoType, 0, true, reserveRounds);
+}
+
+int GetMagazineCount(Address magazineContainer) {
+	if (magazineContainer == Address_Null)
+		return 0;
+
+	return LoadFromAddress(magazineContainer + view_as<Address>(g_iMagazineCountOffset), NumberType_Int32);
+}
+
+bool GetCachedAmmoMagazineType(int ammoType, bool &usesMagazines) {
+	char ammoKey[12];
+	IntToString(ammoType, ammoKey, sizeof(ammoKey));
+	int value;
+	if (!g_mAmmoUsesMagazines.GetValue(ammoKey, value))
+		return false;
+
+	usesMagazines = value != 0;
+	return true;
+}
+
+void CacheAmmoMagazineType(int ammoType, bool usesMagazines) {
+	char ammoKey[12];
+	IntToString(ammoType, ammoKey, sizeof(ammoKey));
+	g_mAmmoUsesMagazines.SetValue(ammoKey, usesMagazines ? 1 : 0);
 }
 
 void GiveUnderbarrelReserveAmmo(int client, int[] suppliedAmmoTypes, int &suppliedAmmoCount) {
