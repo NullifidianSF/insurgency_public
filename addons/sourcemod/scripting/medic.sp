@@ -10,6 +10,7 @@ native bool Drag_IsEntityDragged(int entity);
 native void Drag_ForceDrop(int entity);
 native bool ChatFilter_BypassNextMessage(int client, const char[] expectedMessage);
 native bool InsItems_IsAFFBlocking(int victim, int attacker);
+native bool ThirdPerson_IsClientActive(int client);
 Handle	g_hFwdRagdollReady = null;
 
 #define TEAM_SPECTATOR	1
@@ -25,6 +26,9 @@ static char g_sObjResNetClass[32];
 #define Healthkit_Timer_Tickrate			0.5		// Basic Sound has 0.5 loop
 #define Healthkit_Timer_Timeout				300.0	// 5 minutes
 #define Healthkit_Radius					120.0
+#define MAX_GROUND_MEDPACKS_PER_PLAYER 4
+#define ATTACHED_MEDPACK_NAME "medic_attached_medpack"
+#define ATTACHED_MEDPACK_TEST_MODEL "models/hlthkit/w_c4.mdl"
 #define Revive_Indicator_Radius				100.0
 #define SND_REVIVENOTIFY		"cues/nwi2_generic4.wav"
 #define BLEEDOUT_TREAT_TICK		0.5
@@ -80,256 +84,18 @@ enum TourniquetApplyResult {
 #define BTN_SPRINT_TOGGLE	(1 << 26)
 
 static const char g_sAutoThanksMessages[][] = {
-	"Thanks for the revive, %N!",
-	"I owe you one, %N!",
-	"Nice save, %N!",
-	"Appreciate it, %N!",
-	"You got me back in the fight, %N!",
-	"That was close, thanks, %N!",
-	"You're a lifesaver, %N!",
-	"Great work, %N!",
-	"I knew I could count on you, %N!",
-	"Thanks, %N! Let's finish this.",
-	"You're a legend, %N!",
-	"Thanks, %N! I wasn't done yet.",
-	"Perfect timing, %N!",
-	"Thanks, %N! Now point me at the enemy.",
-	"Thanks, %N! Time for some payback.",
-	"Good save, %N! I have unfinished business.",
-	"Thanks, %N! Death can wait.",
-	"Nice one, %N! Let's ruin the enemy's plan.",
-	"Thanks, %N! I'll try not to die again.",
-	"Thanks, %N! The floor was getting cold.",
-	"Thanks for getting me back on my feet, %N!",
-	"Thanks for the express rescue, %N!",
-	"You're a miracle worker, %N!",
-	"Excellent timing, %N!",
-	"Thanks, %N! My bullets missed me.",
-	"Nap time is over, thanks, %N!",
-	"Thanks, %N! My vacation on the floor is over.",
-	"You cancelled my dirt nap, %N!",
-	"Thanks for the express respawn, %N!",
-	"Heartbeat restored, courtesy of %N!",
-	"Back from the dead, thanks to %N!",
-	"Thanks for patching me up, %N!",
-	"I owe you a beer, %N!",
-	"I owe you at least one supply point, %N!",
-	"Rescue appreciated, %N!",
-	"Someone promote %N for that revive!",
-	"Congratulations, %N! You're my favorite teammate now.",
-	"Reviving me was your best decision today, %N!",
-	"Thanks, %N! I was one second from becoming a spectator.",
-	"They celebrated too soon, thanks to %N!",
-	"Thanks, %N! Revenge first, questions later.",
-	"My gun missed me, thanks for the reunion, %N!",
-	"Thanks, %N! I'm ready to fight again.",
-	"Those paddles worked perfectly, %N!",
-	"Thanks, %N! We just defied the statistics.",
-	"Death rejected my application, thanks to %N!",
-	"Grave reservation cancelled by %N!",
-	"Thanks, %N! My body is still under warranty.",
-	"Soul refund processed by %N!",
-	"You're my hero for the next five minutes, %N!",
-	"Take the credit, %N! You earned it.",
-	"Thanks for setting up my dramatic entrance, %N!",
-	"That death was just a warm-up, thanks, %N!",
-	"Thanks, %N! The enemy now has extra paperwork.",
-	"You gave me a second chance, %N!",
-	"Thanks, %N! The chaos can continue.",
-	"Funeral postponed by %N!",
-	"Obituary cancelled, thanks, %N!",
-	"The dirt can wait, %N!",
-	"Thanks, %N! The enemy needs a status update.",
-	"Thanks, %N! I'm alive enough.",
-	"Let's never discuss this again, %N!",
-	"One revive, one thank-you, %N!",
-	"Thanks, %N! Revived and ready.",
-	"That was a clutch revive, %N!",
-	"I appreciate the rescue, %N!",
-	"Flawless save, %N!",
-	"I'm glad you're on my team, %N!",
-	"I knew I was in good hands, %N!",
-	"That revive was perfect, %N!",
-	"You made my day, %N!",
-	"Glad you were here, %N!",
-	"This squad is lucky to have you, %N!",
-	"That was an MVP moment, %N!",
-	"Quick work, %N! Thank you.",
-	"Rescue complete, thanks to %N!",
-	"Thanks for the return ticket, %N!",
-	"I'm back in action because of %N!",
-	"Fully restored, thanks, %N!",
-	"Reboot complete, courtesy of %N!",
-	"Thanks, %N! You found the respawn button.",
-	"Life support provided by %N!",
-	"Another battlefield miracle by %N!",
-	"Thanks, %N! Death is taking a timeout.",
-	"Grave entry denied by %N!",
-	"Tombstone refunded, thanks to %N!",
-	"The afterlife sent me back with %N!",
-	"My ghost shift ended early, thanks, %N!",
-	"Corpse duty cancelled by %N!",
-	"Thanks, %N! My relationship with the floor is over.",
-	"Alive again, thanks to %N!",
-	"Breathing restored by %N!",
-	"Pulse restored, thanks, %N!",
-	"You gave me a second wind, %N!",
-	"Thanks, %N! I've rejoined the living.",
-	"Unexpected sequel provided by %N!",
-	"Round two begins, thanks to %N!",
-	"Comeback activated by %N!",
-	"Thanks for the encore, %N!",
-	"Resurrection successful, %N!",
-	"Thanks, %N! Spectator mode can wait.",
-	"You got me back to my keyboard, %N!",
-	"Thanks, %N! My mouse was getting lonely.",
-	"You reunited me with my ammo, %N!",
-	"Boots back on the ground, thanks to %N!",
-	"The enemy is getting a surprise, thanks, %N!",
-	"Tactical revival complete, %N!",
-	"Operational again, thanks to %N!",
-	"Combat ready, thanks, %N!",
-	"The mission continues because of %N!",
-	"Squad restored, thanks to %N!",
-	"I've got your back, %N!",
-	"I'll follow your lead, %N! Thanks.",
-	"I'll repay that save, %N!",
-	"I'll return the favour, %N!",
-	"The team is stronger with you, %N!",
-	"Thanks, %N! Let's keep moving.",
-	"Let's push together, %N! Thanks.",
-	"Back to the objective, thanks, %N!",
-	"Let's win this, %N! Thanks for the revive.",
-	"The enemy won't like this, thanks, %N!",
-	"The enemy thought I was finished, thanks, %N!",
-	"Their celebration was cancelled by %N!",
-	"The enemy needs a new plan, thanks to %N!",
-	"Reviving me was their problem, %N!",
-	"The enemy is about to be confused, thanks, %N!",
-	"Rematch accepted, thanks to %N!",
-	"The enemy had such high hopes, %N! Thanks.",
-	"Back to haunt the enemy, thanks, %N!",
-	"Enemy paperwork increased by %N!",
-	"Revenge delivery arranged by %N!",
-	"Time for a return visit, thanks, %N!",
-	"This fight is not over, thanks to %N!",
-	"I've got a score to settle, thanks, %N!",
-	"Surprise return sponsored by %N!",
-	"What a plot twist, thanks, %N!",
-	"You just changed the round, %N!",
-	"The comeback tour starts with %N!",
-	"Back for the final act, thanks, %N!",
-	"The sequel starts now, courtesy of %N!",
-	"Thanks, %N! I'll aim better this time.",
-	"Thanks, %N! I'll try staying upright.",
-	"I'll avoid the floor this time, %N!",
-	"Helmet tightened, thanks, %N!",
-	"Second life, better decisions, thanks, %N!",
-	"I'll use this second life wisely, %N!",
-	"No promises, but I'm grateful, %N!",
-	"Still alive because of %N!",
-	"My embarrassing death has been postponed by %N!",
-	"Death speedrun failed, thanks, %N!",
-	"You helped me skip the respawn queue, %N!",
-	"Spectator ticket cancelled by %N!",
-	"Loading screen avoided, thanks to %N!",
-	"Death screen closed by %N!",
-	"Redeployment complete, thanks, %N!",
-	"Reboot successful, %N!",
-	"Systems online, thanks to %N!",
-	"Health restored, courtesy of %N!",
-	"My legs work again, thanks, %N!",
-	"Heartbeat reinstalled by %N!",
-	"That is quality field medicine, %N!",
-	"Medic magic confirmed, %N!",
-	"You've got healing hands, %N!",
-	"Five-star rescue service, %N!",
-	"Fastest emergency response goes to %N!",
-	"Special delivery: one revive from %N!",
-	"Miracle delivered right on time, %N!",
-	"Premium battlefield healthcare from %N!",
-	"Best healthcare on the battlefield, %N!",
-	"Top-class medic work, %N!",
-	"Revive master at work, %N!",
-	"Clutch specialist confirmed, %N!",
-	"My guardian angel is called %N!",
-	"Someone get %N a hero cape!",
-	"Gold star for %N!",
-	"Someone award %N a medal!",
-	"Round of applause for %N!",
-	"Salute to %N for the revive!",
-	"Maximum respect, %N!",
-	"All my gratitude goes to %N!",
-	"Cheers for the revive, %N!",
-	"Huge thanks, %N!",
-	"Thank you kindly, %N!",
-	"I really appreciate that, %N!",
-	"Grateful for the save, %N!",
-	"I owe you big time, %N!",
-	"I won't forget that save, %N!",
-	"You saved this round for me, %N!",
-	"You saved my day, %N!",
-	"You saved this run, %N!",
-	"You kept the mission alive, %N!",
-	"You kept hope alive, %N!",
-	"You made the squad whole again, %N!",
-	"Thanks for bringing your teammate back, %N!",
-	"Happy to be back, thanks, %N!",
-	"Ready to return the help, %N!",
-	"Together again, thanks to %N!",
-	"I'm alive because you cared, %N!",
-	"That revive deserves another thank-you, %N!",
-	"Final verdict: %N is a lifesaver!",
-	"Thanks, %N! You saved me from taking a respawn screen to the knee.",
-	"Fus Ro Revive! Thanks, %N!",
-	"Thanks, %N! The cake can wait, we have a battle to finish.",
-	"You are better than a Companion Cube, %N!",
-	"Thanks, %N! Even a crowbar could not have fixed me that quickly.",
-	"Revive here! Thanks, %N!",
-	"Thanks, %N! I nearly missed the saferoom.",
-	"Clutch revive, %N! That belongs in the highlight reel.",
-	"Thanks, %N! That revive was faster than a five-second defuse.",
-	"MEDIC! Oh, there you are, %N!",
-	"Thanks, %N! I feel fully UberCharged.",
-	"Thanks, %N! Back to ripping and tearing.",
-	"Extra life acquired, thanks to %N!",
-	"Thanks, %N! My bed was apparently obstructed.",
-	"You work better than a Totem of Undying, %N!",
-	"Thanks, %N! That revive cost fewer coins than the Nurse.",
-	"You are my fairy in a bottle, %N!",
-	"Thanks, %N! My heart containers are working again.",
-	"One-Up delivered by %N!",
-	"Thanks, %N! The revive was in this castle after all.",
-	"Thanks, %N! I dropped all my rings for a second.",
-	"I fainted, but %N used Revive!",
-	"%N used Revive. It was super effective!",
-	"Bonfire skipped, thanks to %N!",
-	"Thanks, %N! The YOU DIED screen barely had time to load.",
-	"Grace restored, courtesy of %N!",
-	"Thanks, %N! I almost dropped my runes twice.",
-	"That revive deserves a round of Gwent, %N!",
-	"Even a Swallow potion could not beat that revive, %N!",
-	"Commander %N has restored the squad!",
-	"Thanks, %N! My shields are back online.",
-	"Wake me when you need another teammate, %N!",
-	"Thanks, %N! The whole COG squad would be proud.",
-	"Stimpack efficiency: 100 percent. Thanks, %N!",
-	"Thanks, %N! My Pip-Boy now says ALIVE.",
-	"WASTED cancelled by %N!",
-	"Redemption achieved, thanks to %N!",
-	"Thanks, %N! Even Kratos would call that a worthy revive.",
-	"Green herb energy restored by %N!",
-	"Thanks, %N! The alert phase is over, but I am back.",
-	"Second Heart activated by %N!",
-	"Thanks, %N! My energy bar is ready for another day.",
-	"Tom Nook cannot charge me for this revive, right, %N?",
-	"Thanks, %N! I was not the impostor, just temporarily dead.",
-	"Reboot card successfully collected by %N!",
-	"Banner recovered, legend restored. Thanks, %N!",
-	"Heroes apparently do not stay dead when %N is nearby!",
-	"Guardian Angel activated by %N!",
-	"Soulstone service provided by %N!",
-	"Thanks, %N! That revive cleared my death screen like four perfect lines."
+	"Thanks, %N.",
+	"Thanks for the revive, %N.",
+	"Cheers, %N.",
+	"Good save, %N.",
+	"Appreciate it, %N.",
+	"Nice one, %N.",
+	"Back in it, thanks.",
+	"Thanks. Let's move.",
+	"Thanks, %N. I'm good.",
+	"Good looking out, %N.",
+	"Thanks for getting me up.",
+	"Much appreciated, %N."
 };
 
 // ----------------------------------------------------------------------
@@ -470,6 +236,7 @@ int		g_iBeaconHalo;
 int		m_hMyWeapons;
 
 Handle	g_hForceRespawn = null;
+Handle	g_hFwdMedicOnPlayerReviveSpawn = null;
 Handle	g_hGameConfig = null;
 Handle	g_hSetCurrentStance = null;
 DynamicDetour g_hPlayerSharedSpawnDetour = null;
@@ -481,9 +248,25 @@ int		g_iPlayerSharedStateOffset = -1;
 int		ga_iTimeCheckHeight[MAX_ENTITIES + 1];
 int		ga_iHealthPack_Amount[MAX_ENTITIES + 1];
 int		ga_iHealthPackOwnerUserId[MAX_ENTITIES + 1];
+int ga_iHealthPackVoiceUserId[MAX_ENTITIES + 1];
+int ga_iGroundHealthPackOwnerUserId[MAX_ENTITIES + 1];
 float	ga_fLastHeight[MAX_ENTITIES + 1];
 float	ga_fTimeCheck[MAX_ENTITIES + 1];
 bool	ga_bHealthkitInit[MAX_ENTITIES + 1];
+bool ga_bHealthPackCanAttach[MAX_ENTITIES + 1];
+int ga_iHealthPackPendingUserId[MAX_ENTITIES + 1];
+int ga_iHealthPackWearerUserId[MAX_ENTITIES + 1];
+float ga_fHealthPackExpires[MAX_ENTITIES + 1];
+float ga_fHealthPackAttachedAt[MAX_ENTITIES + 1];
+float ga_fHealthPackLastOrigin[MAX_ENTITIES + 1][3];
+int ga_iWornHealthPackRef[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
+float ga_fAttachedHealAfter[MAXPLAYERS + 1];
+ConVar g_cvAttachedPackEnabled;
+ConVar g_cvAttachedPackHeal;
+ConVar g_cvAttachedPackDamageDelay;
+ConVar g_cvAttachedPackOffset;
+ConVar g_cvAttachedPackAngles;
+ConVar g_cvAttachedPackDebug;
 
 // ----------------------------------------------------------------------
 // Per-player state
@@ -593,7 +376,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & GPT/Codex",
 	description = "Adds the ability to revive with the Medic class and a health kit.",
-	version = "1.3.31",
+	version = "1.3.46",
 	url = ""
 };
 
@@ -603,9 +386,12 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 	MarkNativeAsOptional("Drag_ForceDrop");
 	MarkNativeAsOptional("ChatFilter_BypassNextMessage");
 	MarkNativeAsOptional("InsItems_IsAFFBlocking");
+	MarkNativeAsOptional("ThirdPerson_IsClientActive");
 
 	CreateNative("Medic_GetClientRagdollRef", Native_Medic_GetClientRagdollRef);
 	CreateNative("Medic_IsClientMedic", Native_Medic_IsClientMedic);
+	g_hFwdMedicOnPlayerReviveSpawn = CreateGlobalForward("Medic_OnPlayerReviveSpawn", ET_Ignore,
+		Param_Cell, Param_Cell, Param_Cell);
 
 	return APLRes_Success;
 }
@@ -627,6 +413,8 @@ public any Native_Medic_IsClientMedic(Handle plugin, int numParams) {
 }
 
 public void OnPluginStart() {
+	RegAdminCmd("sm_medpacktest", Cmd_MedpackTest, ADMFLAG_ROOT,
+		"sm_medpacktest attach [target] | clear [target] | offset x y z | angles pitch yaw roll | status");
 	RegPluginLibrary("bm_medic");
 	CleanupOrphanedMedicRagdolls();
 	CleanupOrphanedHealthkits();
@@ -844,6 +632,16 @@ public void OnEntityDestroyed(int entity) {
 	ClearDestroyedBleedParticleRefs();
 	UntrackHealthkit(entity);
 	ga_iHealthPackOwnerUserId[entity] = 0;
+	ga_iHealthPackVoiceUserId[entity] = 0;
+	ga_iGroundHealthPackOwnerUserId[entity] = 0;
+	int wearer = GetClientOfUserId(ga_iHealthPackWearerUserId[entity]);
+	if (wearer > 0 && EntRefToEntIndex(ga_iWornHealthPackRef[wearer]) == entity)
+		ga_iWornHealthPackRef[wearer] = INVALID_ENT_REFERENCE;
+	ga_iHealthPackWearerUserId[entity] = 0;
+	ga_iHealthPackPendingUserId[entity] = 0;
+	ga_bHealthPackCanAttach[entity] = false;
+	ga_fHealthPackExpires[entity] = 0.0;
+	ga_fHealthPackAttachedAt[entity] = 0.0;
 
 	if (!ga_bHealthkitInit[entity] && ga_iHealthPack_Amount[entity] == 0)
 		return;
@@ -856,6 +654,8 @@ public void OnEntityDestroyed(int entity) {
 }
 
 public void OnClientPutInServer(int client) {
+	ga_iWornHealthPackRef[client] = INVALID_ENT_REFERENCE;
+	ga_fAttachedHealAfter[client] = 0.0;
 	ResetBleedoutClient(client, true);
 	ga_bBleedoutDeathExplainedThisMap[client] = false;
 	SDKHook(client, SDKHook_TraceAttack, Hook_PlayerTraceAttack);
@@ -890,6 +690,8 @@ public Action Event_Spawn(Event event, const char[] name, bool dontBroadcast) {
 	if (client < 1 || client > MaxClients || !IsClientInGame(client))
 		return Plugin_Continue;
 
+	RemoveWornHealthkit(client);
+	ga_fAttachedHealAfter[client] = 0.0;
 	ResetBleedoutClient(client, false);
 	RemoveRagdoll(client);
 	ClearPendingRagTeleport(client);
@@ -934,6 +736,7 @@ public Action Event_PlayerConnect(Event event, const char[] name, bool dontBroad
 public Action Event_PlayerDisconnect(Event event, const char[] name, bool dontBroadcast) {
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	if (client > 0 && client <= MaxClients) {
+		RemoveWornHealthkit(client);
 		for (int healer = 1; healer <= MaxClients; healer++) {
 			if (healer != client && ga_iHealingSessionTarget[healer] == client)
 				CloseHealingSession(healer);
@@ -1181,11 +984,11 @@ static void ExplainBleedoutDeathOnce(int client) {
 	ga_bBleedoutDeathExplainedThisMap[client] = true;
 
 	if (reason == BleedoutDeath_Timeout) {
-		PrintToChat(client, "\x070088cc[Medic]\x01 No \x0700cc44tourniquet\x01 was applied before you \x07cc2200bled out\x01.");
+		PrintToChat(client, "\x070088cc[Medic]\x01 No teammate applied a \x0700cc44tourniquet\x01 before you \x07cc2200bled out\x01.");
 		PrintToChat(client, "\x01Without the bleedout system, the original \x07cc2200lethal limb hit\x01 would have killed you immediately.");
 	} else if (reason == BleedoutDeath_SecondHit) {
 		PrintToChat(client, "\x070088cc[Medic]\x01 You took \x07cc2200more damage\x01 while bleeding, which killed you.");
-		PrintToChat(client, "\x01The original lethal limb hit gave you a \x0700cc44temporary chance\x01 to be saved by a \x070088ccmedic\x01.");
+		PrintToChat(client, "\x01The original lethal limb hit gave you a \x0700cc44temporary chance\x01 to be saved by a teammate.");
 	}
 }
 
@@ -1193,6 +996,8 @@ public Action Event_PlayerHurt_Pre(Event event, const char[] name, bool dontBroa
 	int victim = GetClientOfUserId(event.GetInt("userid"));
 	if (victim < 1 || victim > MaxClients || !IsClientInGame(victim))
 		return Plugin_Continue;
+	if (event.GetInt("dmg_health") > 0)
+		ga_fAttachedHealAfter[victim] = GetGameTime() + g_cvAttachedPackDamageDelay.FloatValue;
 
 	if (IsFakeClient(victim)
 		&& !ga_bBleedoutDeathPending[victim]
@@ -1241,6 +1046,7 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 	if (victim < 1 || !IsClientInGame(victim))
 		return Plugin_Continue;
 
+	RemoveWornHealthkit(victim);
 	ClearActiveBleedout(victim);
 	int team = GetClientTeam(victim);
 
@@ -2389,7 +2195,13 @@ static void CleanupTrackedHealthkits() {
 			continue;
 		}
 
-		SafeKillRef(entref);
+		if (ga_iHealthPackWearerUserId[entity] != 0) {
+			// This non-physics prop can be removed synchronously. Deferred callbacks
+			// belonging to this plugin cannot be relied upon after plugin unload.
+			g_hTrackedHealthkits.Erase(i);
+			RemoveEntity(entity);
+		} else
+			SafeKillRef(entref);
 	}
 
 	g_hTrackedHealthkits.Clear();
@@ -2402,6 +2214,15 @@ static void CleanupOrphanedHealthkits() {
 		int entref = EntIndexToEntRef(entity);
 		if (entref != INVALID_ENT_REFERENCE)
 			orphanRefs.Push(entref);
+	}
+	for (int kind = 0; kind < 2; kind++) {
+		entity = -1;
+		while ((entity = FindEntityByClassname(entity, kind == 0 ? "prop_dynamic" : "prop_dynamic_override")) != -1) {
+			char targetname[64];
+			GetEntPropString(entity, Prop_Data, "m_iName", targetname, sizeof(targetname));
+			if (StrEqual(targetname, ATTACHED_MEDPACK_NAME))
+				orphanRefs.Push(EntIndexToEntRef(entity));
+		}
 	}
 
 	for (int i = 0; i < orphanRefs.Length; i++)
@@ -2532,11 +2353,16 @@ static void CleanupOrphanedMedicRagdolls() {
 	}
 }
 
-void RespawnPlayerRevive(int client) {	// Revive player
+void RespawnPlayerRevive(int client, int reviver = 0, bool reviverIsMedic = false) {	// Revive player
 	if (!IsClientInGame(client)) return;
 	if (IsPlayerAlive(client) || !g_bRoundActive) return;
 
 	ga_bReviveSpawnProne[client] = true;
+	Call_StartForward(g_hFwdMedicOnPlayerReviveSpawn);
+	Call_PushCell(client);
+	Call_PushCell(reviver);
+	Call_PushCell(reviverIsMedic);
+	Call_Finish();
 	SDKCall(g_hForceRespawn, client);	// Call forcerespawn function
 	ga_bReviveSpawnProne[client] = false;
 
@@ -2801,7 +2627,7 @@ Action Timer_ReviveMonitor(Handle timer) {
 			ga_bBeingRevivedByMedic[deadPlayer] = false;
 			s_iLastMedicDec[deadPlayer] = 0;
 
-			RespawnPlayerRevive(deadPlayer);
+			RespawnPlayerRevive(deadPlayer, alivePlayer, true);
 			LogToGame("\"%L\" triggered \"revived\" against \"%L\"", alivePlayer, deadPlayer);
 			SendReviveFeedEvent(alivePlayer, deadPlayer);
 			HandleAutoThanks(deadPlayer, alivePlayer);
@@ -2832,7 +2658,7 @@ Action Timer_ReviveMonitor(Handle timer) {
 			ga_bRevivedByMedic[deadPlayer] = false;
 			s_iLastNonMedicDec[deadPlayer] = 0;
 
-			RespawnPlayerRevive(deadPlayer);
+			RespawnPlayerRevive(deadPlayer, alivePlayer, false);
 			LogToGame("\"%L\" triggered \"revived\" against \"%L\"", alivePlayer, deadPlayer);
 			SendReviveFeedEvent(alivePlayer, deadPlayer);
 			HandleAutoThanks(deadPlayer, alivePlayer);
@@ -3268,19 +3094,23 @@ public Action Event_GrenadeThrown(Event event, const char[] name, bool dontBroad
 
 	if (!StrEqual(grenade_name, "healthkit"))
 		return Plugin_Continue;
+	// Wait for ground deployment before playing a positional voice line.
+	// Keep this separate from medic-only statistics ownership.
+	ga_iHealthPackVoiceUserId[nade_id] = GetClientUserId(client);
 
 	// Only deployed packs thrown while the owner is a medic contribute to
 	// medic statistics. User IDs prevent attribution to a reused client slot.
 	ga_iHealthPackOwnerUserId[nade_id] =
 		(ga_bIsMedic[client] && !IsFakeClient(client)) ? GetClientUserId(client) : 0;
-
-	// Your existing voice lines
-	switch (GetRandomInt(0, 3)) {
-		case 0: EmitSoundToAll("player/voice/radial/security/leader/unsuppressed/need_backup1.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 1: EmitSoundToAll("player/voice/radial/security/leader/unsuppressed/holdposition2.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 2: EmitSoundToAll("player/voice/radial/security/leader/suppressed/holdposition1.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-		case 3: EmitSoundToAll("player/voice/security/command/leader/setwaypoint2.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
-	}
+	ga_bHealthPackCanAttach[nade_id] = ga_bIsMedic[client] && GetClientTeam(client) == TEAM_SECURITY;
+	if (g_cvAttachedPackDebug.BoolValue)
+		LogMessage("[Medpack attach] throw owner=%N medic=%d team=%d enabled=%d entity=%d",
+			client, ga_bIsMedic[client], GetClientTeam(client), g_cvAttachedPackEnabled.BoolValue, nade_id);
+	// Keep the thrower for attachment eligibility even when it is a bot medic.
+	if (ga_bHealthPackCanAttach[nade_id])
+		ga_iHealthPackOwnerUserId[nade_id] = GetClientUserId(client);
+	GetEntPropVector(nade_id, Prop_Data, "m_vecAbsOrigin", ga_fHealthPackLastOrigin[nade_id]);
+	SDKHook(nade_id, SDKHook_Touch, Hook_HealthkitTouch);
 
 	// Start the healthkit timers/hooks next frame (safer than immediate)
 	RequestFrame(Frame_InitHealthkit, EntIndexToEntRef(nade_id));
@@ -3299,13 +3129,14 @@ void InitHealthkitEntity(int entity) {
 	TrackHealthkit(entity);
 
 	ga_iHealthPack_Amount[entity] = g_iMedpackHealthAmount;
+	ga_fHealthPackExpires[entity] = GetGameTime() + Healthkit_Timer_Timeout;
 
 	DataPack hDatapack;
 	CreateDataTimer(Healthkit_Timer_Tickrate, Healthkit, hDatapack, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 
 	int entref = EntIndexToEntRef(entity);
 	hDatapack.WriteCell(entref);
-	hDatapack.WriteFloat(GetGameTime() + Healthkit_Timer_Timeout);
+	hDatapack.WriteFloat(ga_fHealthPackExpires[entity]);
 
 	ga_fLastHeight[entity] = -9999.0;
 
@@ -3314,8 +3145,9 @@ void InitHealthkitEntity(int entity) {
 	ga_iTimeCheckHeight[entity] = RoundFloat(origin[2]);
 	ga_fTimeCheck[entity] = GetGameTime();
 
-	SDKHook(entity, SDKHook_VPhysicsUpdate, HealthkitGroundCheck);
-	CreateTimer(0.1, HealthkitGroundCheckTimer, entref, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+	// The theater's healthkit projectile need not use VPhysics movement.
+	// Sample flight independently, and sweep between samples to catch fast throws.
+	CreateTimer(0.05, HealthkitGroundCheckTimer, entref, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 
 void Frame_InitHealthkit(any entref) {
@@ -3347,17 +3179,17 @@ static void HealthkitForceLogoUp(int entity) {
 	SetEntityMoveType(entity, MOVETYPE_NONE);
 }
 
-public void HealthkitGroundCheck(int entity) {
-	if (entity <= MaxClients || !IsValidEntity(entity))
-		return;
-
-	float origin[3];
-	GetEntPropVector(entity, Prop_Data, "m_vecAbsOrigin", origin);
-
-	int h = RoundFloat(origin[2]);
-	if (h != ga_iTimeCheckHeight[entity]) {
-		ga_iTimeCheckHeight[entity] = h;
-		ga_fTimeCheck[entity] = GetGameTime();
+static void CheckThrownHealthkitImpact(int entity, const float origin[3]) {
+	// A small hull accounts for the pack's width and contacts where physics stops
+	// its centre short of a player. Include walls/props so they block the catch.
+	if (ga_bHealthPackCanAttach[entity] && ga_iHealthPackPendingUserId[entity] == 0
+		&& g_cvAttachedPackEnabled.BoolValue) {
+		float mins[3] = {-6.0, -6.0, -6.0}, maxs[3] = {6.0, 6.0, 6.0};
+		Handle trace = TR_TraceHullFilterEx(ga_fHealthPackLastOrigin[entity], origin,
+			mins, maxs, MASK_SHOT, TraceFilter_ThrownHealthkit, entity);
+		int hit = TR_DidHit(trace) ? TR_GetEntityIndex(trace) : -1;
+		delete trace;
+		QueueHealthkitAttachment(entity, hit);
 	}
 }
 
@@ -3365,25 +3197,381 @@ public Action HealthkitGroundCheckTimer(Handle timer, int entref) {
 	int entity = EntRefToEntIndex(entref);
 	if (entity == INVALID_ENT_REFERENCE || entity <= MaxClients || !IsValidEntity(entity))
 		return Plugin_Stop;
-
-	float now = GetGameTime();
-	if (now - ga_fTimeCheck[entity] < 0.25)
-		return Plugin_Continue;
+	if (ga_iHealthPack_Amount[entity] <= 0)
+		return Plugin_Stop;
 
 	float origin[3];
 	GetEntPropVector(entity, Prop_Data, "m_vecAbsOrigin", origin);
-
-	int h = RoundFloat(origin[2]);
-	if (h != ga_iTimeCheckHeight[entity]) {
-		ga_iTimeCheckHeight[entity] = h;
+	CheckThrownHealthkitImpact(entity, origin);
+	float now = GetGameTime();
+	bool moved = GetVectorDistanceSquared(origin, ga_fHealthPackLastOrigin[entity]) > 0.01;
+	VecCopy(origin, ga_fHealthPackLastOrigin[entity]);
+	if (moved || ga_iHealthPackPendingUserId[entity] != 0) {
 		ga_fTimeCheck[entity] = now;
 		return Plugin_Continue;
 	}
+	if (now - ga_fTimeCheck[entity] < 0.25)
+		return Plugin_Continue;
 
+	// Check all-axis movement and actual support before freezing the pack.
+	// Nearly constant height at the top of a throw does not mean it has landed.
+	float end[3], mins[3] = {-2.0, -2.0, -2.0}, maxs[3] = {2.0, 2.0, 2.0};
+	VecCopy(origin, end);
+	end[2] -= 12.0;
+	Handle ground = TR_TraceHullFilterEx(origin, end, mins, maxs, MASK_SOLID, TraceFilter_HealthkitGround, entity);
+	bool supported = TR_DidHit(ground);
+	delete ground;
+	if (!supported)
+		return Plugin_Continue;
+	if (g_cvAttachedPackDebug.BoolValue && ga_bHealthPackCanAttach[entity])
+		LogMessage("[Medpack attach] entity=%d settled without attaching at %.1f %.1f %.1f", entity, origin[0], origin[1], origin[2]);
 	HealthkitForceLogoUp(entity);
-
-	SDKUnhook(entity, SDKHook_VPhysicsUpdate, HealthkitGroundCheck);
+	ga_bHealthPackCanAttach[entity] = false;
+	SDKUnhook(entity, SDKHook_Touch, Hook_HealthkitTouch);
+	ga_iGroundHealthPackOwnerUserId[entity] = ga_iHealthPackVoiceUserId[entity];
+	EnforceGroundHealthkitLimit(ga_iGroundHealthPackOwnerUserId[entity]);
+	if (ga_iHealthPack_Amount[entity] <= 0)
+		return Plugin_Stop;
+	PlayGroundHealthkitVoice(entity);
 	return Plugin_Stop;
+}
+
+static void EnforceGroundHealthkitLimit(int ownerUserId) {
+	if (ownerUserId == 0 || g_hTrackedHealthkits == null)
+		return;
+
+	for (;;) {
+		int count = 0, oldest = -1;
+		float oldestExpires = 0.0;
+		for (int i = 0; i < g_hTrackedHealthkits.Length; i++) {
+			int entity = EntRefToEntIndex(g_hTrackedHealthkits.Get(i));
+			if (entity <= MaxClients || !IsValidEntity(entity)
+				|| ga_iGroundHealthPackOwnerUserId[entity] != ownerUserId
+				|| ga_iHealthPackWearerUserId[entity] != 0 || ga_iHealthPack_Amount[entity] <= 0)
+				continue;
+			count++;
+			if (oldest == -1 || ga_fHealthPackExpires[entity] < oldestExpires) {
+				oldest = entity;
+				oldestExpires = ga_fHealthPackExpires[entity];
+			}
+		}
+		if (count <= MAX_GROUND_MEDPACKS_PER_PLAYER)
+			return;
+		ga_iGroundHealthPackOwnerUserId[oldest] = 0;
+		ga_iHealthPack_Amount[oldest] = 0;
+		SetEntityRenderMode(oldest, RENDER_NONE);
+		SafeKillIdx(oldest);
+	}
+}
+
+static void PlayGroundHealthkitVoice(int entity) {
+	int client = GetClientOfUserId(ga_iHealthPackVoiceUserId[entity]);
+	ga_iHealthPackVoiceUserId[entity] = 0;
+	if (client < 1 || !IsClientInGame(client) || !IsPlayerAlive(client))
+		return;
+	switch (GetRandomInt(0, 3)) {
+		case 0: EmitSoundToAll("player/voice/radial/security/leader/unsuppressed/need_backup1.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 1: EmitSoundToAll("player/voice/radial/security/leader/unsuppressed/holdposition2.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 2: EmitSoundToAll("player/voice/radial/security/leader/suppressed/holdposition1.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+		case 3: EmitSoundToAll("player/voice/security/command/leader/setwaypoint2.ogg", client, SNDCHAN_VOICE, _, _, 1.0);
+	}
+}
+
+public bool TraceFilter_HealthkitGround(int entity, int contentsMask, any pack) {
+	return entity == 0 || (entity > MaxClients && entity != pack);
+}
+
+static void RemoveWornHealthkit(int client) {
+	int entity = EntRefToEntIndex(ga_iWornHealthPackRef[client]);
+	ga_iWornHealthPackRef[client] = INVALID_ENT_REFERENCE;
+	if (entity > MaxClients && IsValidEntity(entity)) {
+		ga_iHealthPack_Amount[entity] = 0;
+		AcceptEntityInput(entity, "TurnOff");
+		SafeKillIdx(entity);
+	}
+}
+
+public bool TraceFilter_ThrownHealthkit(int entity, int contentsMask, any pack) {
+	return entity == 0 || (entity != pack && entity != GetClientOfUserId(ga_iHealthPackOwnerUserId[pack]));
+}
+
+public Action Hook_HealthkitTouch(int entity, int other) {
+	QueueHealthkitAttachment(entity, other);
+	return Plugin_Continue;
+}
+
+static void QueueHealthkitAttachment(int entity, int target) {
+	if (!g_cvAttachedPackEnabled.BoolValue || !ga_bHealthPackCanAttach[entity]
+		|| ga_iHealthPackPendingUserId[entity] != 0
+		|| target < 1 || target > MaxClients || !IsClientInGame(target)
+		|| !IsPlayerAlive(target) || GetClientTeam(target) != TEAM_SECURITY)
+		return;
+	int owner = GetClientOfUserId(ga_iHealthPackOwnerUserId[entity]);
+	if (owner < 1 || owner == target || !IsClientInGame(owner) || GetClientTeam(owner) != TEAM_SECURITY)
+		return;
+	if (EntRefToEntIndex(ga_iWornHealthPackRef[target]) > MaxClients) {
+		if (g_cvAttachedPackDebug.BoolValue)
+			LogMessage("[Medpack attach] entity=%d hit %N, who already has an attached pack", entity, target);
+		// The pack remains a ground pack when the teammate already wears one.
+		ga_bHealthPackCanAttach[entity] = false;
+		return;
+	}
+	ga_iHealthPackPendingUserId[entity] = GetClientUserId(target);
+	if (g_cvAttachedPackDebug.BoolValue)
+		LogMessage("[Medpack attach] entity=%d detected teammate %N, queuing attachment", entity, target);
+	RequestFrame(Frame_AttachHealthkit, EntIndexToEntRef(entity));
+}
+
+void Frame_AttachHealthkit(any ref) {
+	int entity = EntRefToEntIndex(ref);
+	if (entity <= MaxClients || !IsValidEntity(entity))
+		return;
+	int target = GetClientOfUserId(ga_iHealthPackPendingUserId[entity]);
+	ga_iHealthPackPendingUserId[entity] = 0;
+	ga_bHealthPackCanAttach[entity] = false;
+	if (!g_cvAttachedPackEnabled.BoolValue || target < 1 || !IsClientInGame(target)
+		|| !IsPlayerAlive(target) || GetClientTeam(target) != TEAM_SECURITY)
+		return;
+	InitHealthkitEntity(entity);
+	char model[PLATFORM_MAX_PATH];
+	GetEntPropString(entity, Prop_Data, "m_ModelName", model, sizeof(model));
+	if (CreateAttachedHealthkit(target, ga_iHealthPackOwnerUserId[entity], model,
+		ga_iHealthPack_Amount[entity], ga_fHealthPackExpires[entity]) == -1) {
+		if (g_cvAttachedPackDebug.BoolValue)
+			LogMessage("[Medpack attach] entity=%d creation failed for %N model=%s reserve=%d", entity, target, model, ga_iHealthPack_Amount[entity]);
+		return;
+	}
+	if (g_cvAttachedPackDebug.BoolValue)
+		LogMessage("[Medpack attach] entity=%d successfully attached to %N", entity, target);
+	// Replace the grenade with a non-solid visual prop outside the physics callback.
+	// Its native grenade physics and think functions cannot fight the parent attachment.
+	ga_iHealthPack_Amount[entity] = 0;
+	SetEntityRenderMode(entity, RENDER_NONE);
+	SafeKillIdx(entity);
+	PrintToChat(target, "\x070088cc[Medic]\x01 A medkit is attached to your back. It heals automatically; bleeding still needs a tourniquet.");
+}
+
+static void PositionAttachedHealthkit(int entity) {
+	char value[96];
+	g_cvAttachedPackOffset.GetString(value, sizeof(value));
+	SetVariantString(value);
+	AcceptEntityInput(entity, "SetLocalOrigin");
+	g_cvAttachedPackAngles.GetString(value, sizeof(value));
+	SetVariantString(value);
+	AcceptEntityInput(entity, "SetLocalAngles");
+}
+
+static int CreateAttachedHealthkit(int target, int ownerUserId, const char[] model, int reserve, float expires) {
+	if (EntRefToEntIndex(ga_iWornHealthPackRef[target]) > MaxClients || reserve <= 0
+		|| expires <= GetGameTime() || model[0] == '\0'
+		|| !IsModelPrecached(model))
+		return -1;
+	int entity = CreateEntityByName("prop_dynamic_override");
+	if (entity <= MaxClients || entity > MAX_ENTITIES) {
+		if (entity > MaxClients)
+			RemoveEntity(entity);
+		return -1;
+	}
+	DispatchKeyValue(entity, "targetname", ATTACHED_MEDPACK_NAME);
+	DispatchKeyValue(entity, "model", model);
+	DispatchKeyValue(entity, "solid", "0");
+	DispatchKeyValue(entity, "disableshadows", "1");
+	DispatchKeyValue(entity, "disableshadowdepth", "1");
+	DispatchKeyValue(entity, "disablereceiveshadows", "1");
+	if (!DispatchSpawn(entity)) {
+		RemoveEntity(entity);
+		return -1;
+	}
+	SetEntProp(entity, Prop_Data, "m_takedamage", 0);
+	// EF_NOSHADOW | EF_NORECEIVESHADOW, preserving all existing effect bits.
+	SetEntProp(entity, Prop_Send, "m_fEffects", GetEntProp(entity, Prop_Send, "m_fEffects") | (1 << 4) | (1 << 6));
+	SetEntityMoveType(entity, MOVETYPE_NONE);
+	SetVariantString("!activator");
+	if (!AcceptEntityInput(entity, "SetParent", target)) {
+		RemoveEntity(entity);
+		return -1;
+	}
+	// Insurgency lacks SDKTools LookupAttachment support. Use the same native
+	// entity input as the bleeding effects to resolve centermass on the model.
+	SetVariantString("centermass");
+	if (!AcceptEntityInput(entity, "SetParentAttachment", target)) {
+		RemoveEntity(entity);
+		return -1;
+	}
+	PositionAttachedHealthkit(entity);
+	ga_iWornHealthPackRef[target] = EntIndexToEntRef(entity);
+	ga_iHealthPackWearerUserId[entity] = GetClientUserId(target);
+	SDKHook(entity, SDKHook_SetTransmit, AttachedHealthkit_SetTransmit);
+	ga_iHealthPackOwnerUserId[entity] = ownerUserId;
+	ga_iHealthPack_Amount[entity] = reserve;
+	ga_fHealthPackExpires[entity] = expires;
+	ga_fHealthPackAttachedAt[entity] = GetGameTime();
+	ga_bHealthkitInit[entity] = true;
+	TrackHealthkit(entity);
+	DataPack data;
+	CreateDataTimer(Healthkit_Timer_Tickrate, Healthkit, data, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+	data.WriteCell(ga_iWornHealthPackRef[target]);
+	data.WriteFloat(expires);
+	int owner = GetClientOfUserId(ownerUserId);
+	if (owner > 0 && IsClientInGame(owner) && !IsFakeClient(owner)) {
+		char duration[64];
+		FormatMedpackDuration(expires - ga_fHealthPackAttachedAt[entity], duration, sizeof(duration));
+		PrintToChat(owner, "\x070088cc[Medic]\x01 Medkit attached to \x0700cc44%N\x01 | Reserve: \x0700cc44%d HP\x01 | Time remaining: \x07ffff00%s\x01.", target, reserve, duration);
+	}
+	return entity;
+}
+
+static void FormatMedpackDuration(float time, char[] output, int maxlen) {
+	int seconds = RoundToCeil(time);
+	if (seconds < 0)
+		seconds = 0;
+	int minutes = seconds / 60;
+	seconds %= 60;
+	if (minutes > 0 && seconds > 0)
+		FormatEx(output, maxlen, "%d minute%s %d second%s", minutes, minutes == 1 ? "" : "s", seconds, seconds == 1 ? "" : "s");
+	else if (minutes > 0)
+		FormatEx(output, maxlen, "%d minute%s", minutes, minutes == 1 ? "" : "s");
+	else
+		FormatEx(output, maxlen, "%d second%s", seconds, seconds == 1 ? "" : "s");
+}
+
+public Action AttachedHealthkit_SetTransmit(int entity, int client) {
+	if (client != GetClientOfUserId(ga_iHealthPackWearerUserId[entity]))
+		return Plugin_Continue;
+	// thirdperson.sp reports the active view, including temporary first-person
+	// ADS. Without the optional API, keep the wearer's first-person view clear.
+	if (GetFeatureStatus(FeatureType_Native, "ThirdPerson_IsClientActive") == FeatureStatus_Available
+		&& ThirdPerson_IsClientActive(client))
+		return Plugin_Continue;
+	return Plugin_Handled;
+}
+
+static Action HealAttachedHealthkit(int entity, float now) {
+	int target = GetClientOfUserId(ga_iHealthPackWearerUserId[entity]);
+	if (target < 1 || !IsClientInGame(target) || !IsPlayerAlive(target)
+		|| GetClientTeam(target) != TEAM_SECURITY
+		|| EntRefToEntIndex(ga_iWornHealthPackRef[target]) != entity) {
+		ga_iHealthPack_Amount[entity] = 0;
+		SafeKillIdx(entity);
+		return Plugin_Stop;
+	}
+	if (ga_iHealthPack_Amount[entity] <= 0) {
+		PrintToChat(target, "\x070088cc[Medic]\x01 Attached medkit \x07cc2200depleted\x01.");
+		RemoveWornHealthkit(target);
+		return Plugin_Stop;
+	}
+	if (now >= ga_fHealthPackExpires[entity]) {
+		char duration[64];
+		FormatMedpackDuration(ga_fHealthPackExpires[entity] - ga_fHealthPackAttachedAt[entity], duration, sizeof(duration));
+		PrintToChat(target, "\x070088cc[Medic]\x01 Attached medkit \x07cc2200expired\x01 after \x07ffff00%s\x01.", duration);
+		RemoveWornHealthkit(target);
+		return Plugin_Stop;
+	}
+	if (!g_bRoundActive || ga_bBleedingOut[target] || now < ga_fAttachedHealAfter[target])
+		return Plugin_Continue;
+	int hp = GetClientHealth(target);
+	if (hp >= 100)
+		return Plugin_Continue;
+	int amount = g_cvAttachedPackHeal.IntValue;
+	if (amount > 100 - hp)
+		amount = 100 - hp;
+	if (amount > ga_iHealthPack_Amount[entity])
+		amount = ga_iHealthPack_Amount[entity];
+	SetEntityHealth(target, hp + amount);
+	ga_iHealthPack_Amount[entity] -= amount;
+	RecordDeployedMedpackHealing(entity, target, amount, hp + amount >= 100, now);
+	char duration[64];
+	FormatMedpackDuration(ga_fHealthPackExpires[entity] - now, duration, sizeof(duration));
+	PrintHintText(target, "Attached medkit: %i HP remaining | Health: %i\nTime remaining: %s", ga_iHealthPack_Amount[entity], hp + amount, duration);
+	if (ga_iHealthPack_Amount[entity] <= 0) {
+		PrintToChat(target, "\x070088cc[Medic]\x01 Attached medkit \x07cc2200depleted\x01.");
+		RemoveWornHealthkit(target);
+		return Plugin_Stop;
+	}
+	return Plugin_Continue;
+}
+
+public Action Cmd_MedpackTest(int client, int args) {
+	if (client < 1 || !IsClientInGame(client)) {
+		ReplyToCommand(client, "[Medic Test] Use this command in game.");
+		return Plugin_Handled;
+	}
+	char action[16];
+	GetCmdArg(1, action, sizeof(action));
+	if (StrEqual(action, "offset") || StrEqual(action, "angles")) {
+		if (args != 4) {
+			ReplyToCommand(client, "[Medic Test] sm_medpacktest %s <x> <y> <z>", action);
+			return Plugin_Handled;
+		}
+		float values[3];
+		char arg[32], vector[96];
+		for (int i = 0; i < 3; i++) {
+			GetCmdArg(i + 2, arg, sizeof(arg));
+			if (StringToFloatEx(arg, values[i]) != strlen(arg) || values[i] != values[i]
+				|| FloatAbs(values[i]) > 360.0) {
+				ReplyToCommand(client, "[Medic Test] Use numeric values between -360 and 360.");
+				return Plugin_Handled;
+			}
+		}
+		FormatEx(vector, sizeof(vector), "%.2f %.2f %.2f", values[0], values[1], values[2]);
+		if (StrEqual(action, "offset"))
+			g_cvAttachedPackOffset.SetString(vector);
+		else
+			g_cvAttachedPackAngles.SetString(vector);
+		for (int target = 1; target <= MaxClients; target++) {
+			int entity = EntRefToEntIndex(ga_iWornHealthPackRef[target]);
+			if (entity > MaxClients && IsValidEntity(entity))
+				PositionAttachedHealthkit(entity);
+		}
+		ReplyToCommand(client, "[Medic Test] %s = %s (all attached packs updated; save the cvar to keep it).", action, vector);
+		return Plugin_Handled;
+	}
+	if (StrEqual(action, "status")) {
+		char offset[96], angles[96];
+		g_cvAttachedPackOffset.GetString(offset, sizeof(offset));
+		g_cvAttachedPackAngles.GetString(angles, sizeof(angles));
+		ReplyToCommand(client, "[Medic Test] centermass offset: %s | angles: %s", offset, angles);
+		return Plugin_Handled;
+	}
+	if (!StrEqual(action, "attach") && !StrEqual(action, "clear")) {
+		ReplyToCommand(client, "[Medic Test] sm_medpacktest attach [target] | clear [target] | offset x y z | angles pitch yaw roll | status");
+		return Plugin_Handled;
+	}
+	int target = client;
+	if (args >= 2) {
+		char name[MAX_NAME_LENGTH];
+		GetCmdArg(2, name, sizeof(name));
+		if (!StrEqual(name, "@me"))
+			target = FindTarget(client, name, false, true);
+		if (target == -1)
+			return Plugin_Handled;
+	}
+	if (StrEqual(action, "clear")) {
+		RemoveWornHealthkit(target);
+		ReplyToCommand(client, "[Medic Test] Removed attached medkit from %N.", target);
+		return Plugin_Handled;
+	}
+	if (!IsPlayerAlive(target) || GetClientTeam(target) != TEAM_SECURITY) {
+		ReplyToCommand(client, "[Medic Test] Target must be a living Security player.");
+		return Plugin_Handled;
+	}
+	if (EntRefToEntIndex(ga_iWornHealthPackRef[target]) > MaxClients) {
+		ReplyToCommand(client, "[Medic Test] Target already has a pack. Clear it first.");
+		return Plugin_Handled;
+	}
+	if (!FileExists(ATTACHED_MEDPACK_TEST_MODEL, true)
+		|| PrecacheModel(ATTACHED_MEDPACK_TEST_MODEL, true) == 0) {
+		ReplyToCommand(client, "[Medic Test] Missing model: %s", ATTACHED_MEDPACK_TEST_MODEL);
+		return Plugin_Handled;
+	}
+	// Test packs never award medic/HLstats credit and do not consume inventory.
+	int entity = CreateAttachedHealthkit(target, 0, ATTACHED_MEDPACK_TEST_MODEL,
+		g_iMedpackHealthAmount, GetGameTime() + Healthkit_Timer_Timeout);
+	if (entity == -1)
+		ReplyToCommand(client, "[Medic Test] Could not attach pack. Check centermass attachment/model and pack capacity.");
+	else
+		ReplyToCommand(client, "[Medic Test] Attached to %N. Test standing/crouching/prone; adjust with offset/angles.", target);
+	return Plugin_Handled;
 }
 
 static bool IsUsingDeployedHealthkit(int client) {
@@ -3429,12 +3617,16 @@ Action Healthkit(Handle timer, DataPack hDatapack) {
 		return Plugin_Stop;
 
 	float fGameTime = GetGameTime();
+	if (ga_iHealthPackWearerUserId[healthPack] != 0)
+		return HealAttachedHealthkit(healthPack, fGameTime);
 	if (fGameTime > fEndTime || ga_iHealthPack_Amount[healthPack] <= 0) {
 		ga_bHealthkitInit[healthPack] = false;
 		ga_iHealthPack_Amount[healthPack] = 0;
 		SafeKillIdx(healthPack);
 		return Plugin_Stop;
 	}
+	if (ga_iHealthPackPendingUserId[healthPack] != 0)
+		return Plugin_Continue;
 
 	float	fOrigin[3],
 			fPlayerOrigin[3];
@@ -3457,8 +3649,10 @@ Action Healthkit(Handle timer, DataPack hDatapack) {
 
 	GetEntPropVector(healthPack, Prop_Data, "m_vecAbsOrigin", fOrigin);
 	fOrigin[2] += 1.0;
-	TE_SetupBeamRingPoint(fOrigin, 1.0, Healthkit_Radius*1.95, g_iBeaconBeam, g_iBeaconHalo, 0, 30, 3.0, 4.0, 0.0, g_iColorHealRing, 1, FBEAM_HALOBEAM);
-	TE_SendToAll();
+	if (!ga_bHealthPackCanAttach[healthPack]) {
+		TE_SetupBeamRingPoint(fOrigin, 1.0, Healthkit_Radius*1.95, g_iBeaconBeam, g_iBeaconHalo, 0, 30, 3.0, 4.0, 0.0, g_iColorHealRing, 1, FBEAM_HALOBEAM);
+		TE_SendToAll();
+	}
 	fOrigin[2] -= 16.0;
 
 	if (ga_fLastHeight[healthPack] == -9999.0)
@@ -3832,7 +4026,7 @@ public Action Cmd_BleedTest(int client, int args) {
 		}
 
 		ga_bRevivedByMedic[target] = true;
-		RespawnPlayerRevive(target);
+		RespawnPlayerRevive(target, 0, true);
 		ReplyToCommand(client, "[Medic Test] Force-revived %N.", target);
 		return Plugin_Handled;
 	}
@@ -4195,6 +4389,12 @@ stock void NF_KillEntity(any entref) {
 }
 
 void SetupConVars() {
+	g_cvAttachedPackDebug = CreateConVar("sm_medpack_attach_debug", "0", "Log medpack throw eligibility, catches, landing and attachment failures", _, true, 0.0, true, 1.0);
+	g_cvAttachedPackEnabled = CreateConVar("sm_medpack_attach_enabled", "1", "Medic-thrown medpacks attach on teammate impact", _, true, 0.0, true, 1.0);
+	g_cvAttachedPackHeal = CreateConVar("sm_medpack_attach_heal", "2", "Attached pack HP restored per 0.5 seconds", _, true, 1.0, true, 100.0);
+	g_cvAttachedPackDamageDelay = CreateConVar("sm_medpack_attach_damage_delay", "3.0", "Attached healing pauses this many seconds after health damage", _, true, 0.0, true, 60.0);
+	g_cvAttachedPackOffset = CreateConVar("sm_medpack_attach_offset", "0 -7 0", "Centermass-local attached pack position: x y z; negative Y moves toward the back");
+	g_cvAttachedPackAngles = CreateConVar("sm_medpack_attach_angles", "0 90 0", "Centermass-local attached pack angles: pitch yaw roll");
 	g_cvReviveEnabled = CreateConVar("sm_revive_enabled", "1", "Reviving enabled from medics?  This creates revivable ragdoll after death; 0 - disabled, 1 - enabled");
 	g_bReviveEnabled = g_cvReviveEnabled.BoolValue;
 	g_cvReviveEnabled.AddChangeHook(OnConVarChanged);

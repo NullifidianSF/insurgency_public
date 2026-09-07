@@ -14,18 +14,38 @@ int		ga_iSetting[MAXPLAYERS + 1] = {0, ...},
 		ga_iFpsAds[MAXPLAYERS + 1] = {0, ...};
 
 bool	g_bLateLoad;
+// Actual view last applied, including temporary first-person ADS.
+bool ga_bThirdPersonActive[MAXPLAYERS + 1];
 
 public Plugin myinfo = {
 	name		= "thirdperson",
-	author		= "Nullifidian",
+	author		= "Nullifidian & Codex",
 	description	= "third person view command",
-	version		= "2.0.2",
+	version		= "2.0.3",
 	url			= ""
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
 	g_bLateLoad = late;
+	RegPluginLibrary("bm_thirdperson");
+	CreateNative("ThirdPerson_IsClientActive", Native_ThirdPerson_IsClientActive);
 	return APLRes_Success;
+}
+
+// Optional integration API: returns the applied view, not the saved preference.
+public any Native_ThirdPerson_IsClientActive(Handle plugin, int numParams) {
+	int client = GetNativeCell(1);
+	return client >= 1 && client <= MaxClients && IsClientInGame(client)
+		&& IsPlayerAlive(client) && ga_bThirdPersonActive[client];
+}
+
+void SetThirdPersonView(int client, bool enabled) {
+	SendConVarValue(client, g_cvThirdPerson, enabled ? "1" : "0");
+	ga_bThirdPersonActive[client] = enabled;
+}
+
+public void OnClientPutInServer(int client) {
+	ga_bThirdPersonActive[client] = false;
 }
 
 public void OnPluginStart() {
@@ -72,6 +92,7 @@ public void OnClientCookiesCached(int client) {
 }
 
 public void OnClientDisconnect(int client) {
+	ga_bThirdPersonActive[client] = false;
 	if (client && !IsFakeClient(client)) {
 		char sBuffer[4];
 		FormatEx(sBuffer, sizeof(sBuffer), "%d;%d", ga_iSetting[client], ga_iFpsAds[client]);
@@ -101,7 +122,7 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 		return Plugin_Continue;
 	}
 	ClientCommand(client, "r_screenoverlay null");
-	SendConVarValue(client, g_cvThirdPerson, "0");
+	SetThirdPersonView(client, false);
 	return Plugin_Continue;
 }
 
@@ -130,7 +151,7 @@ public Action cmd_firstPerson(int client, int args) {
 	}
 
 	ClientCommand(client, "r_screenoverlay null");
-	SendConVarValue(client, g_cvThirdPerson, "0");
+	SetThirdPersonView(client, false);
 	ReplyToCommand(client, "TP off");
 	ga_iSetting[client] = 0;
 	
@@ -190,13 +211,13 @@ public int Handle_TpMenu(Menu menu, MenuAction action, int param1, int param2) {
 			switch (param2) {
 				case 0: {
 					ClientCommand(param1, "r_screenoverlay null");
-					SendConVarValue(param1, g_cvThirdPerson, "0");
+					SetThirdPersonView(param1, false);
 					ReplyToCommand(param1, "TP off");
 					ga_iSetting[param1] = param2;
 				}
 				case 1: {
 					ClientCommand(param1, "r_screenoverlay null");
-					SendConVarValue(param1, g_cvThirdPerson, "1");
+					SetThirdPersonView(param1, true);
 					ReplyToCommand(param1, "TP on");
 					ga_iSetting[param1] = param2;
 				}
@@ -216,37 +237,37 @@ public int Handle_TpMenu(Menu menu, MenuAction action, int param1, int param2) {
 				}
 				case 3: {
 					ClientCommand(param1, "r_screenoverlay thirdperson/crosshair/dot/red_small.vtf");
-					SendConVarValue(param1, g_cvThirdPerson, "1");
+					SetThirdPersonView(param1, true);
 					ReplyToCommand(param1, "TP + small red dot");
 					ga_iSetting[param1] = param2;
 				}
 				case 4: {
 					ClientCommand(param1, "r_screenoverlay thirdperson/crosshair/dot/red_medium.vtf");
-					SendConVarValue(param1, g_cvThirdPerson, "1");
+					SetThirdPersonView(param1, true);
 					ReplyToCommand(param1, "TP + medium red dot");
 					ga_iSetting[param1] = param2;
 				}
 				case 5: {
 					ClientCommand(param1, "r_screenoverlay thirdperson/crosshair/dot/red_large.vtf");
-					SendConVarValue(param1, g_cvThirdPerson, "1");
+					SetThirdPersonView(param1, true);
 					ReplyToCommand(param1, "TP + large red dot");
 					ga_iSetting[param1] = param2;
 				}
 				case 6: {
 					ClientCommand(param1, "r_screenoverlay thirdperson/crosshair/dot/blue_small.vtf");
-					SendConVarValue(param1, g_cvThirdPerson, "1");
+					SetThirdPersonView(param1, true);
 					ReplyToCommand(param1, "TP + small blue dot");
 					ga_iSetting[param1] = param2;
 				}
 				case 7: {
 					ClientCommand(param1, "r_screenoverlay thirdperson/crosshair/dot/blue_medium.vtf");
-					SendConVarValue(param1, g_cvThirdPerson, "1");
+					SetThirdPersonView(param1, true);
 					ReplyToCommand(param1, "TP + medium blue dot");
 					ga_iSetting[param1] = param2;
 				}
 				case 8: {
 					ClientCommand(param1, "r_screenoverlay thirdperson/crosshair/dot/blue_large.vtf");
-					SendConVarValue(param1, g_cvThirdPerson, "1");
+					SetThirdPersonView(param1, true);
 					ReplyToCommand(param1, "TP + large blue dot");
 					ga_iSetting[param1] = param2;
 				}
@@ -265,7 +286,7 @@ public Action Event_WeaponIronsight(Event event, const char[] name, bool dontBro
 		return Plugin_Continue;
 	}
 	ClientCommand(client, "r_screenoverlay null");
-	SendConVarValue(client, g_cvThirdPerson, "0");
+	SetThirdPersonView(client, false);
 	return Plugin_Continue;
 }
 
@@ -298,7 +319,7 @@ void Frame_RestoreThirdPersonAfterWeaponDeploy(any data) {
 }
 
 void RestoreThirdPerson(int client) {
-	SendConVarValue(client, g_cvThirdPerson, "1");
+	SetThirdPersonView(client, true);
 	switch (ga_iSetting[client]) {
 		case 1: ClientCommand(client, "r_screenoverlay null");
 		case 3: ClientCommand(client, "r_screenoverlay thirdperson/crosshair/dot/red_small.vtf");
@@ -330,6 +351,6 @@ public void OnPluginEnd() {
 			continue;
 		}
 		ClientCommand(i, "r_screenoverlay null");
-		SendConVarValue(i, g_cvThirdPerson, "0");
+		SetThirdPersonView(i, false);
 	}
 }
