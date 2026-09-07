@@ -5,9 +5,10 @@
 #include <sdktools>
 #include <dhooks>
 
-#define PL_VERSION "1.1.2"
+#define PL_VERSION "1.1.6"
 #define GAMEDATA_FILE "insurgency-bm.games"
 #define MAX_PLAYER_CHECK_DEPTH 32
+#define GUNFIRE_CHECK_INTERVAL 0.5
 
 enum struct SmokeCloud {
 	int entityRef;
@@ -38,6 +39,7 @@ bool g_bEnabled;
 bool g_bRequireGunfire;
 float g_fDistanceSquared;
 float g_fSmokeRadiusSquared;
+float g_fNextGunfireCheckAt[MAXPLAYERS + 1];
 int g_iBotCheckDepth;
 int g_iPlayerCheckDepth;
 int g_iPlayerBotDepth;
@@ -73,9 +75,9 @@ public void OnPluginStart() {
 	g_cvSmokeWindow = CreateConVar("sm_botsmoke_window", "25",
 		"Seconds each smoke cloud is tracked after detonation, including fading. Not automatic theater detection. Changes affect future detonations.", _, true, 0.1, true, 300.0);
 	g_cvRevealTime = CreateConVar("sm_botsmoke_reveal_time", "5",
-		"Seconds human weapon fire near a smoke cloud exposes it to nearby bots. More shots refresh that cloud only; exposure never outlasts its tracked lifetime.", _, true, 0.1, true, 60.0);
+		"Seconds human weapon fire near or aimed through a smoke cloud exposes it to nearby bots. More shots refresh that cloud only; exposure never outlasts its tracked lifetime.", _, true, 0.1, true, 60.0);
 	g_cvSmokeRadius = CreateConVar("sm_botsmoke_radius", "290",
-		"Approximate cloud radius in units for nearby gunfire and sight-line checks. Not the exact native blocker or particle boundary.", _, true, 1.0, true, 1024.0);
+		"Approximate cloud radius in units for nearby gunfire, shot-path and sight-line checks. Not the exact native blocker or particle boundary.", _, true, 1.0, true, 1024.0);
 	g_cvRequireGunfire = CreateConVar("sm_botsmoke_require_gunfire", "1",
 		"1 = human gunfire exposes individual clouds. 0 = full sm_botsmoke_window after detonation, without gunfire hooks or cloud tracking. Switching modes clears the active window and waits for new smoke.", _, true, 0.0, true, 1.0);
 	g_hSmokeClouds = new ArrayList(sizeof(SmokeCloud));
@@ -199,7 +201,7 @@ public void Event_GrenadeDetonate(Event event, const char[] name, bool dontBroad
 	cloud.expires = now + g_cvSmokeWindow.FloatValue;
 	cloud.revealedUntil = 0.0;
 	g_hSmokeClouds.PushArray(cloud, sizeof(cloud));
-	// Gunfire mode waits for a nearby human shot before enabling vision hooks.
+	// Gunfire mode waits for a human shot near or aimed through the cloud.
 }
 
 void PruneSmokeClouds(float now) {
@@ -229,19 +231,33 @@ public void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 		return;
 
 	float now = GetGameTime();
+	// Throttle every human weapon independently, before pruning, cloud scans or traces.
+	if (now < g_fNextGunfireCheckAt[client])
+		return;	
+	g_fNextGunfireCheckAt[client] = now + GUNFIRE_CHECK_INTERVAL;
 	PruneSmokeClouds(now);
-	float eye[3], origin[3];
+	int count = g_hSmokeClouds.Length;
+	if (count == 0)
+		return;
+	float eye[3], origin[3], shotEnd[3];
 	GetClientEyePosition(client, eye);
 	SmokeCloud cloud;
-	bool changed;
-	int count = g_hSmokeClouds.Length;
+	bool changed, shotTraced, shotValid;
+	float revealUntil = now + g_cvRevealTime.FloatValue;
 	for (int i = 0; i < count; i++) {
 		g_hSmokeClouds.GetArray(i, cloud, sizeof(cloud));
 		GetSmokeOrigin(cloud, origin);
-		if (GetVectorDistance(eye, origin, true) > g_fSmokeRadiusSquared)
-			continue;
+		if (GetVectorDistance(eye, origin, true) > g_fSmokeRadiusSquared) {
+			// Nearby fire needs no trace. All other clouds share at most one trace per event.
+			if (!shotTraced) {
+				shotTraced = true;
+				shotValid = GetHumanShotEnd(client, eye, shotEnd);
+			}
+			if (!shotValid || !LineIntersectsSmoke(eye, shotEnd, origin))
+				continue;
+		}
 
-		float until = now + g_cvRevealTime.FloatValue;
+		float until = revealUntil;
 		if (until > cloud.expires)
 			until = cloud.expires;
 		if (until > cloud.revealedUntil)
@@ -253,6 +269,32 @@ public void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
 	}
 	if (changed)
 		QueueWindowUpdate();
+}
+
+bool GetHumanShotEnd(int client, const float eye[3], float end[3]) {
+	// weapon_fire provides no bullet trajectory. Approximate it with the current aim,
+	// stopping at the first shot-solid hit. This does not simulate spread or penetration.
+	float angles[3];
+	GetClientEyeAngles(client, angles);
+	Handle trace = TR_TraceRayFilterEx(eye, angles, MASK_SHOT, RayType_Infinite, TraceFilter_HumanShot, client);
+	bool valid = !TR_StartSolid(trace) && !TR_AllSolid(trace);
+	if (valid)
+		TR_GetEndPosition(end, trace);
+	delete trace;
+	return valid;
+}
+
+public bool TraceFilter_HumanShot(int entity, int contentsMask, any client) {
+	return entity != client;
+}
+
+public void OnClientDisconnect(int client) {
+	g_fNextGunfireCheckAt[client] = 0.0;
+}
+
+void ResetGunfireCheckTimes() {
+	for (int client = 1; client <= MaxClients; client++)
+		g_fNextGunfireCheckAt[client] = 0.0;
 }
 
 float GetExposureEnd(float now) {
@@ -308,6 +350,7 @@ bool CanBypassExposedSmoke(const float start[3], const float end[3]) {
 public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
 	g_hSmokeClouds.Clear();
 	g_fSmokeWindowEnd = 0.0;
+	ResetGunfireCheckTimes();
 	QueueWindowUpdate();
 }
 
@@ -390,6 +433,7 @@ public void OnPluginEnd() {
 public void OnMapStart() {
 	g_hSmokeClouds.Clear();
 	g_fSmokeWindowEnd = 0.0;
+	ResetGunfireCheckTimes();
 	DisableVisionHooks();
 	g_bResetVisionHooks = false;
 	g_iBotCheckDepth = 0;
@@ -411,6 +455,7 @@ public void OnSettingsChanged(ConVar convar, const char[] oldValue, const char[]
 		// No reconstruction of clouds when switching modes or re-enabling.
 		g_hSmokeClouds.Clear();
 		g_fSmokeWindowEnd = 0.0;
+		ResetGunfireCheckTimes();
 		g_bResetVisionHooks = true;
 		QueueWindowUpdate();
 	}
@@ -548,7 +593,7 @@ public Action Command_Status(int client, int args) {
 	}
 
 	ReplyToCommand(client, "[Bot Smoke] v%s | %s | distance %.0f units | native bot-vision threshold 64.", PL_VERSION, g_bEnabled ? "ENABLED" : "DISABLED", g_cvDistance.FloatValue);
-	ReplyToCommand(client, "[Bot Smoke] Mode: %s.", g_bRequireGunfire ? "human gunfire exposes individual clouds" : "full smoke window; gunfire and cloud-radius checks skipped");
+	ReplyToCommand(client, "[Bot Smoke] Mode: %s.", g_bRequireGunfire ? "human gunfire near or aimed through smoke exposes individual clouds" : "full smoke window; gunfire and cloud-radius checks skipped");
 	float remaining = g_fSmokeWindowEnd - GetGameTime();
 	if (remaining < 0.0)
 		remaining = 0.0;
@@ -567,6 +612,7 @@ public Action Command_Status(int client, int args) {
 				exposedClouds++;
 		}
 		ReplyToCommand(client, "[Bot Smoke] Tracked live clouds: %d | exposed clouds: %d.", activeClouds, exposedClouds);
+		ReplyToCommand(client, "[Bot Smoke] Gunfire checks: at most once every %.1fs per human player, for all weapons.", GUNFIRE_CHECK_INTERVAL);
 	}
 	else
 		ReplyToCommand(client, "[Bot Smoke] Per-cloud tracking is OFF; only the latest smoke expiry is stored.");
