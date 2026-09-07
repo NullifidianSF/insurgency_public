@@ -324,6 +324,48 @@
 
 		"Signatures"
 		{
+			// CINSPlayer instance: bool IsLineOfSightClear(const Vector &point,
+			// CBaseCombatCharacter::LineOfSightCheckType checkType, CBaseEntity *ignore) const.
+			// ToPoint is a unique gamedata alias for this overloaded method. Bots and humans
+			// both call it; the smoke test filters fake clients before enabling its exception.
+			// Windows body 0x102C0AC0; Linux exact symbol below. No world traces bypassed.
+			"CINSPlayer::IsLineOfSightClearToPoint"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x70\x53\x56\x57\xFF\x75\x10\x8B\x7D\x08\x8B\xF1\xFF\x75\x0C\x57"
+				"linux"		"@_ZNK10CINSPlayer18IsLineOfSightClearERK6VectorN20CBaseCombatCharacter20LineOfSightCheckTypeEP11CBaseEntity"
+			}
+
+			// Bot vision instance: bool (const Vector &point). Original world trace is preserved.
+			// Windows server.dll 0x1027C420; pattern unique in the inspected 32-bit build.
+			"CINSBotVision::IsLineOfSightClear"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x8B\x01\x81\xEC\x94\x00\x00\x00\x8B\x80\xC0\x00\x00\x00\x56\xFF\xD0\x85\xC0\x0F\x84\xD8\x01\x00\x00\x8D\xB0\xB4\xDF"
+				"linux"		"@_ZNK13CINSBotVision18IsLineOfSightClearERK6Vector"
+			}
+
+			// Bot vision instance: bool (const Vector &target, Vector start). The second Vector
+			// is passed BY VALUE, occupying three float stack slots on these x86 builds.
+			// Windows server.dll 0x1027C1A0; pattern unique in the inspected build.
+			"CINSBotVision::IsLineOfFireClear"
+			{
+				"library"	"server"
+				"windows"	"\x53\x8B\xDC\x83\xEC\x08\x83\xE4\xF0\x83\xC4\x04\x55\x8B\x6B\x04\x89\x6C\x24\x04\x8B\xEC\x8B\x01\x81\xEC\xB8\x00\x00\x00\x8B\x80"
+				"linux"		"@_ZN13CINSBotVision17IsLineOfFireClearERK6VectorS0_"
+			}
+
+			// Visibility-manager instance: bool (const Vector &start, const Vector &end).
+			// True means a registered visual blocker intersects the segment. Used by more
+			// than bot vision: never globally override this without caller scoping.
+			// Windows server.dll 0x101EDC60; pattern unique in the inspected build.
+			"CVisibilityBlockers::DoesLineIntersectBlocker"
+			{
+				"library"	"server"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x14\x53\x8B\xD9\x8B\x43\x24\x85\xC0\x75\x09\x32\xC0\x5B\x8B\xE5\x5D\xC2\x08\x00\x56\x33\xF6\x57\x85\xC0\x7E"
+				"linux"		"@_ZN19CVisibilityBlockers24DoesLineIntersectBlockerERK6VectorS2_"
+			}
+
 			// Static SDKCall: void (int shooter, const Vector &origin, const Vector &direction,
 			// const QAngle &spread, float distance, int weaponDefinition, int ammoType,
 			// int unknown, int seed). Used only for the visual bullet tracer effect.
