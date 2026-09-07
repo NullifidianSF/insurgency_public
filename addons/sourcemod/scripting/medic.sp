@@ -262,6 +262,7 @@ float ga_fHealthPackLastOrigin[MAX_ENTITIES + 1][3];
 int ga_iWornHealthPackRef[MAXPLAYERS + 1] = {INVALID_ENT_REFERENCE, ...};
 float ga_fAttachedHealAfter[MAXPLAYERS + 1];
 ConVar g_cvAttachedPackEnabled;
+ConVar g_cvAttachedPackLifetime;
 ConVar g_cvAttachedPackHeal;
 ConVar g_cvAttachedPackDamageDelay;
 ConVar g_cvAttachedPackOffset;
@@ -376,7 +377,7 @@ public Plugin myinfo = {
 	name = "medic",
 	author = "Jared Ballou, Daimyo, naong, Lua, Nullifidian & GPT/Codex",
 	description = "Adds the ability to revive with the Medic class and a health kit.",
-	version = "1.3.46",
+	version = "1.3.49",
 	url = ""
 };
 
@@ -3184,7 +3185,7 @@ static void CheckThrownHealthkitImpact(int entity, const float origin[3]) {
 	// its centre short of a player. Include walls/props so they block the catch.
 	if (ga_bHealthPackCanAttach[entity] && ga_iHealthPackPendingUserId[entity] == 0
 		&& g_cvAttachedPackEnabled.BoolValue) {
-		float mins[3] = {-6.0, -6.0, -6.0}, maxs[3] = {6.0, 6.0, 6.0};
+		float mins[3] = {-12.0, -12.0, -12.0}, maxs[3] = {12.0, 12.0, 12.0};
 		Handle trace = TR_TraceHullFilterEx(ga_fHealthPackLastOrigin[entity], origin,
 			mins, maxs, MASK_SHOT, TraceFilter_ThrownHealthkit, entity);
 		int hit = TR_DidHit(trace) ? TR_GetEntityIndex(trace) : -1;
@@ -3334,9 +3335,11 @@ void Frame_AttachHealthkit(any ref) {
 		return;
 	InitHealthkitEntity(entity);
 	char model[PLATFORM_MAX_PATH];
+	if (ga_fHealthPackExpires[entity] <= GetGameTime())
+		return;
 	GetEntPropString(entity, Prop_Data, "m_ModelName", model, sizeof(model));
 	if (CreateAttachedHealthkit(target, ga_iHealthPackOwnerUserId[entity], model,
-		ga_iHealthPack_Amount[entity], ga_fHealthPackExpires[entity]) == -1) {
+		ga_iHealthPack_Amount[entity]) == -1) {
 		if (g_cvAttachedPackDebug.BoolValue)
 			LogMessage("[Medpack attach] entity=%d creation failed for %N model=%s reserve=%d", entity, target, model, ga_iHealthPack_Amount[entity]);
 		return;
@@ -3348,7 +3351,7 @@ void Frame_AttachHealthkit(any ref) {
 	ga_iHealthPack_Amount[entity] = 0;
 	SetEntityRenderMode(entity, RENDER_NONE);
 	SafeKillIdx(entity);
-	PrintToChat(target, "\x070088cc[Medic]\x01 A medkit is attached to your back. It heals automatically; bleeding still needs a tourniquet.");
+	PrintHintText(target, "Medkit attached to your back. It heals automatically.\nBleeding still needs a tourniquet.");
 }
 
 static void PositionAttachedHealthkit(int entity) {
@@ -3361,9 +3364,9 @@ static void PositionAttachedHealthkit(int entity) {
 	AcceptEntityInput(entity, "SetLocalAngles");
 }
 
-static int CreateAttachedHealthkit(int target, int ownerUserId, const char[] model, int reserve, float expires) {
+static int CreateAttachedHealthkit(int target, int ownerUserId, const char[] model, int reserve) {
 	if (EntRefToEntIndex(ga_iWornHealthPackRef[target]) > MaxClients || reserve <= 0
-		|| expires <= GetGameTime() || model[0] == '\0'
+		|| model[0] == '\0'
 		|| !IsModelPrecached(model))
 		return -1;
 	int entity = CreateEntityByName("prop_dynamic_override");
@@ -3404,8 +3407,9 @@ static int CreateAttachedHealthkit(int target, int ownerUserId, const char[] mod
 	SDKHook(entity, SDKHook_SetTransmit, AttachedHealthkit_SetTransmit);
 	ga_iHealthPackOwnerUserId[entity] = ownerUserId;
 	ga_iHealthPack_Amount[entity] = reserve;
-	ga_fHealthPackExpires[entity] = expires;
 	ga_fHealthPackAttachedAt[entity] = GetGameTime();
+	float expires = ga_fHealthPackAttachedAt[entity] + g_cvAttachedPackLifetime.FloatValue;
+	ga_fHealthPackExpires[entity] = expires;
 	ga_bHealthkitInit[entity] = true;
 	TrackHealthkit(entity);
 	DataPack data;
@@ -3566,7 +3570,7 @@ public Action Cmd_MedpackTest(int client, int args) {
 	}
 	// Test packs never award medic/HLstats credit and do not consume inventory.
 	int entity = CreateAttachedHealthkit(target, 0, ATTACHED_MEDPACK_TEST_MODEL,
-		g_iMedpackHealthAmount, GetGameTime() + Healthkit_Timer_Timeout);
+		g_iMedpackHealthAmount);
 	if (entity == -1)
 		ReplyToCommand(client, "[Medic Test] Could not attach pack. Check centermass attachment/model and pack capacity.");
 	else
@@ -4391,6 +4395,7 @@ stock void NF_KillEntity(any entref) {
 void SetupConVars() {
 	g_cvAttachedPackDebug = CreateConVar("sm_medpack_attach_debug", "0", "Log medpack throw eligibility, catches, landing and attachment failures", _, true, 0.0, true, 1.0);
 	g_cvAttachedPackEnabled = CreateConVar("sm_medpack_attach_enabled", "1", "Medic-thrown medpacks attach on teammate impact", _, true, 0.0, true, 1.0);
+	g_cvAttachedPackLifetime = CreateConVar("sm_medpack_attach_lifetime", "600", "Attached pack lifetime in seconds, starting on attachment; applies to new attachments", _, true, 1.0);
 	g_cvAttachedPackHeal = CreateConVar("sm_medpack_attach_heal", "2", "Attached pack HP restored per 0.5 seconds", _, true, 1.0, true, 100.0);
 	g_cvAttachedPackDamageDelay = CreateConVar("sm_medpack_attach_damage_delay", "3.0", "Attached healing pauses this many seconds after health damage", _, true, 0.0, true, 60.0);
 	g_cvAttachedPackOffset = CreateConVar("sm_medpack_attach_offset", "0 -7 0", "Centermass-local attached pack position: x y z; negative Y moves toward the back");
