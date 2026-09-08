@@ -7,7 +7,7 @@
 #include <clientprefs>
 #include <dbi>
 
-#define PL_VERSION		"3.49"
+#define PL_VERSION		"3.49.1"
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 // Optional MySQL entry in databases.cfg. Local SQLite is used when it is not configured.
 #define BLUEPRINT_DATABASE_CONFIG "props_blueprints"
@@ -236,6 +236,8 @@ int		ga_iLastMattressOwner[MAXPLAYERS + 1];
 float	ga_fLastMattressLaunchTime[MAXPLAYERS + 1];
 bool	ga_bMattressDeath[MAXPLAYERS + 1];
 int		ga_iMattressKiller[MAXPLAYERS + 1];
+int		ga_iMattressLaunchGeneration[MAXPLAYERS + 1];
+int		g_iMattressLaunchEpoch;
 
 bool	ga_bHelpMenuOpen[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bPropRotateMenuOpen[MAXPLAYERS + 1] = {false, ...};
@@ -651,6 +653,7 @@ public Action Event_PlayerPickSquad(Event event, const char[] name, bool dontBro
 }
 
 public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
+	g_iMattressLaunchEpoch++;
 	for (int i = 1; i <= MaxClients; i++) {
 		if (!IsClientInGame(i) || IsFakeClient(i))
 			continue;
@@ -682,6 +685,7 @@ public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadca
 	if (client < 1 || client > MaxClients || !IsClientInGame(client))
 		return Plugin_Continue;
 
+	ga_iMattressLaunchGeneration[client]++;
 	ga_iResupplyCounter[client] = g_iResupplyDelay;
 	ga_iLastInflictorPropId[client] = -1;
 	ga_bMattressJumpArmed[client] = false;
@@ -2820,7 +2824,48 @@ static void ApplyMattressBoost(int client, int mattress, float boost, float angl
 		}
 	}
 
-	SetEntPropVector(client, Prop_Data, "m_vecBaseVelocity", velocity);
+	// Base velocity has a limited network range; apply strong launches outside the touch callback.
+	DataPack pack = new DataPack();
+	pack.WriteCell(GetClientSerial(client));
+	pack.WriteCell(++ga_iMattressLaunchGeneration[client]);
+	pack.WriteCell(g_iMattressLaunchEpoch);
+	pack.WriteFloat(velocity[0]);
+	pack.WriteFloat(velocity[1]);
+	pack.WriteFloat(velocity[2]);
+	RequestFrame(NF_ApplyMattressBoost, pack);
+}
+
+static void NF_ApplyMattressBoost(any data) {
+	DataPack pack = view_as<DataPack>(data);
+	pack.Reset();
+	int client = GetClientFromSerial(pack.ReadCell());
+	int generation = pack.ReadCell();
+	int epoch = pack.ReadCell();
+	float boost[3];
+	boost[0] = pack.ReadFloat();
+	boost[1] = pack.ReadFloat();
+	boost[2] = pack.ReadFloat();
+	delete pack;
+
+	if (client < 1 || client > MaxClients || epoch != g_iMattressLaunchEpoch)
+		return;
+	if (generation != ga_iMattressLaunchGeneration[client] || !IsClientInGame(client) || !IsPlayerAlive(client))
+		return;
+
+	MoveType moveType = GetEntityMoveType(client);
+	if (moveType == MOVETYPE_NONE || moveType == MOVETYPE_NOCLIP || moveType == MOVETYPE_OBSERVER || moveType == MOVETYPE_LADDER)
+		return;
+
+	float velocity[3];
+	GetEntPropVector(client, Prop_Data, "m_vecAbsVelocity", velocity);
+	velocity[0] += boost[0];
+	velocity[1] += boost[1];
+	velocity[2] = boost[2];
+
+	// Ground movement would otherwise clear the new upward velocity.
+	SetEntPropEnt(client, Prop_Send, "m_hGroundEntity", -1);
+	SetEntityFlags(client, GetEntityFlags(client) & ~FL_ONGROUND);
+	TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, velocity);
 }
 
 public Action SHook_OnTouchMattress(int entity, int touch) {
@@ -5154,6 +5199,7 @@ static void BroadcastBuildTip() {
 }
 
 public void OnMapEnd() {
+	g_iMattressLaunchEpoch++;
 	JC_Stop();
 	if (g_hJammers != null) {
 		delete g_hJammers;
