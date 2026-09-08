@@ -6,6 +6,8 @@
 #include <sourcemod>
 #include <clientprefs>
 
+native bool GuidedRockets_IsClientGuiding(int client);
+
 Handle	g_hClientCookie = INVALID_HANDLE;
 
 ConVar	g_cvThirdPerson = null;
@@ -21,12 +23,13 @@ public Plugin myinfo = {
 	name		= "thirdperson",
 	author		= "Nullifidian & Codex",
 	description	= "third person view command",
-	version		= "2.0.3",
+	version		= "2.1.1",
 	url			= ""
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
 	g_bLateLoad = late;
+	MarkNativeAsOptional("GuidedRockets_IsClientGuiding");
 	RegPluginLibrary("bm_thirdperson");
 	CreateNative("ThirdPerson_IsClientActive", Native_ThirdPerson_IsClientActive);
 	return APLRes_Success;
@@ -42,6 +45,45 @@ public any Native_ThirdPerson_IsClientActive(Handle plugin, int numParams) {
 void SetThirdPersonView(int client, bool enabled) {
 	SendConVarValue(client, g_cvThirdPerson, enabled ? "1" : "0");
 	ga_bThirdPersonActive[client] = enabled;
+}
+
+void SetThirdPersonOverlay(int client, const char[] material) {
+	if (GetFeatureStatus(FeatureType_Native, "GuidedRockets_IsClientGuiding") == FeatureStatus_Available
+		&& GuidedRockets_IsClientGuiding(client))
+		ClientCommand(client, "r_screenoverlay null");
+	else
+		ClientCommand(client, "r_screenoverlay %s", material);
+}
+
+public void GuidedRockets_OnGuidanceChanged(int client, bool active) {
+	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
+		return;
+	if (active)
+		SetThirdPersonOverlay(client, "null");
+	else
+		RequestFrame(Frame_RefreshThirdPersonOverlay, GetClientUserId(client));
+}
+
+public void OnLibraryAdded(const char[] name) {
+	if (StrEqual(name, "bm_guided_rockets"))
+		RefreshConnectedClientOverlays();
+}
+
+public void OnLibraryRemoved(const char[] name) {
+	if (StrEqual(name, "bm_guided_rockets"))
+		RefreshConnectedClientOverlays();
+}
+
+void RefreshConnectedClientOverlays() {
+	for (int client = 1; client <= MaxClients; client++)
+		if (IsClientInGame(client) && !IsFakeClient(client))
+			RequestFrame(Frame_RefreshThirdPersonOverlay, GetClientUserId(client));
+}
+
+public void Frame_RefreshThirdPersonOverlay(any userid) {
+	int client = GetClientOfUserId(userid);
+	if (client > 0 && IsClientInGame(client) && !IsFakeClient(client))
+		RefreshThirdPersonOverlay(client);
 }
 
 public void OnClientPutInServer(int client) {
@@ -121,7 +163,7 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 	if (!client || !IsClientInGame(client) || IsFakeClient(client) || ga_iSetting[client] == 0) {
 		return Plugin_Continue;
 	}
-	ClientCommand(client, "r_screenoverlay null");
+	SetThirdPersonOverlay(client, "null");
 	SetThirdPersonView(client, false);
 	return Plugin_Continue;
 }
@@ -150,7 +192,7 @@ public Action cmd_firstPerson(int client, int args) {
 		return Plugin_Handled;
 	}
 
-	ClientCommand(client, "r_screenoverlay null");
+	SetThirdPersonOverlay(client, "null");
 	SetThirdPersonView(client, false);
 	ReplyToCommand(client, "TP off");
 	ga_iSetting[client] = 0;
@@ -210,13 +252,13 @@ public int Handle_TpMenu(Menu menu, MenuAction action, int param1, int param2) {
 		case MenuAction_Select: {
 			switch (param2) {
 				case 0: {
-					ClientCommand(param1, "r_screenoverlay null");
+					SetThirdPersonOverlay(param1, "null");
 					SetThirdPersonView(param1, false);
 					ReplyToCommand(param1, "TP off");
 					ga_iSetting[param1] = param2;
 				}
 				case 1: {
-					ClientCommand(param1, "r_screenoverlay null");
+					SetThirdPersonOverlay(param1, "null");
 					SetThirdPersonView(param1, true);
 					ReplyToCommand(param1, "TP on");
 					ga_iSetting[param1] = param2;
@@ -236,37 +278,37 @@ public int Handle_TpMenu(Menu menu, MenuAction action, int param1, int param2) {
 					}
 				}
 				case 3: {
-					ClientCommand(param1, "r_screenoverlay thirdperson/crosshair/dot/red_small.vtf");
+					SetThirdPersonOverlay(param1, "thirdperson/crosshair/dot/red_small.vtf");
 					SetThirdPersonView(param1, true);
 					ReplyToCommand(param1, "TP + small red dot");
 					ga_iSetting[param1] = param2;
 				}
 				case 4: {
-					ClientCommand(param1, "r_screenoverlay thirdperson/crosshair/dot/red_medium.vtf");
+					SetThirdPersonOverlay(param1, "thirdperson/crosshair/dot/red_medium.vtf");
 					SetThirdPersonView(param1, true);
 					ReplyToCommand(param1, "TP + medium red dot");
 					ga_iSetting[param1] = param2;
 				}
 				case 5: {
-					ClientCommand(param1, "r_screenoverlay thirdperson/crosshair/dot/red_large.vtf");
+					SetThirdPersonOverlay(param1, "thirdperson/crosshair/dot/red_large.vtf");
 					SetThirdPersonView(param1, true);
 					ReplyToCommand(param1, "TP + large red dot");
 					ga_iSetting[param1] = param2;
 				}
 				case 6: {
-					ClientCommand(param1, "r_screenoverlay thirdperson/crosshair/dot/blue_small.vtf");
+					SetThirdPersonOverlay(param1, "thirdperson/crosshair/dot/blue_small.vtf");
 					SetThirdPersonView(param1, true);
 					ReplyToCommand(param1, "TP + small blue dot");
 					ga_iSetting[param1] = param2;
 				}
 				case 7: {
-					ClientCommand(param1, "r_screenoverlay thirdperson/crosshair/dot/blue_medium.vtf");
+					SetThirdPersonOverlay(param1, "thirdperson/crosshair/dot/blue_medium.vtf");
 					SetThirdPersonView(param1, true);
 					ReplyToCommand(param1, "TP + medium blue dot");
 					ga_iSetting[param1] = param2;
 				}
 				case 8: {
-					ClientCommand(param1, "r_screenoverlay thirdperson/crosshair/dot/blue_large.vtf");
+					SetThirdPersonOverlay(param1, "thirdperson/crosshair/dot/blue_large.vtf");
 					SetThirdPersonView(param1, true);
 					ReplyToCommand(param1, "TP + large blue dot");
 					ga_iSetting[param1] = param2;
@@ -285,7 +327,7 @@ public Action Event_WeaponIronsight(Event event, const char[] name, bool dontBro
 	if (!IsClientInGame(client) || IsFakeClient(client) || ga_iSetting[client] == 0 || !ga_iFpsAds[client]) {
 		return Plugin_Continue;
 	}
-	ClientCommand(client, "r_screenoverlay null");
+	SetThirdPersonOverlay(client, "null");
 	SetThirdPersonView(client, false);
 	return Plugin_Continue;
 }
@@ -320,14 +362,22 @@ void Frame_RestoreThirdPersonAfterWeaponDeploy(any data) {
 
 void RestoreThirdPerson(int client) {
 	SetThirdPersonView(client, true);
+	RefreshThirdPersonOverlay(client);
+}
+
+void RefreshThirdPersonOverlay(int client) {
+	if (!IsPlayerAlive(client) || !ga_bThirdPersonActive[client]) {
+		SetThirdPersonOverlay(client, "null");
+		return;
+	}
 	switch (ga_iSetting[client]) {
-		case 1: ClientCommand(client, "r_screenoverlay null");
-		case 3: ClientCommand(client, "r_screenoverlay thirdperson/crosshair/dot/red_small.vtf");
-		case 4: ClientCommand(client, "r_screenoverlay thirdperson/crosshair/dot/red_medium.vtf");
-		case 5: ClientCommand(client, "r_screenoverlay thirdperson/crosshair/dot/red_large.vtf");
-		case 6: ClientCommand(client, "r_screenoverlay thirdperson/crosshair/dot/blue_small.vtf");
-		case 7: ClientCommand(client, "r_screenoverlay thirdperson/crosshair/dot/blue_medium.vtf");
-		case 8: ClientCommand(client, "r_screenoverlay thirdperson/crosshair/dot/blue_large.vtf");
+		case 3: SetThirdPersonOverlay(client, "thirdperson/crosshair/dot/red_small.vtf");
+		case 4: SetThirdPersonOverlay(client, "thirdperson/crosshair/dot/red_medium.vtf");
+		case 5: SetThirdPersonOverlay(client, "thirdperson/crosshair/dot/red_large.vtf");
+		case 6: SetThirdPersonOverlay(client, "thirdperson/crosshair/dot/blue_small.vtf");
+		case 7: SetThirdPersonOverlay(client, "thirdperson/crosshair/dot/blue_medium.vtf");
+		case 8: SetThirdPersonOverlay(client, "thirdperson/crosshair/dot/blue_large.vtf");
+		default: SetThirdPersonOverlay(client, "null");
 	}
 }
 
@@ -350,7 +400,7 @@ public void OnPluginEnd() {
 		if (!IsClientInGame(i) || IsFakeClient(i) || ga_iSetting[i] == 0) {
 			continue;
 		}
-		ClientCommand(i, "r_screenoverlay null");
+		SetThirdPersonOverlay(i, "null");
 		SetThirdPersonView(i, false);
 	}
 }
