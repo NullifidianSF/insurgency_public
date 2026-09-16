@@ -21,6 +21,7 @@
 #include <sourcemod>
 #include <sdktools>
 #include <sdktools_tempents>
+#include <bm_spawn_reviews>
 
 #define MAX_CPS				32
 #define MAX_CAPTURE_ZONES	64
@@ -30,7 +31,6 @@
 #define TEAM_INSURGENT		3
 
 #define BTN_JUMP			(1 << 1)
-#define FL_ONGROUND			(1 << 0)
 static int g_iPrevButtons[MAXPLAYERS + 1];
 
 static const char ga_Letters[][] = {
@@ -83,6 +83,18 @@ int		g_iSelectedCP[MAXPLAYERS + 1] = { -1, ... };
 bool	g_bAnyMenuOpen[MAXPLAYERS + 1] = { false, ... };
 Handle	g_hVisTimer[MAXPLAYERS + 1] = { null, ... };
 bool	g_bAddMenuOpen[MAXPLAYERS + 1] = { false, ... };
+bool	g_bBrowseMenuOpen[MAXPLAYERS + 1];
+bool	g_bBrowseCA[MAXPLAYERS + 1];
+bool	g_bBrowseLastCA[MAXPLAYERS + 1][MAX_CPS];
+int		g_iBrowseIndex[MAXPLAYERS + 1][MAX_CPS][2];
+int		g_iSpawnRevision[MAX_CPS][2];
+bool g_bReviewOpen[MAXPLAYERS + 1];
+bool g_bReviewShowResolved[MAXPLAYERS + 1];
+int g_iReviewID[MAXPLAYERS + 1];
+float g_vReviewPoint[MAXPLAYERS + 1][3];
+bool g_bReviewNoclip[MAXPLAYERS + 1];
+MoveType g_ReviewMoveType[MAXPLAYERS + 1];
+float g_vReviewReturn[MAXPLAYERS + 1][3];
 
 // per-client undo history: each entry = (cp << 1) | (isCA ? 1 : 0)
 ArrayList g_UndoStack[MAXPLAYERS + 1] = { null, ... };
@@ -119,7 +131,7 @@ public Plugin myinfo =
 	name		= "bm_botspawns",
 	author		= "Nullifidian + ChatGPT",
 	description = "A tool for manually placing bot spawn locations per CP and CA for the bm_botrespawn plugin. Remember to remove this plugin after use.",
-	version		= "1.1.0",
+	version		= "1.3.2",
 	url			= ""
 };
 
@@ -160,6 +172,13 @@ public void OnMapStart()
 		g_iSelectedCP[c] = (g_iNumCPs > 0) ? 0 : -1;
 		g_bAnyMenuOpen[c] = false;
 		g_bAddMenuOpen[c] = false;
+		g_bBrowseMenuOpen[c] = false;
+		g_bBrowseCA[c] = false;
+		BM_ResetBrowsePosition(c);
+		g_bReviewOpen[c] = false;
+		g_bReviewShowResolved[c] = false;
+		g_bReviewNoclip[c] = false;
+		g_iReviewID[c] = 0;
 		KillVisTimer(c);
 		KillSpeedTimer(c);
 		if (g_UndoStack[c] != null) g_UndoStack[c].Clear();
@@ -196,6 +215,12 @@ void FR_BMCacheCaptureZones() {
 
 public void OnClientDisconnect(int client)
 {
+	g_bReviewNoclip[client] = false;
+	BM_StopReview(client);
+	g_bReviewShowResolved[client] = false;
+	g_iReviewID[client] = 0;
+	BM_StopBrowsing(client);
+	BM_ResetBrowsePosition(client);
 	if (g_UndoStack[client] != null) g_UndoStack[client].Clear();
 
 	if (g_bAnyMenuOpen[client])
@@ -206,13 +231,6 @@ public void OnClientDisconnect(int client)
 		g_bAnyMenuOpen[client] = false;
 		g_bAddMenuOpen[client] = false;
 		KillVisTimer(client);
-
-		if (g_iCapBlockUsers > 0)
-		{
-			g_iCapBlockUsers--;
-			if (g_iCapBlockUsers == 0)
-				BM_CZAllowClients(true);
-		}
 	}
 
 	g_iPrevButtons[client] = 0;
@@ -224,6 +242,8 @@ public void OnClientDisconnect(int client)
 public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
+	if (client > 0)
+		g_bReviewNoclip[client] = false;
 	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client) || !IsPlayerAlive(client) || GetClientTeam(client) != TEAM_SECURITY)
 		return Plugin_Continue;
 
@@ -302,6 +322,8 @@ public Action Cmd_LoadNow(int client, int args)
 public Action Cmd_ClearVis(int client, int args)
 {
 	if (!BM_IsClientOK(client)) return Plugin_Handled;
+	BM_StopReview(client);
+	BM_StopBrowsing(client);
 
 	if (g_bAddMenuOpen[client])
 		BM_RemoveCapUser();
@@ -320,6 +342,8 @@ public Action Cmd_ClearVis(int client, int args)
 
 static void OpenMainMenu(int client)
 {
+	BM_StopReview(client);
+	BM_StopBrowsing(client);
 	char cpfmt[16];
 	BM_CPFmt(g_iSelectedCP[client], cpfmt, sizeof cpfmt);
 
@@ -333,6 +357,8 @@ static void OpenMainMenu(int client)
 	m.AddItem("2", "Add spawns");
 	m.AddItem("3", "Remove spawns");
 	m.AddItem("4", "Save to file");
+	m.AddItem("5", "Browse spawns");
+	m.AddItem("6", "Review marked areas");
 
 	m.ExitButton = true;
 	m.Display(client, 0);
@@ -369,9 +395,553 @@ public int H_Main(Menu m, MenuAction a, int client, int item)
 			case '2': OpenAddMenu(client);
 			case '3': OpenRemoveMenu(client);
 			case '4': OpenSaveConfirm(client);
+			case '5': OpenBrowseTypeMenu(client, true);
+			case '6': OpenReviewList(client);
 		}
 	}
 	return 0;
+}
+
+static void BM_RestoreReviewMovement(int client, bool returnPosition = true) {
+	if (!g_bReviewNoclip[client])
+		return;
+	g_bReviewNoclip[client] = false;
+	if (!IsClientInGame(client) || !IsPlayerAlive(client))
+		return;
+	if (returnPosition)
+		TeleportEntity(client, g_vReviewReturn[client], NULL_VECTOR, view_as<float>({0.0, 0.0, 0.0}));
+	SetEntityMoveType(client, g_ReviewMoveType[client]);
+}
+
+static void BM_StopReview(int client) {
+	BM_RestoreReviewMovement(client);
+	if (!g_bReviewOpen[client])
+		return;
+	g_bReviewOpen[client] = false;
+	g_bAnyMenuOpen[client] = false;
+	KillVisTimer(client);
+	BM_RemoveCapUser();
+}
+
+static KeyValues BM_LoadReviewsForClient(int client) {
+	char error[192];
+	KeyValues kv = BMReview_Load(error, sizeof error);
+	if (kv == null)
+		PrintToChat(client, "[BM] %s", error);
+	return kv;
+}
+
+static void OpenReviewList(int client) {
+	KeyValues kv = BM_LoadReviewsForClient(client);
+	if (kv == null) {
+		OpenMainMenu(client);
+		return;
+	}
+	if (!g_bReviewOpen[client]) {
+		g_bReviewOpen[client] = true;
+		BM_AddCapUser();
+	}
+	g_bAnyMenuOpen[client] = true;
+	g_iReviewID[client] = 0;
+	StartVisTimer(client);
+	ArrayList ids = BMReview_IDs(kv, g_bReviewShowResolved[client]);
+	Menu menu = new Menu(H_ReviewList);
+	menu.SetTitle("Review marked areas: %d\n%s", ids.Length, g_bReviewShowResolved[client] ? "Open and resolved" : "Unresolved only");
+	menu.AddItem("filter", g_bReviewShowResolved[client] ? "Hide resolved markers" : "Show resolved markers");
+	BMReview mark;
+	for (int i = 0; i < ids.Length; i++) {
+		if (!BMReview_Get(kv, ids.Get(i), mark))
+			continue;
+		char key[16], label[256];
+		IntToString(mark.id, key, sizeof key);
+		Format(label, sizeof label, "#%d %s%s", mark.id, mark.resolved ? "[Resolved] " : "", mark.note[0] ? mark.note : "(no note)");
+		menu.AddItem(key, label);
+	}
+	if (ids.Length == 0)
+		menu.AddItem("none", "(no review markers)", ITEMDRAW_DISABLED);
+	delete ids;
+	delete kv;
+	menu.ExitBackButton = true;
+	menu.Display(client, 0);
+}
+
+public int H_ReviewList(Menu menu, MenuAction action, int client, int item) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Select) {
+		char key[16];
+		menu.GetItem(item, key, sizeof key);
+		if (StrEqual(key, "filter")) {
+			g_bReviewShowResolved[client] = !g_bReviewShowResolved[client];
+			OpenReviewList(client);
+		}
+		else
+			OpenReviewPoint(client, StringToInt(key));
+	}
+	else if (action == MenuAction_Cancel) {
+		BM_StopReview(client);
+		if (item == MenuCancel_ExitBack)
+			OpenMainMenu(client);
+	}
+	return 0;
+}
+
+static void OpenReviewPoint(int client, int id, bool teleport = false) {
+	if (!g_bReviewOpen[client]) {
+		OpenMainMenu(client);
+		return;
+	}
+	KeyValues kv = BM_LoadReviewsForClient(client);
+	if (kv == null) {
+		OpenMainMenu(client);
+		return;
+	}
+	BMReview mark;
+	if (!BMReview_Get(kv, id, mark) || (mark.resolved && !g_bReviewShowResolved[client])) {
+		delete kv;
+		OpenReviewList(client);
+		return;
+	}
+	ArrayList ids = BMReview_IDs(kv, g_bReviewShowResolved[client]);
+	int index = ids.FindValue(id);
+	int count = ids.Length;
+	delete kv;
+	g_iReviewID[client] = id;
+	g_vReviewPoint[client] = mark.point;
+	if (teleport)
+		BM_TeleportNearReview(client, mark);
+	char date[64], context[64];
+	FormatTime(date, sizeof date, "%Y-%m-%d %H:%M", mark.created);
+	if (mark.objective >= 0)
+		Format(context, sizeof context, "Observed during CP#%d (%s) | %s", mark.objective, ga_Letters[LetterIndex(mark.objective)], mark.counterattack ? "CA" : "normal");
+	else
+		strcopy(context, sizeof context, "Objective unknown");
+	Menu menu = new Menu(H_ReviewPoint);
+	menu.SetTitle("Review #%d (%d/%d) %s\n%s\n%s\n%s | %s\n%.0f, %.0f, %.0f",
+		id, index + 1, count, mark.resolved ? "[Resolved]" : "", mark.note[0] ? mark.note : "(no note)",
+		context, mark.admin, date, mark.point[0], mark.point[1], mark.point[2]);
+	char key[32];
+	Format(key, sizeof key, "t:%d", id);
+	menu.AddItem(key, "Teleport near marked location");
+	Format(key, sizeof key, "v:%d", id);
+	menu.AddItem(key, "Recorded viewpoint (free flight)");
+	Format(key, sizeof key, "n:%d", ids.Get((index + 1) % count));
+	menu.AddItem(key, "Next marker (teleport)", count > 1 ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+	Format(key, sizeof key, "n:%d", ids.Get((index + count - 1) % count));
+	menu.AddItem(key, "Previous marker (teleport)", count > 1 ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+	Format(key, sizeof key, "%c:%d", mark.resolved ? 'u' : 'r', id);
+	menu.AddItem(key, mark.resolved ? "Reopen marker" : "Mark resolved (save now)");
+	delete ids;
+	menu.ExitBackButton = true;
+	menu.Display(client, 0);
+}
+
+public int H_ReviewPoint(Menu menu, MenuAction action, int client, int item) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Select) {
+		char key[32];
+		menu.GetItem(item, key, sizeof key);
+		int id = StringToInt(key[2]);
+		if (key[0] == 'n') {
+			OpenReviewPoint(client, id, true);
+			return 0;
+		}
+		KeyValues kv = BM_LoadReviewsForClient(client);
+		if (kv == null) {
+			OpenMainMenu(client);
+			return 0;
+		}
+		BMReview mark;
+		if (!BMReview_Get(kv, id, mark)) {
+			delete kv;
+			OpenReviewList(client);
+			return 0;
+		}
+		if (key[0] == 't')
+			BM_TeleportNearReview(client, mark);
+		else if (key[0] == 'v')
+			BM_TeleportReviewView(client, mark);
+		else if (key[0] == 'r' || key[0] == 'u') {
+			ArrayList ids = BMReview_IDs(kv, g_bReviewShowResolved[client]);
+			int index = ids.FindValue(id);
+			int next = (index >= 0 && ids.Length > 1) ? ids.Get((index + 1) % ids.Length) : 0;
+			delete ids;
+			char admin[64], error[192];
+			GetClientName(client, admin, sizeof admin);
+			bool resolve = key[0] == 'r';
+			if (!BMReview_Resolve(id, resolve, admin, error, sizeof error))
+				PrintToChat(client, "[BM] Status not saved: %s", error);
+			else {
+				PrintToChat(client, "[BM] Marker #%d %s and saved to the review file.", id, resolve ? "resolved" : "reopened");
+				if (resolve && !g_bReviewShowResolved[client])
+					id = next;
+			}
+		}
+		delete kv;
+		if (id > 0)
+			OpenReviewPoint(client, id);
+		else
+			OpenReviewList(client);
+	}
+	else if (action == MenuAction_Cancel) {
+		if (item == MenuCancel_ExitBack)
+			OpenReviewList(client);
+		else
+			BM_StopReview(client);
+	}
+	return 0;
+}
+
+static bool BM_ReviewCanTeleport(int client) {
+	if (HasEntProp(client, Prop_Send, "m_hViewEntity")) {
+		int camera = GetEntPropEnt(client, Prop_Send, "m_hViewEntity");
+		if (camera > 0 && camera != client && IsValidEntity(camera)) {
+			PrintToChat(client, "[BM] Exit the special camera before teleporting.");
+			return false;
+		}
+	}
+	if (!IsPlayerAlive(client) && GetEntProp(client, Prop_Send, "m_iObserverMode") != 6) {
+		PrintToChat(client, "[BM] Switch to free spectator camera or spawn before teleporting.");
+		return false;
+	}
+	return true;
+}
+
+static void BM_TeleportReviewView(int client, BMReview mark, bool recorded = true) {
+	if (!BM_ReviewCanTeleport(client))
+		return;
+	float eye[3], origin[3], destination[3];
+	GetClientEyePosition(client, eye);
+	GetClientAbsOrigin(client, origin);
+	for (int i = 0; i < 3; i++)
+		destination[i] = mark.eye[i] - (eye[i] - origin[i]);
+	if (IsPlayerAlive(client) && !g_bReviewNoclip[client] && GetEntityMoveType(client) != MOVETYPE_NOCLIP) {
+		g_ReviewMoveType[client] = GetEntityMoveType(client);
+		g_vReviewReturn[client] = origin;
+		g_bReviewNoclip[client] = true;
+		SetEntityMoveType(client, MOVETYPE_NOCLIP);
+	}
+	TeleportEntity(client, destination, mark.angles, view_as<float>({0.0, 0.0, 0.0}));
+	if (recorded)
+		PrintToChat(client, "[BM] Recorded viewpoint. Closing review restores your previous position and movement if free flight was enabled.");
+	else
+		PrintToChat(client, "[BM] Free camera moved near review marker #%d.", mark.id);
+}
+
+static void BM_TeleportNearReview(int client, BMReview mark) {
+	if (!BM_ReviewCanTeleport(client))
+		return;
+	if (!IsPlayerAlive(client)) {
+		BMReview nearby;
+		nearby = mark;
+		for (int i = 0; i < 3; i++)
+			nearby.eye[i] = mark.point[i] + mark.normal[i] * 96.0;
+		float direction[3];
+		MakeVectorFromPoints(nearby.eye, mark.point, direction);
+		GetVectorAngles(direction, nearby.angles);
+		BM_TeleportReviewView(client, nearby, false);
+		return;
+	}
+	float destination[3], angles[3];
+	for (int i = 0; i < 3; i++)
+		destination[i] = mark.point[i] + mark.normal[i] * 48.0;
+	destination[2] += 2.0;
+	BM_RestoreReviewMovement(client, false);
+	float direction[3], eye[3], origin[3];
+	GetClientEyePosition(client, eye);
+	GetClientAbsOrigin(client, origin);
+	for (int i = 0; i < 3; i++)
+		eye[i] = destination[i] + eye[i] - origin[i];
+	MakeVectorFromPoints(eye, mark.point, direction);
+	GetVectorAngles(direction, angles);
+	TeleportEntity(client, destination, angles, view_as<float>({0.0, 0.0, 0.0}));
+}
+
+static void BM_ResetBrowsePosition(int client) {
+	for (int cp = 0; cp < MAX_CPS; cp++) {
+		g_bBrowseLastCA[client][cp] = false;
+		g_iBrowseIndex[client][cp][0] = -1;
+		g_iBrowseIndex[client][cp][1] = -1;
+	}
+}
+
+static void BM_UpdateBrowsePositions(int cp, bool isCA, int removedIndex = -1) {
+	int kind = isCA ? 1 : 0;
+	ArrayList spawns = isCA ? g_CASpawns[cp] : g_CPSpawns[cp];
+	g_iSpawnRevision[cp][kind]++;
+	for (int client = 1; client <= MaxClients; client++) {
+		int index = g_iBrowseIndex[client][cp][kind];
+		if (removedIndex < 0 || spawns.Length == 0)
+			index = -1;
+		else if (index > removedIndex)
+			index--;
+		else if (index == removedIndex && index >= spawns.Length)
+			index = 0;
+		g_iBrowseIndex[client][cp][kind] = index;
+	}
+}
+
+static void BM_StopBrowsing(int client) {
+	if (!g_bBrowseMenuOpen[client])
+		return;
+
+	g_bBrowseMenuOpen[client] = false;
+	g_bAnyMenuOpen[client] = false;
+	KillVisTimer(client);
+	BM_RemoveCapUser();
+}
+
+static void OpenBrowseTypeMenu(int client, bool resume = false) {
+	if (!BM_EnsureSelectedCP(client)) {
+		OpenMainMenu(client);
+		return;
+	}
+
+	if (!g_bBrowseMenuOpen[client]) {
+		g_bBrowseMenuOpen[client] = true;
+		BM_AddCapUser();
+	}
+	g_bAnyMenuOpen[client] = true;
+	StartVisTimer(client);
+
+	int cp = g_iSelectedCP[client];
+	if (resume) {
+		g_bBrowseCA[client] = g_bBrowseLastCA[client][cp];
+		int index = g_iBrowseIndex[client][cp][g_bBrowseCA[client] ? 1 : 0];
+		if (index >= 0) {
+			OpenBrowsePointMenu(client, index, false);
+			return;
+		}
+	}
+	Menu m = new Menu(H_BrowseType);
+	m.SetTitle("Browse spawns: CP#%d (%s)", cp, ga_Letters[LetterIndex(cp)]);
+	char label[64];
+	Format(label, sizeof label, "CP spawns (%d)", g_CPSpawns[cp].Length);
+	m.AddItem("CP", label, g_CPSpawns[cp].Length > 0 ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+	Format(label, sizeof label, "CA spawns (%d)", g_CASpawns[cp].Length);
+	m.AddItem("CA", label, g_CASpawns[cp].Length > 0 ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+	m.ExitBackButton = true;
+	m.Display(client, 0);
+}
+
+public int H_BrowseType(Menu m, MenuAction action, int client, int item) {
+	if (action == MenuAction_End)
+		delete m;
+	else if (action == MenuAction_Select) {
+		char key[8];
+		m.GetItem(item, key, sizeof key);
+		g_bBrowseCA[client] = StrEqual(key, "CA");
+		int cp = g_iSelectedCP[client];
+		int index = g_iBrowseIndex[client][cp][g_bBrowseCA[client] ? 1 : 0];
+		if (index >= 0)
+			OpenBrowsePointMenu(client, index, false);
+		else
+			OpenBrowseListMenu(client);
+	}
+	else if (action == MenuAction_Cancel) {
+		BM_StopBrowsing(client);
+		if (item == MenuCancel_ExitBack)
+			OpenMainMenu(client);
+	}
+	return 0;
+}
+
+static void OpenBrowseListMenu(int client) {
+	if (!g_bBrowseMenuOpen[client] || !BM_EnsureSelectedCP(client)) {
+		OpenMainMenu(client);
+		return;
+	}
+
+	int cp = g_iSelectedCP[client];
+	ArrayList spawns = g_bBrowseCA[client] ? g_CASpawns[cp] : g_CPSpawns[cp];
+	Menu m = new Menu(H_BrowseList);
+	m.SetTitle("Browse CP#%d (%s): %s\nSelect a spawn to teleport to",
+		cp, ga_Letters[LetterIndex(cp)], g_bBrowseCA[client] ? "CA" : "CP");
+	for (int i = 0; i < spawns.Length; i++) {
+		float pos[3];
+		spawns.GetArray(i, pos, 3);
+		char key[16], label[96];
+		IntToString(i, key, sizeof key);
+		Format(label, sizeof label, "#%d: %.0f, %.0f, %.2f", i, pos[0], pos[1], pos[2]);
+		m.AddItem(key, label);
+	}
+	if (spawns.Length == 0)
+		m.AddItem("none", "(no spawns)", ITEMDRAW_DISABLED);
+	m.ExitBackButton = true;
+	int index = g_iBrowseIndex[client][cp][g_bBrowseCA[client] ? 1 : 0];
+	int firstItem = (index >= 0 && index < spawns.Length) ? (index / m.Pagination) * m.Pagination : 0;
+	m.DisplayAt(client, firstItem, 0);
+}
+
+public int H_BrowseList(Menu m, MenuAction action, int client, int item) {
+	if (action == MenuAction_End)
+		delete m;
+	else if (action == MenuAction_Select) {
+		char key[16];
+		m.GetItem(item, key, sizeof key);
+		OpenBrowsePointMenu(client, StringToInt(key));
+	}
+	else if (action == MenuAction_Cancel) {
+		if (item == MenuCancel_ExitBack)
+			OpenBrowseTypeMenu(client);
+		else
+			BM_StopBrowsing(client);
+	}
+	return 0;
+}
+
+static void OpenBrowsePointMenu(int client, int index, bool teleport = true) {
+	if (!g_bBrowseMenuOpen[client] || !BM_EnsureSelectedCP(client)) {
+		OpenMainMenu(client);
+		return;
+	}
+
+	int cp = g_iSelectedCP[client];
+	ArrayList spawns = g_bBrowseCA[client] ? g_CASpawns[cp] : g_CPSpawns[cp];
+	int count = spawns.Length;
+	if (count == 0) {
+		OpenBrowseTypeMenu(client);
+		return;
+	}
+	index = ((index % count) + count) % count;
+	int kind = g_bBrowseCA[client] ? 1 : 0;
+	g_iBrowseIndex[client][cp][kind] = index;
+	g_bBrowseLastCA[client][cp] = g_bBrowseCA[client];
+	float pos[3];
+	spawns.GetArray(index, pos, 3);
+	if (teleport)
+		BM_TeleportToBrowseSpawn(client, pos);
+	BM_HighlightPoint(client, pos, g_bBrowseCA[client] ? kColor_CA : kColor_CP, true);
+
+	Menu m = new Menu(H_BrowsePoint);
+	m.SetTitle("CP#%d (%s) | %s spawn #%d\nPoint %d of %d\n%.0f, %.0f, %.2f",
+		cp, ga_Letters[LetterIndex(cp)], g_bBrowseCA[client] ? "CA" : "CP",
+		index, index + 1, count, pos[0], pos[1], pos[2]);
+	char key[64];
+	IntToString(index, key, sizeof key);
+	m.AddItem(key, "Teleport to this spawn");
+	IntToString((index + 1) % count, key, sizeof key);
+	m.AddItem(key, "Next spawn (teleport)", count > 1 ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+	IntToString((index + count - 1) % count, key, sizeof key);
+	m.AddItem(key, "Previous spawn (teleport)", count > 1 ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+	Format(key, sizeof key, "d:%d:%d:%d:%d", cp, kind, index, g_iSpawnRevision[cp][kind]);
+	m.AddItem(key, "Delete this spawn");
+	m.ExitBackButton = true;
+	m.Display(client, 0);
+}
+
+public int H_BrowsePoint(Menu m, MenuAction action, int client, int item) {
+	if (action == MenuAction_End)
+		delete m;
+	else if (action == MenuAction_Select) {
+		char key[64];
+		m.GetItem(item, key, sizeof key);
+		if (key[0] == 'd')
+			OpenBrowseDeleteConfirm(client, key);
+		else
+			OpenBrowsePointMenu(client, StringToInt(key));
+	}
+	else if (action == MenuAction_Cancel) {
+		if (item == MenuCancel_ExitBack)
+			OpenBrowseListMenu(client);
+		else
+			BM_StopBrowsing(client);
+	}
+	return 0;
+}
+
+static bool BM_ValidateBrowseDelete(int client, const char[] key, int &cp, int &kind, int &index) {
+	char parts[5][16];
+	if (ExplodeString(key, ":", parts, sizeof parts, sizeof parts[]) != 5)
+		return false;
+	cp = StringToInt(parts[1]);
+	kind = StringToInt(parts[2]);
+	index = StringToInt(parts[3]);
+	if (!g_bBrowseMenuOpen[client] || cp < 0 || cp >= g_iNumCPs || kind < 0 || kind > 1)
+		return false;
+	if (cp != g_iSelectedCP[client] || kind != (g_bBrowseCA[client] ? 1 : 0))
+		return false;
+	ArrayList spawns = kind == 1 ? g_CASpawns[cp] : g_CPSpawns[cp];
+	return index >= 0 && index < spawns.Length && StringToInt(parts[4]) == g_iSpawnRevision[cp][kind];
+}
+
+static void BM_ReturnToBrowsePoint(int client) {
+	if (!g_bBrowseMenuOpen[client] || !BM_EnsureSelectedCP(client)) {
+		OpenMainMenu(client);
+		return;
+	}
+	int cp = g_iSelectedCP[client];
+	int index = g_iBrowseIndex[client][cp][g_bBrowseCA[client] ? 1 : 0];
+	if (index >= 0)
+		OpenBrowsePointMenu(client, index, false);
+	else
+		OpenBrowseTypeMenu(client);
+}
+
+static void OpenBrowseDeleteConfirm(int client, const char[] key) {
+	int cp, kind, index;
+	if (!BM_ValidateBrowseDelete(client, key, cp, kind, index)) {
+		PrintToChat(client, "[BM] Spawn list changed. Select the spawn again before deleting.");
+		BM_ReturnToBrowsePoint(client);
+		return;
+	}
+	Menu m = new Menu(H_BrowseDeleteConfirm);
+	m.SetTitle("Delete CP#%d (%s) | %s spawn #%d?", cp, ga_Letters[LetterIndex(cp)], kind == 1 ? "CA" : "CP", index);
+	m.AddItem(key, "YES - delete this spawn");
+	m.AddItem("no", "NO");
+	m.ExitBackButton = true;
+	m.Display(client, 0);
+}
+
+public int H_BrowseDeleteConfirm(Menu m, MenuAction action, int client, int item) {
+	if (action == MenuAction_End)
+		delete m;
+	else if (action == MenuAction_Select) {
+		char key[64];
+		m.GetItem(item, key, sizeof key);
+		if (StrEqual(key, "no")) {
+			BM_ReturnToBrowsePoint(client);
+			return 0;
+		}
+		int cp, kind, index;
+		if (!BM_ValidateBrowseDelete(client, key, cp, kind, index)) {
+			PrintToChat(client, "[BM] Spawn list changed. Nothing deleted; select the spawn again.");
+			BM_ReturnToBrowsePoint(client);
+			return 0;
+		}
+		ArrayList spawns = kind == 1 ? g_CASpawns[cp] : g_CPSpawns[cp];
+		spawns.Erase(index);
+		BM_UpdateBrowsePositions(cp, kind == 1, index);
+		// Add-only undo records cannot identify points after a browser deletion.
+		for (int c = 1; c <= MaxClients; c++) {
+			if (g_UndoStack[c] == null)
+				continue;
+			for (int i = g_UndoStack[c].Length - 1; i >= 0; i--)
+				if (g_UndoStack[c].Get(i) == BM_PackUndoCode(cp, kind == 1))
+					g_UndoStack[c].Erase(i);
+		}
+		PrintToChat(client, "[BM] Deleted %s spawn #%d on CP#%d. Save to file to keep this change.", kind == 1 ? "CA" : "CP", index, cp);
+		BM_NotifyCounts(client, cp);
+		StartVisTimer(client);
+		OpenBrowsePointMenu(client, index);
+	}
+	else if (action == MenuAction_Cancel) {
+		if (item == MenuCancel_ExitBack)
+			BM_ReturnToBrowsePoint(client);
+		else
+			BM_StopBrowsing(client);
+	}
+	return 0;
+}
+
+static void BM_TeleportToBrowseSpawn(int client, const float pos[3]) {
+	if (!IsPlayerAlive(client)) {
+		PrintToChat(client, "[BM] You must be alive to teleport to a spawn.");
+		return;
+	}
+
+	TeleportEntity(client, pos, NULL_VECTOR, view_as<float>({0.0, 0.0, 0.0}));
 }
 
 static void OpenSelectCPMenu(int client)
@@ -719,13 +1289,17 @@ public int H_RemoveOneConfirm(Menu m, MenuAction a, int client, int item)
 
 		if (isCA)
 		{
-			if (idx >= 0 && idx < g_CASpawns[cp].Length)
+			if (idx >= 0 && idx < g_CASpawns[cp].Length) {
 				g_CASpawns[cp].Erase(idx);
+				BM_UpdateBrowsePositions(cp, true, idx);
+			}
 		}
 		else
 		{
-			if (idx >= 0 && idx < g_CPSpawns[cp].Length)
+			if (idx >= 0 && idx < g_CPSpawns[cp].Length) {
 				g_CPSpawns[cp].Erase(idx);
+				BM_UpdateBrowsePositions(cp, false, idx);
+			}
 		}
 
 		BM_NotifyCounts(client, cp);
@@ -768,6 +1342,8 @@ public int H_RemoveAllConfirm(Menu m, MenuAction a, int client, int item)
 			{
 				g_CPSpawns[cp].Clear();
 				g_CASpawns[cp].Clear();
+				BM_UpdateBrowsePositions(cp, false);
+				BM_UpdateBrowsePositions(cp, true);
 				BM_NotifyCounts(client, cp);
 				StartVisTimer(client);
 			}
@@ -851,6 +1427,8 @@ public Action T_DrawVis(Handle timer, any userid)
 {
 	int client = GetClientOfUserId(userid);
 	if (!BM_IsClientOK(client) || !g_bAnyMenuOpen[client]) return Plugin_Stop;
+	if (g_bReviewOpen[client] && g_iReviewID[client] > 0)
+		BM_DrawPoint(client, g_vReviewPoint[client], kColor_Hi);
 
 	int cp = g_iSelectedCP[client];
 	if (cp < 0 || cp >= g_iNumCPs) return Plugin_Continue;
@@ -1012,7 +1590,7 @@ static bool BM_SaveToFile(const char[] map)
 {
 	char dir[PLATFORM_MAX_PATH];
 	strcopy(dir, sizeof dir, kDirRel);
-	CreateDirectory(dir, 511);
+	CreateDirectory(dir, 448);
 
 	char path[PLATFORM_MAX_PATH];
 	Format(path, sizeof path, "%s/%s.txt", dir, map);
@@ -1163,6 +1741,8 @@ static bool BM_LoadFromFile(const char[] map)
 	{
 		if (g_CPSpawns[cp] != null) g_CPSpawns[cp].Clear();
 		if (g_CASpawns[cp] != null) g_CASpawns[cp].Clear();
+		BM_UpdateBrowsePositions(cp, false);
+		BM_UpdateBrowsePositions(cp, true);
 	}
 
 	char path[PLATFORM_MAX_PATH];
@@ -1394,6 +1974,7 @@ static bool BM_DoUndoOneForSelectedCP(int client)
 		{
 			float last[3]; arr.GetArray(n - 1, last, 3);
 			arr.Erase(n - 1);
+			BM_UpdateBrowsePositions(cp, isCA, n - 1);
 			g_UndoStack[client].Erase(i);
 
 			PrintToChat(client, "[BM] Undo %s on CP#%d: (%.0f, %.0f, %.2f).",
@@ -1478,6 +2059,8 @@ int LetterIndex(int n)
 
 public void OnPluginEnd()
 {
+	for (int c = 1; c <= MaxClients; c++)
+		BM_StopReview(c);
 	// Restore capture-zone flags if we were blocking
 	BM_CZAllowClients(true);
 
