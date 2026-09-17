@@ -4,12 +4,11 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PLUGIN_VERSION "1.1.4"
+#define PLUGIN_VERSION "1.1.10"
 
 #define BTN_ATTACK1 (1 << 0)
 #define BTN_USE     (1 << 6)
 
-#define PICKUP_RETRY_INTERVAL 0.10
 #define DEBUG_REPORT_INTERVAL 0.50
 #define WEAPON_ATTACK_BLOCK_TIME 0.25
 #define SIGHT_END_TOLERANCE   12.0
@@ -20,12 +19,12 @@ ConVar g_cvPickupRange;
 ConVar g_cvThrowSpeed;
 ConVar g_cvEnemyOnly;
 ConVar g_cvDebug;
+ConVar g_cvPickupFuseBonus;
 
 ArrayList g_LiveGrenades;
 
 int g_iHeldGrenade[MAXPLAYERS + 1];
 int g_iLastButtons[MAXPLAYERS + 1];
-float g_fNextPickupAttempt[MAXPLAYERS + 1];
 float g_fNextDebugReport[MAXPLAYERS + 1];
 int g_iOldMoveType[MAXPLAYERS + 1];
 int g_iOldSolidType[MAXPLAYERS + 1];
@@ -63,7 +62,7 @@ public void OnPluginStart()
 		FCVAR_NOTIFY, true, 200.0, true, 1600.0);
 
 	g_cvEnemyOnly = CreateConVar(
-		"sm_grenade_throwback_enemy_only", "1",
+		"sm_grenade_throwback_enemy_only", "0",
 		"Only allow grenades owned by the opposing team to be picked up (0/1).",
 		FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
@@ -72,7 +71,12 @@ public void OnPluginStart()
 		"Log pickup and throwback actions (0/1).",
 		FCVAR_NONE, true, 0.0, true, 1.0);
 
-	g_LiveGrenades = new ArrayList();
+	g_cvPickupFuseBonus = CreateConVar(
+		"sm_grenade_throwback_fuse_bonus", "2.0",
+		"Extra fuse seconds on the first pickup of each grenade (0 disables).",
+		FCVAR_NOTIFY, true, 0.0, true, 10.0);
+
+	g_LiveGrenades = new ArrayList(2);
 
 	HookEvent("grenade_thrown", Event_GrenadeThrown, EventHookMode_Post);
 	HookEvent("grenade_detonate", Event_GrenadeDetonate, EventHookMode_Post);
@@ -130,8 +134,12 @@ public Action Event_GrenadeThrown(Event event, const char[] name, bool dontBroad
 		return Plugin_Continue;
 
 	int entRef = EntIndexToEntRef(entity);
-	if (entRef != INVALID_ENT_REFERENCE && g_LiveGrenades.FindValue(entRef) == -1)
-		g_LiveGrenades.Push(entRef);
+	if (entRef != INVALID_ENT_REFERENCE && g_LiveGrenades.FindValue(entRef) == -1) {
+		int tracked[2];
+		tracked[0] = entRef;
+		tracked[1] = 0;
+		g_LiveGrenades.PushArray(tracked);
+	}
 
 	return Plugin_Continue;
 }
@@ -231,10 +239,8 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 		if (g_iHeldGrenade[client] != INVALID_ENT_REFERENCE)
 			ClearHeldState(client);
 
-		float now = GetGameTime();
-		if ((buttons & BTN_USE) != 0 && now >= g_fNextPickupAttempt[client])
-		{
-			g_fNextPickupAttempt[client] = now + PICKUP_RETRY_INTERVAL;
+		if ((buttons & BTN_USE) != 0 && (g_iLastButtons[client] & BTN_USE) == 0) {
+			float now = GetGameTime();
 			bool debugReport = g_cvDebug.BoolValue && now >= g_fNextDebugReport[client];
 			if (debugReport)
 				g_fNextDebugReport[client] = now + DEBUG_REPORT_INTERVAL;
@@ -283,14 +289,59 @@ bool PickUpGrenade(int client, int grenade)
 
 	SetEntityMoveType(grenade, MOVETYPE_NONE);
 	UpdateHeldGrenade(client, grenade);
+	float fuseRemaining = AddPickupFuseBonus(client, grenade);
 	DelayEquippedWeaponAttack(client);
 
-	PrintHintText(client, "LIVE GRENADE PICKED UP!\nPRIMARY ATTACK: throw   USE: drop");
+	if (fuseRemaining >= 0.0)
+		PrintHintText(client, "LIVE GRENADE PICKED UP!\nFuse remaining: %.1f seconds\nPRIMARY ATTACK: throw   USE: drop", fuseRemaining);
+	else
+		PrintHintText(client, "LIVE GRENADE PICKED UP!\nFuse remaining: unknown\nPRIMARY ATTACK: throw   USE: drop");
 
 	if (g_cvDebug.BoolValue)
 		LogMessage("%N picked up live grenade entity %d", client, grenade);
 
 	return true;
+}
+
+float AddPickupFuseBonus(int client, int grenade) {
+	float bonus = 0.0;
+	int tracked = g_LiveGrenades.FindValue(EntIndexToEntRef(grenade));
+	if (tracked != -1 && g_LiveGrenades.Get(tracked, 1) == 0) {
+		g_LiveGrenades.Set(tracked, 1, 1);
+		bonus = g_cvPickupFuseBonus.FloatValue;
+	}
+
+	PropType propType = Prop_Send;
+	if (!HasEntProp(grenade, propType, "m_nNextThinkTick")) {
+		propType = Prop_Data;
+		if (!HasEntProp(grenade, propType, "m_nNextThinkTick")) {
+			if (bonus > 0.0)
+				LogError("Cannot extend grenade %d fuse: m_nNextThinkTick is unavailable", grenade);
+			return -1.0;
+		}
+	}
+
+	int nextThink = GetEntProp(grenade, propType, "m_nNextThinkTick");
+	int nowTick = GetGameTickCount();
+	if (nextThink <= nowTick) {
+		if (bonus > 0.0 && g_cvDebug.BoolValue)
+			LogMessage("Skipped fuse bonus for grenade %d: no future detonation tick (%d <= %d)", grenade, nextThink, nowTick);
+		return nextThink <= 0 ? -1.0 : 0.0;
+	}
+
+	float tickInterval = GetTickInterval();
+	if (bonus > 0.0) {
+		int bonusTicks = RoundToCeil(bonus / tickInterval);
+		nextThink += bonusTicks;
+		// Keep the native frag Detonate callback and its event/water handling.
+		SetEntProp(grenade, propType, "m_nNextThinkTick", nextThink);
+
+		if (g_cvDebug.BoolValue)
+			LogMessage("%N extended grenade %d fuse by %.2f seconds; %.2f seconds remain", client, grenade,
+				float(bonusTicks) * tickInterval, float(nextThink - nowTick) * tickInterval);
+	}
+
+	return float(nextThink - nowTick) * tickInterval;
 }
 
 void ReleaseGrenade(int client, bool throwGrenade)
@@ -341,6 +392,7 @@ void ReleaseGrenade(int client, bool throwGrenade)
 
 		TeleportEntity(grenade, throwPos, NULL_VECTOR, velocity);
 		PrintHintText(client, "GRENADE THROWN BACK!");
+		LogToGame("\"%L\" triggered \"grenade_throwback\"", client);
 
 		if (g_cvDebug.BoolValue)
 			LogMessage("%N threw back live grenade entity %d", client, grenade);
@@ -624,7 +676,6 @@ void ResetClientState(int client)
 {
 	g_iHeldGrenade[client] = INVALID_ENT_REFERENCE;
 	g_iLastButtons[client] = 0;
-	g_fNextPickupAttempt[client] = 0.0;
 	g_fNextDebugReport[client] = 0.0;
 	g_iOldMoveType[client] = view_as<int>(MOVETYPE_VPHYSICS);
 	g_iOldSolidType[client] = 0;
