@@ -19,8 +19,9 @@
 #include <dhooks>
 //#include <insurgencydy>
 
-#define PLUGIN_VERSION "1.4.1"
+#define PLUGIN_VERSION "1.5.1"
 #define BULLET_GAMEDATA_FILE "insurgency-bm.games"
+#define RICOCHET_TRACER_PARTICLE "weapon_tracers"
 
 static const float RICOCHET_MIN_DAMAGE = 5.0;
 static const float RICOCHET_KILL_WINDOW = 0.25;
@@ -44,6 +45,7 @@ ConVar	g_cvBotProtectionTime = null,
 		g_cvRicochetFxCooldown = null;
 
 Handle	g_hTEFireBullets = null,
+		g_hParticleTracer = null,
 		g_hGetWeaponDefinitionHandle = null,
 		g_hGetMuzzle = null,
 		g_hWeaponSwitch = null;
@@ -57,6 +59,7 @@ int		ga_iAttackerOfShield[MAXPLAYERS + 1] = {0, ...},
 		g_iSecPlayersAlive;
 
 bool	ga_bBlacklistClass[MAXPLAYERS + 1] = {false, ...},
+		g_bRicochetTracerReady,
 		g_bBotProtectionBurn,
 		g_bBotProtectionFall,
 		g_bBotProtectionBlast,
@@ -146,6 +149,7 @@ public void OnPluginStart()
 	else
 	{
 		g_hTEFireBullets = PrepareTEFireBullets(config);
+		g_hParticleTracer = PrepareParticleTracer(config);
 		g_hGetWeaponDefinitionHandle = PrepareGetWeaponDefinitionHandle(config);
 		g_hGetMuzzle = PrepareGetMuzzle(config);
 		g_hWeaponSwitch = PrepareWeaponSwitch(config);
@@ -158,7 +162,9 @@ public void OnPluginStart()
 		delete config;
 
 		if (g_hTEFireBullets == null || g_hGetWeaponDefinitionHandle == null)
-			LogError("Ricochet tracers disabled: one or more safe bullet signatures failed to resolve.");
+			LogError("Ricochet bullet effects disabled: one or more safe bullet signatures failed to resolve.");
+		if (g_hParticleTracer == null)
+			LogError("Ricochet particle tracer disabled: UTIL_ParticleTracer could not resolve in %s.txt.", BULLET_GAMEDATA_FILE);
 		if (g_hGetMuzzle == null)
 			LogError("Ricochet muzzle targeting unavailable: falling back to the shooter's eye position.");
 		if (g_hWeaponSwitch == null)
@@ -257,6 +263,7 @@ public void OnPluginStart()
 public void OnPluginEnd()
 {
 	delete g_hTEFireBullets;
+	delete g_hParticleTracer;
 	delete g_hGetWeaponDefinitionHandle;
 	delete g_hGetMuzzle;
 	delete g_hWeaponSwitch;
@@ -335,6 +342,7 @@ public MRESReturn Detour_AllowPlayerSprint_Post(int weapon, DHookReturn hReturn,
 
 public void OnMapStart()
 {
+	PrecacheRicochetTracer();
 	for (int client = 1; client <= MaxClients; client++)
 		ResetRicochetState(client);
 
@@ -611,6 +619,40 @@ public Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &dam
 
 // ---------- Ricochet ----------
 
+static Handle PrepareParticleTracer(GameData config) {
+	StartPrepSDKCall(SDKCall_Static);
+	if (!PrepSDKCall_SetFromConf(config, SDKConf_Signature, "UTIL_ParticleTracer"))
+		return null;
+	PrepSDKCall_AddParameter(SDKType_String, SDKPass_Pointer);
+	PrepSDKCall_AddParameter(SDKType_Vector, SDKPass_ByRef);
+	PrepSDKCall_AddParameter(SDKType_Vector, SDKPass_ByRef);
+	PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);
+	PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);
+	PrepSDKCall_AddParameter(SDKType_Bool, SDKPass_Plain);
+	return EndPrepSDKCall();
+}
+
+static void PrecacheRicochetTracer() {
+	g_bRicochetTracerReady = false;
+	if (g_hParticleTracer == null)
+		return;
+	int table = FindStringTable("ParticleEffectNames");
+	if (table == INVALID_STRING_TABLE) {
+		LogError("Ricochet particle tracer disabled: ParticleEffectNames table is missing.");
+		return;
+	}
+	int index = FindStringIndex(table, RICOCHET_TRACER_PARTICLE);
+	if (index == INVALID_STRING_INDEX) {
+		bool locked = LockStringTables(false);
+		AddToStringTable(table, RICOCHET_TRACER_PARTICLE);
+		LockStringTables(locked);
+		index = FindStringIndex(table, RICOCHET_TRACER_PARTICLE);
+	}
+	g_bRicochetTracerReady = index != INVALID_STRING_INDEX;
+	if (!g_bRicochetTracerReady)
+		LogError("Could not register ricochet particle %s.", RICOCHET_TRACER_PARTICLE);
+}
+
 static Handle PrepareTEFireBullets(GameData config)
 {
 	StartPrepSDKCall(SDKCall_Static);
@@ -724,7 +766,7 @@ static void TryShieldRicochet(int shieldBearer, int shooter, int shooterWeapon,
 
 	if (now >= ga_fNextRicochetFxTime[shieldBearer])
 	{
-		EmitRicochetEffect(shieldBearer, shooterWeapon, traceOrigin, direction);
+		EmitRicochetEffect(shieldBearer, shooterWeapon, traceOrigin, direction, hitPosition);
 		ga_fNextRicochetFxTime[shieldBearer] = now + g_fRicochetFxCooldown;
 	}
 
@@ -868,8 +910,10 @@ static void GetRicochetTargetPosition(int shooter, float outPosition[3])
 	GetClientEyePosition(shooter, outPosition);
 }
 
-static void EmitRicochetEffect(int shieldBearer, int shooterWeapon, const float origin[3], const float direction[3])
-{
+static void EmitRicochetEffect(int shieldBearer, int shooterWeapon, const float origin[3], const float direction[3], const float endPosition[3]) {
+	if (g_hParticleTracer != null && g_bRicochetTracerReady)
+		SDKCall(g_hParticleTracer, RICOCHET_TRACER_PARTICLE, origin, endPosition, shieldBearer, -1, false);
+
 	if (g_hTEFireBullets == null || g_hGetWeaponDefinitionHandle == null
 		|| shooterWeapon <= MaxClients || !IsValidEntity(shooterWeapon))
 		return;
