@@ -82,9 +82,6 @@ public void OnPluginStart()
 	HookEvent("grenade_detonate", Event_GrenadeDetonate, EventHookMode_Post);
 	HookEvent("player_death", Event_PlayerDeath, EventHookMode_Post);
 
-	for (int client = 1; client <= MaxClients; client++)
-		ResetClientState(client);
-
 	AutoExecConfig(true, "grenade_throwback");
 }
 
