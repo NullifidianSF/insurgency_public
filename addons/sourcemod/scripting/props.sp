@@ -12,7 +12,7 @@
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 #include <props_sentry>
 
-#define PL_VERSION		"3.82.1"
+#define PL_VERSION		"3.82.2"
 #define BM_PROPS_LIBRARY "bm_props"
 // Optional MySQL entry in databases.cfg. Local SQLite is used when it is not configured.
 #define BLUEPRINT_DATABASE_CONFIG "props_blueprints"
@@ -5229,6 +5229,7 @@ void OpenRotationMenu(int client, int firstItem = 0) {
 		rotationMenu.AddItem("y+", "+Spin");
 		rotationMenu.AddItem("y-", "-Spin");
 		rotationMenu.AddItem("rotstep", "Change rotation step");
+		AddFavouriteRotationItem(rotationMenu, client);
 		rotationMenu.ExitBackButton = true;
 		rotationMenu.DisplayAt(client, firstItem, 60);
 		return;
