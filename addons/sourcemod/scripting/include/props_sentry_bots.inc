@@ -139,6 +139,20 @@ bool SGB_TargetValid(int bot, int slot) {
 		&& EntRefToEntIndex(SG_g_Sentries[slot].SentryBase) > MaxClients;
 }
 
+bool SGB_GetGunAimPoint(int slot, float point[3]) {
+	int gun = EntRefToEntIndex(SG_g_Sentries[slot].Visual);
+	if (gun <= MaxClients || !IsValidEntity(gun))
+		return false;
+	float angles[3], facing[3], right[3], up[3];
+	GetEntPropVector(gun, Prop_Data, "m_vecAbsOrigin", point);
+	GetEntPropVector(gun, Prop_Data, "m_angAbsRotation", angles);
+	GetAngleVectors(angles, facing, right, up);
+	// Inside the receiver collision hull; Source's right vector is local -Y.
+	for (int i = 0; i < 3; i++)
+		point[i] += facing[i] * 3.2 - right[i] * 0.5 + up[i] * 2.05;
+	return true;
+}
+
 bool SGB_ControlsBot(int bot) {
 	if (!SGB_Ready || !SG_g_BotAttackEnabled || !SG_g_SentryCount || bot < 1 || bot > MaxClients || !SGB_Bots[bot].Slot || !SGB_ValidBot(bot))
 		return false;
@@ -209,8 +223,8 @@ void SGB_Update(int bot, float now) {
 			int candidate = (SGB_Bots[bot].SearchCursor + offset) % MaxClients + 1;
 			if (!SGB_TargetValid(bot, candidate))
 				continue;
-			GetEntPropVector(EntRefToEntIndex(SG_g_Sentries[candidate].SentryBase), Prop_Data, "m_vecAbsOrigin", point);
-			point[2] += 8.0;
+			if (!SGB_GetGunAimPoint(candidate, point))
+				continue;
 			if (GetVectorDistance(eye, point, true) > SG_g_BotRangeSquared)
 				continue;
 			slot = candidate;
@@ -219,9 +233,9 @@ void SGB_Update(int bot, float now) {
 		}
 		if (!slot)
 			return;
-	} else {
-		GetEntPropVector(EntRefToEntIndex(SGB_Bots[bot].TargetRef), Prop_Data, "m_vecAbsOrigin", point);
-		point[2] += 8.0;
+	} else if (!SGB_GetGunAimPoint(slot, point)) {
+		SGB_DropTarget(bot);
+		return;
 	}
 	if (GetVectorDistance(eye, point, true) > SG_g_BotRangeSquared) {
 		SGB_DropTarget(bot);
