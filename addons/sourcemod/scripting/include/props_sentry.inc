@@ -1,6 +1,7 @@
 // Sentry Gun runtime, adapted from func_tank_test v1.9.1 by Nullifidian, OpenAI.
 #define SG_GAMEDATA_FILE RESUPPLY_GAMEDATA_FILE
 #define SG_SHOT_SAMPLE "weapons/m249/m249_tp.wav"
+#define SG_SHOT_SOUND ")" ... SG_SHOT_SAMPLE
 #define SG_TRACER_PARTICLE "weapon_tracers"
 #define SG_MUZZLE_PARTICLE "muzzleflash_m249_3rd"
 #define SG_SHELL_MODEL "models/weapons/shells/556x45.mdl"
@@ -621,16 +622,16 @@ void SG_PrepareShotSound() {
 	SG_g_ShotSound[0] = '\0';
 	SG_g_SoundVolume = 1.0;
 	SG_g_SoundPitch = SNDPITCH_NORMAL;
-	SG_g_SoundLevel = SNDLEVEL_GUNFIRE;
+	SG_g_SoundLevel = 94;
 	if (!FileExists("sound/" ... SG_SHOT_SAMPLE, true)) {
 		LogError("Turret shot sample not found in the game search paths: sound/%s", SG_SHOT_SAMPLE);
 		return;
 	}
-	if (!PrecacheSound(SG_SHOT_SAMPLE, true)) {
+	if (!PrecacheSound(SG_SHOT_SOUND, true)) {
 		LogError("Could not precache turret shot sample: %s", SG_SHOT_SAMPLE);
 		return;
 	}
-	strcopy(SG_g_ShotSound, sizeof(SG_g_ShotSound), SG_SHOT_SAMPLE);
+	strcopy(SG_g_ShotSound, sizeof(SG_g_ShotSound), SG_SHOT_SOUND);
 }
 
 
