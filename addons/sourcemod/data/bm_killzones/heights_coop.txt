@@ -1,0 +1,16 @@
+"BMKillZones"
+{
+	"version"		"1"
+	"map"		"heights_coop"
+	"zones"
+	{
+		"3"
+		{
+			"name"		"Zone 3"
+			"enabled"		"1"
+			"mins"		"2153.430420 -2286.997803 0.031250"
+			"maxs"		"3182.989502 -876.951416 123.256424"
+		}
+		"count"		"1"
+	}
+}
