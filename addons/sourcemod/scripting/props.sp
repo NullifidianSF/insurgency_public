@@ -12,7 +12,7 @@
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 #include <props_sentry>
 
-#define PL_VERSION		"3.82.2"
+#define PL_VERSION		"3.82.3"
 #define BM_PROPS_LIBRARY "bm_props"
 // Optional MySQL entry in databases.cfg. Local SQLite is used when it is not configured.
 #define BLUEPRINT_DATABASE_CONFIG "props_blueprints"
@@ -481,7 +481,7 @@ bool	ga_bHoldingMeleeWeapon[MAXPLAYERS + 1] = {false, ...};
 bool	g_bLateLoad;
 bool	ga_bBipodForced[MAXPLAYERS + 1] = {false, ...};
 bool	ga_bPlayerRefund[MAXPLAYERS + 1] = {false, ...};
-bool	ga_bFirstTimeJoinedSquad[MAXPLAYERS + 1] = {true, ...};
+bool	ga_bHasSpawnedForBuild[MAXPLAYERS + 1];
 
 bool	ga_bPlacingNow[MAXPLAYERS + 1] = { false, ... };
 bool	ga_bPlaceQueued[MAXPLAYERS + 1] = { false, ... };
@@ -784,6 +784,7 @@ public void OnPluginStart() {
 			}
 
 			SDKHook(i, SDKHook_OnTakeDamage, PlayerOnTakeDamage);
+			ga_bHasSpawnedForBuild[i] = IsPlayerAlive(i) && GetClientTeam(i) >= TEAM_SECURITY;
 
 			if (ga_hPropPlaced[i] != null)
 				delete ga_hPropPlaced[i];
@@ -929,7 +930,9 @@ public void OnClientPostAdminCheck(int client) {
 			LogError("Failed to create array for client %d", client);
 
 		ga_bBipodForced[client] = false;
-		ga_bFirstTimeJoinedSquad[client] = true;
+		ga_bHasSpawnedForBuild[client] = IsPlayerAlive(client) && GetClientTeam(client) >= TEAM_SECURITY;
+		ga_bPlayerRefund[client] = false;
+		ga_iTokensSpent[client] = 0;
 		UpdateClientWeaponState(client);
 		LoadClientBlueprints(client);
 		RequestFrame(BL_ReclaimDeferred, GetClientSerial(client));
@@ -1023,14 +1026,10 @@ public void OnClientDisconnect(int client) {
 
 public Action Event_PlayerPickSquad(Event event, const char[] name, bool dontBroadcast) {
 	int client = GetClientOfUserId(event.GetInt("userid"));
-	if (!IsClientInGame(client) || IsFakeClient(client))
+	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
 		return Plugin_Continue;
 
-	if (ga_bFirstTimeJoinedSquad[client]) {
-		ga_bFirstTimeJoinedSquad[client] = false;
-		ga_bPlayerRefund[client] = false;
-	}
-	else {
+	if (ga_bHasSpawnedForBuild[client] || ga_iTokensSpent[client] > 0 || ga_bPlayerRefund[client]) {
 		BL_OwnerLeaving(client);
 		DeconstructAllProps(client);
 		ga_bPlayerRefund[client] = true;
@@ -1078,6 +1077,9 @@ public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadca
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	if (client < 1 || client > MaxClients || !IsClientInGame(client))
 		return Plugin_Continue;
+
+	if (!IsFakeClient(client) && IsPlayerAlive(client) && GetClientTeam(client) >= TEAM_SECURITY)
+		ga_bHasSpawnedForBuild[client] = true;
 
 	SGB_ResetClient(client);
 	ga_iMattressLaunchGeneration[client]++;
@@ -5563,7 +5565,8 @@ public int RotationMenuHandler(Menu menu, MenuAction action, int client, int par
 		ga_bRotationMenuVisible[client] = false;
 		if (param == MenuCancel_ExitBack && !TryPlaceExistingHeldPropOnBack(client))
 			StopHolding(client);
-		ga_iPropOwner[client] = 0;
+		if (!IsValidNonClientEntity(EntRefToEntIndex(ga_iPropHolding[client])))
+			ga_iPropOwner[client] = 0;
 		if (param == MenuCancel_ExitBack)
 			OpenPropCategoryMenu(client, ga_iPropCategory[client]);
 	}
