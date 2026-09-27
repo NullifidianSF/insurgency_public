@@ -12,7 +12,7 @@
 #define RESUPPLY_GAMEDATA_FILE "insurgency-bm.games"
 #include <props_sentry>
 
-#define PL_VERSION		"3.82.3"
+#define PL_VERSION		"3.82.4"
 #define BM_PROPS_LIBRARY "bm_props"
 // Optional MySQL entry in databases.cfg. Local SQLite is used when it is not configured.
 #define BLUEPRINT_DATABASE_CONFIG "props_blueprints"
@@ -487,6 +487,7 @@ bool	ga_bPlacingNow[MAXPLAYERS + 1] = { false, ... };
 bool	ga_bPlaceQueued[MAXPLAYERS + 1] = { false, ... };
 float	ga_fLastPlaceTime[MAXPLAYERS + 1] = { 0.0, ... };
 bool	ga_bJustPlaced[MAXPLAYERS + 1] = { false, ... };
+int ga_iRepeatPlacementGeneration[MAXPLAYERS + 1];
 const float gc_fPlaceDebounce = 0.20;
 const float gc_fHeldPropTeleportMinDeltaSqr = 1.0;
 
@@ -1658,6 +1659,7 @@ static void TouchLaggedMovementValue(int client) {
 }
 
 void StopHolding(int client, bool now = false, bool keepGroupPreview = false) {
+	ga_iRepeatPlacementGeneration[client]++;
 	g_BLScan[client].PreviewRef = INVALID_ENT_REFERENCE;
 	g_BLNextGuideHint[client] = 0.0;
 	if (g_BLHeldOwnerSerial[client]) {
@@ -2201,7 +2203,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 		if (ga_bHoldingMeleeWeapon[client]) {
 			if (AnyPropMenuFlagOpen(client)) {
 				if (ga_iPropHolding[client] == INVALID_ENT_REFERENCE) {
-					CloseAllPropMenus(client, false);
+					CloseAllPropMenus(client);
 					OpenPropSelectionMenu(client);
 				}
 				return;
@@ -2378,6 +2380,7 @@ void OnButtonPress(int client, int button, float vel[3]) {
 				CreateDataTimer(0.10, Timer_RepeatSinglePropPlacement, pack, TIMER_FLAG_NO_MAPCHANGE);
 				pack.WriteCell(GetClientSerial(client));
 				pack.WriteCell(selectedModelId);
+				pack.WriteCell(ga_iRepeatPlacementGeneration[client]);
 			}
 		}
 		return;
@@ -2834,8 +2837,10 @@ bool CreateProp(int client, float vPos[3], float vAng[3], int oldhealth = 0, boo
 			TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
 
 		if (ga_bPropRotateMenuOpen[client]) {
-			ClientCommand(client, "slot9");
+			CancelPropMenuDisplay(client);
 			ga_bPropRotateMenuOpen[client] = false;
+			ga_bRotationMenuVisible[client] = false;
+			SetPropMenuWeaponLock(client, false);
 		}
 	} else {
 		if (bMovingExisting) {
@@ -4618,9 +4623,8 @@ public Action Hook_WeaponSwitch(int client, int entity) {
 	}
 	else {
 		ga_bHoldingMeleeWeapon[client] = false;
-		SetPropMenuWeaponLock(client, false);
 		ClearPropSelections(client);
-		StopHolding(client);
+		CloseAllPropMenus(client);
 	}
 	return Plugin_Continue;
 }
@@ -4869,22 +4873,34 @@ static void SyncPropMenuWeaponLock(int client) {
 	SetPropMenuWeaponLock(client, shouldLock);
 }
 
-void CloseAllPropMenus(int client, bool sendSlot9IfNeeded = true) {
+static void CancelPropMenuDisplay(int client) {
+	MenuSource source = GetClientMenu(client);
+	if (source == MenuSource_External)
+		return;
+	if (source != MenuSource_None)
+		CancelClientMenu(client, true);
+
+	// Cancellation only clears server state; clear the panel without a client key round trip.
+	Handle message = StartMessageOne("ShowMenu", client, USERMSG_RELIABLE | USERMSG_BLOCKHOOKS);
+	if (message == null)
+		return;
+	BfWriteShort(message, 0);
+	BfWriteChar(message, 0);
+	BfWriteByte(message, 0);
+	BfWriteString(message, "");
+	EndMessage();
+}
+
+void CloseAllPropMenus(int client) {
 	if (client < 1 || client > MaxClients || !IsClientInGame(client))
 		return;
 
 	bool bOurMenuOpen = AnyPropMenuFlagOpen(client);
-	if (bOurMenuOpen) {
-		if (ga_iPropHolding[client] != INVALID_ENT_REFERENCE)
-			StopHolding(client);
-		ga_iPropOwner[client] = 0;
-	}
+	StopHolding(client);
+	ga_iPropOwner[client] = 0;
 
-	if (bOurMenuOpen && GetClientMenu(client) != MenuSource_None)
-		CancelClientMenu(client);
-
-	if (sendSlot9IfNeeded && bOurMenuOpen)
-		ClientCommand(client, "slot9");
+	if (bOurMenuOpen)
+		CancelPropMenuDisplay(client);
 
 	ga_bHelpMenuOpen[client] = false;
 	ga_bPropRotateMenuOpen[client] = false;
@@ -5201,10 +5217,9 @@ public int PropSelectionMenuHandler(Menu menu, MenuAction action, int client, in
 }
 
 void OpenRotationMenu(int client, int firstItem = 0) {
+	if (!IsValidNonClientEntity(EntRefToEntIndex(ga_iPropHolding[client])))
+		return;
 	LoadClientFavourites(client);
-	ga_bPropRotateMenuOpen[client] = true;
-	ga_bRotationMenuVisible[client] = true;
-	SetPropMenuWeaponLock(client, true);
 
 	Menu rotationMenu = new Menu(RotationMenuHandler, MENU_ACTIONS_DEFAULT | MenuAction_Display);
 	char modelName[64];
@@ -5432,8 +5447,12 @@ static bool TryPlaceExistingHeldPropOnBack(int client) {
 public int RotationMenuHandler(Menu menu, MenuAction action, int client, int param) {
 	if (action == MenuAction_End)
 		delete menu;
-	else if (action == MenuAction_Display)
+	else if (action == MenuAction_Display) {
 		ga_iRotationMenuGeneration[client]++;
+		ga_bPropRotateMenuOpen[client] = true;
+		ga_bRotationMenuVisible[client] = true;
+		SetPropMenuWeaponLock(client, true);
+	}
 	else if (action == MenuAction_Select) {
 		if (param < 0)
 			return 0;
@@ -6987,11 +7006,19 @@ public Action Timer_RepeatSinglePropPlacement(Handle timer, DataPack pack) {
 
 	int client = GetClientFromSerial(pack.ReadCell());
 	int modelId = pack.ReadCell();
+	int generation = pack.ReadCell();
 
 	if (client < 1 || client > MaxClients || !IsClientInGame(client) || !IsPlayerAlive(client))
 		return Plugin_Stop;
+	if (generation != ga_iRepeatPlacementGeneration[client])
+		return Plugin_Stop;
 	if (modelId < 0 || modelId >= PROP_COUNT || ga_iPropHolding[client] != INVALID_ENT_REFERENCE)
 		return Plugin_Stop;
+	if (AnyPropMenuFlagOpen(client) || GetClientMenu(client) != MenuSource_None)
+		return Plugin_Stop;
+	if (GetClientButtons(client) & (BTN_SPRINT | BTN_SPRINT_TOGGLE | BTN_ATTACK1))
+		return Plugin_Stop;
+	UpdateClientWeaponState(client);
 	if (!ga_bHoldingMeleeWeapon[client])
 		return Plugin_Stop;
 	if (g_iAllFree == 0 && !HasEnoughResources(client, g_PropDefs[modelId].cost))
