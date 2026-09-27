@@ -8,7 +8,7 @@
 #include <adminmenu>
 #define REQUIRE_PLUGIN
 
-#define PLUGIN_VERSION "1.3.3"
+#define PLUGIN_VERSION "1.3.4"
 #define ATV_WRECK_MODEL "models/botmassacre/atv_wreck_v1/wreck.mdl"
 #define VEHICLE_WRECK_MODEL "models/botmassacre/humvee_wreck_v1/wreck.mdl"
 #define VEHICLE_DEBRIS_LIFETIME 15.0 // Seconds before loose wheels and panels are removed.
@@ -50,7 +50,8 @@
 #define ENGINE_SAMPLE ")soundscape/emitters/loop/car_engine_loop_01.wav"
 #define VEHICLE_ENGINE_IDLE_PITCH 90 // Idle pitch; 100 is the sample's original pitch.
 #define VEHICLE_ENGINE_MAX_PITCH 135 // Pitch at full driving speed and throttle.
-#define VEHICLE_ENGINE_IDLE_VOLUME 0.6 // Loop volume at idle, from 0.0 to 1.0.
+#define VEHICLE_ENGINE_SOUND_LEVEL 85 // Engine sound attenuation level in dB; higher carries farther.
+#define VEHICLE_ENGINE_IDLE_VOLUME 0.85 // Loop volume at idle, from 0.0 to 1.0.
 #define VEHICLE_ENGINE_MAX_VOLUME 1.0 // Loop volume at full load, from 0.0 to 1.0.
 #define VEHICLE_FIRE_SAMPLE ")weapons/vehicleexplode/vehicle_fire_loop.wav"
 #define VEHICLE_FIRE_SOUND_LEVEL 85 // Fire sound attenuation level in dB.
@@ -2136,7 +2137,7 @@ void StartVehicleEngineSound(int v, int vehicle) {
 		return;
 	g_V[v].EnginePitch = g_Types[g_V[v].Type].EngineIdlePitch;
 	g_V[v].EngineVolume = VEHICLE_ENGINE_IDLE_VOLUME;
-	EmitSoundToAll(ENGINE_SAMPLE, vehicle, SNDCHAN_STATIC, SNDLEVEL_NORMAL, SND_NOFLAGS,
+	EmitSoundToAll(ENGINE_SAMPLE, vehicle, SNDCHAN_STATIC, VEHICLE_ENGINE_SOUND_LEVEL, SND_NOFLAGS,
 		g_V[v].EngineVolume, g_V[v].EnginePitch);
 	g_V[v].EngineSound = true;
 }
@@ -2165,7 +2166,7 @@ void UpdateVehicleEngineSound(int v, int vehicle) {
 	float volume = g_V[v].EngineVolume + FloatMax(-0.05, FloatMin(0.05, targetVolume - g_V[v].EngineVolume));
 	if (pitch == g_V[v].EnginePitch && FloatAbs(volume - g_V[v].EngineVolume) < 0.01)
 		return;
-	EmitSoundToAll(ENGINE_SAMPLE, vehicle, SNDCHAN_STATIC, SNDLEVEL_NORMAL, SND_CHANGEPITCH | SND_CHANGEVOL, volume, pitch);
+	EmitSoundToAll(ENGINE_SAMPLE, vehicle, SNDCHAN_STATIC, VEHICLE_ENGINE_SOUND_LEVEL, SND_CHANGEPITCH | SND_CHANGEVOL, volume, pitch);
 	g_V[v].EnginePitch = pitch;
 	g_V[v].EngineVolume = volume;
 }
@@ -2213,7 +2214,7 @@ public void OnClientPostAdminCheck(int client) {
 		if (vehicle == -1)
 			continue;
 		if (g_V[v].EngineSound)
-			EmitSoundToClient(client, ENGINE_SAMPLE, vehicle, SNDCHAN_STATIC, SNDLEVEL_NORMAL, SND_NOFLAGS,
+			EmitSoundToClient(client, ENGINE_SAMPLE, vehicle, SNDCHAN_STATIC, VEHICLE_ENGINE_SOUND_LEVEL, SND_NOFLAGS,
 				g_V[v].EngineVolume, g_V[v].EnginePitch);
 		CheckVehicleFireSound(v);
 		if (g_V[v].FireSound)
@@ -3880,3 +3881,4 @@ public int VehicleTypeHandler(Menu menu, MenuAction action, int client, int item
 	}
 	return 0;
 }
+
