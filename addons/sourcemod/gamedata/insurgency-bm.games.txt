@@ -4,6 +4,13 @@
 	{
 		"Offsets"
 		{
+			// Vehicle wreck hull teardown: Windows sub_10086080; Linux VPhysicsDestroyObject.
+			"CBaseEntity::VPhysicsDestroyObject"
+			{
+				"windows" "155"
+				"linux" "156"
+			}
+
 			"SentryBotTest::NextBotOffset"
 			{
 				"windows" "8268"
