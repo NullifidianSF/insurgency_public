@@ -8,7 +8,7 @@
 #include <adminmenu>
 #define REQUIRE_PLUGIN
 
-#define PLUGIN_VERSION "1.3.4"
+#define PLUGIN_VERSION "1.3.5"
 #define ATV_WRECK_MODEL "models/botmassacre/atv_wreck_v1/wreck.mdl"
 #define VEHICLE_WRECK_MODEL "models/botmassacre/humvee_wreck_v1/wreck.mdl"
 #define VEHICLE_DEBRIS_LIFETIME 15.0 // Seconds before loose wheels and panels are removed.
@@ -48,6 +48,10 @@
 #define DRIVER_IDLE_SEQUENCE 1
 #define DRIVER_BONEMERGE_EFFECTS (1 | 128)
 #define ENGINE_SAMPLE ")soundscape/emitters/loop/car_engine_loop_01.wav"
+#define VEHICLE_HORN_SAMPLE ")soundscape/emitters/oneshot/car_horn_02.ogg"
+#define VEHICLE_HORN_COOLDOWN 5.0 // Seconds between horn activations per player.
+#define VEHICLE_HORN_SOUND_LEVEL 90
+#define VEHICLE_HORN_VOLUME 1.0
 #define VEHICLE_ENGINE_IDLE_PITCH 90 // Idle pitch; 100 is the sample's original pitch.
 #define VEHICLE_ENGINE_MAX_PITCH 135 // Pitch at full driving speed and throttle.
 #define VEHICLE_ENGINE_SOUND_LEVEL 85 // Engine sound attenuation level in dB; higher carries farther.
@@ -64,6 +68,7 @@
 #define EF_NODRAW 32
 #define VEHICLE_HUD_BITS 1025
 
+#define BTN_ATTACK1         (1 << 0)
 #define BTN_JUMP            (1 << 1)
 #define BTN_FORWARD         (1 << 4)
 #define BTN_BACKWARD        (1 << 5)
@@ -332,10 +337,12 @@ int g_Count;
 int g_MapSerial;
 int g_LastButtons[MAXPLAYERS + 1];
 float g_NextUse[MAXPLAYERS + 1];
+float g_NextHorn[MAXPLAYERS + 1];
 
 bool g_DriverRigReady;
 bool g_PassengerRigReady;
 bool g_SoundReady;
+bool g_HornSoundReady;
 bool g_DamageEffectsReady;
 bool g_WreckReady;
 bool g_DebrisReady[VEHICLE_DEBRIS_PARTS];
@@ -410,6 +417,8 @@ public void AdminTopHandler(TopMenu menu, TopMenuAction action, TopMenuObject ob
 }
 
 public void OnMapStart() {
+	for (int client = 1; client <= MaxClients; client++)
+		g_NextHorn[client] = 0.0;
 	delete g_SecuritySpawns;
 	g_EndingMap = false;
 	g_MapSerial++;
@@ -456,6 +465,7 @@ public void OnClientPutInServer(int client) {
 	ResetRider(client);
 	g_LastButtons[client] = 0;
 	g_NextUse[client] = 0.0;
+	g_NextHorn[client] = 0.0;
 }
 
 public void OnClientDisconnect(int client) {
@@ -769,7 +779,7 @@ bool EnterSeat(int client, int v, int seat) {
 		StartVehicleEngineSound(v, vehicle);
 	PrintToChat(client, "[Vehicles] %s. Mouse: look | Use: exit | Reload: cockpit/chase view.", g_SeatNames[seat]);
 	if (seat == 0)
-		PrintToChat(client, "[Vehicles] WASD: drive | Space: brake.");
+		PrintToChat(client, "[Vehicles] WASD: drive | Space: brake | Primary fire: horn (%.0fs cooldown).", VEHICLE_HORN_COOLDOWN);
 	return true;
 }
 
@@ -923,6 +933,8 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 		g_R[client].ChaseView = !g_R[client].ChaseView;
 		UpdateCamera(client, Vehicle(g_R[client].Vehicle));
 	}
+	if (seated && (pressed & BTN_ATTACK1))
+		TryVehicleHorn(client);
 	if (!seated && g_R[client].Vehicle != -1)
 		CaptureInput(client, buttons, angles, cmdnum);
 	if (seated || g_R[client].Vehicle != -1) {
@@ -2120,6 +2132,7 @@ bool PrecacheVehicleSound(const char[] sample) {
 
 void PrepareVehicleSounds() {
 	g_SoundReady = PrecacheVehicleSound(ENGINE_SAMPLE);
+	g_HornSoundReady = PrecacheVehicleSound(VEHICLE_HORN_SAMPLE);
 	g_FireSoundReady = PrecacheVehicleSound(VEHICLE_FIRE_SAMPLE);
 	g_ExplosionSoundCount = 0;
 	for (int i = 1; i <= sizeof(g_ExplosionSamples); i++) {
@@ -2130,6 +2143,20 @@ void PrepareVehicleSounds() {
 			g_ExplosionSoundCount++;
 		}
 	}
+}
+
+void TryVehicleHorn(int client) {
+	int v = g_R[client].Vehicle;
+	if (!g_HornSoundReady || v == -1 || g_R[client].Seat != 0 || g_R[client].Changing)
+		return;
+	int vehicle = Vehicle(v);
+	if (vehicle == -1 || !AttachedDriver(client, vehicle) || g_V[v].Destroyed || g_V[v].Health <= 0.0)
+		return;
+	float now = GetGameTime();
+	if (now < g_NextHorn[client])
+		return;
+	g_NextHorn[client] = now + VEHICLE_HORN_COOLDOWN;
+	EmitSoundToAll(VEHICLE_HORN_SAMPLE, vehicle, SNDCHAN_ITEM, VEHICLE_HORN_SOUND_LEVEL, SND_NOFLAGS, VEHICLE_HORN_VOLUME);
 }
 
 void StartVehicleEngineSound(int v, int vehicle) {
@@ -3881,4 +3908,3 @@ public int VehicleTypeHandler(Menu menu, MenuAction action, int client, int item
 	}
 	return 0;
 }
-
