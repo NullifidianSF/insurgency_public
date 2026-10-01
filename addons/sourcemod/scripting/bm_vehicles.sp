@@ -8,7 +8,7 @@
 #include <adminmenu>
 #define REQUIRE_PLUGIN
 
-#define PLUGIN_VERSION "1.3.5"
+#define PLUGIN_VERSION "1.3.6"
 #define ATV_WRECK_MODEL "models/botmassacre/atv_wreck_v1/wreck.mdl"
 #define VEHICLE_WRECK_MODEL "models/botmassacre/humvee_wreck_v1/wreck.mdl"
 #define VEHICLE_DEBRIS_LIFETIME 15.0 // Seconds before loose wheels and panels are removed.
@@ -628,6 +628,17 @@ public bool FilterVehicle(int entity, int contentsMask, any v) {
 	return true;
 }
 
+bool AttachedToVehicle(int entity, int vehicle) {
+	for (int remaining = GetMaxEntities(); remaining > 0 && entity > 0 && IsValidEntity(entity); remaining--) {
+		if (entity == vehicle)
+			return true;
+		if (!HasEntProp(entity, Prop_Data, "m_hMoveParent"))
+			return false;
+		entity = GetEntPropEnt(entity, Prop_Data, "m_hMoveParent");
+	}
+	return false;
+}
+
 public bool FilterDriving(int entity, int contentsMask, any v) {
 	if (entity > 0 && entity <= MaxClients)
 		return false;
@@ -635,6 +646,9 @@ public bool FilterDriving(int entity, int contentsMask, any v) {
 		return false;
 	if (entity <= MaxClients || !IsValidEntity(entity))
 		return true;
+	// Attached explosives must not become obstacles or supporting ground for their own vehicle.
+	if (AttachedToVehicle(entity, Vehicle(v)))
+		return false;
 	char classname[64];
 	GetEntityClassname(entity, classname, sizeof(classname));
 	if (StrContains(classname, "weapon_") != 0 || !HasEntProp(entity, Prop_Send, "m_hOwnerEntity"))
