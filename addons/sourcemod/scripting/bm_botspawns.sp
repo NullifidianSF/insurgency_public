@@ -13,7 +13,8 @@
 //
 // © 2025 Nullifidian + ChatGPT collab. Public domain-like; do what you want.
 //
-// Build: requires <sdktools> and <sdktools_tempents>
+// Build: standard SourceMod includes and <bm_spawn_reviews>.
+// Optional runtime NAV validation: navmesh.smx (Insurgency NAV reader).
 
 #pragma semicolon 1
 #pragma newdecls required
@@ -55,12 +56,12 @@ static const int	kColor_Hi[4]		= { 255, 220,  60, 255 };	// highlight pulse
 
 // Beam/Glow visuals
 static const float	kBeamWidth			= 4.0;
-static const float	kBeamLife			= 0.75;
+static const float	kBeamLife			= 0.90;
 //static const float	kGlowLife			= 0.75;
 static const float	kPillarHeight		= 64.0;
 
-// draw at most this many POINTS per tick (each = 2 temp ents)
-static const int	kDrawPointBudget	= 64;
+// Nearby spawn markers per redraw (pillar and four footprint edges).
+#define kDrawPointBudget 20
 
 // My movement speed
 static const float kMovementSpeed = 3.0;
@@ -105,9 +106,6 @@ static bool BM_CodeIsCA(int code)             { return (code & 1) != 0; }
 // TempEnt sprite
 int		g_iSpriteBeam = -1;
 
-bool	g_bFlipDrawOrder[MAXPLAYERS + 1] = { false, ... };
-int		g_iVisCurCP[MAXPLAYERS + 1] = { 0, ... };
-int		g_iVisCurCA[MAXPLAYERS + 1] = { 0, ... };
 
 // Cap-blocking while editing (now done by CZ spawnflags)
 int		g_iCapBlockUsers = 0;
@@ -122,6 +120,7 @@ Handle ga_hSpeedTimer[MAXPLAYERS + 1];
 bool g_bLateLoad;
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
+	BMNav_OptionalNatives();
 	g_bLateLoad = late;
 	return APLRes_Success;
 }
@@ -131,7 +130,7 @@ public Plugin myinfo =
 	name		= "bm_botspawns",
 	author		= "Nullifidian + ChatGPT",
 	description = "A tool for manually placing bot spawn locations per CP and CA for the bm_botrespawn plugin. Remember to remove this plugin after use.",
-	version		= "1.3.2",
+	version		= "1.6.6",
 	url			= ""
 };
 
@@ -160,6 +159,7 @@ public void OnPluginStart()
 
 public void OnMapStart()
 {
+	BMNav_MapStart();
 	// Determine #CPs
 	g_iNumCPs = BM_GetNumControlPoints();
 
@@ -200,6 +200,11 @@ public void OnMapStart()
 
 public void OnMapEnd()
 {
+	for (int client = 1; client <= MaxClients; client++) {
+		BMNav_Close(client);
+		g_bAnyMenuOpen[client] = false;
+		KillVisTimer(client);
+	}
 	// extra safety: restore flags on map end
 	BM_CZAllowClients(true);
 }
@@ -215,6 +220,7 @@ void FR_BMCacheCaptureZones() {
 
 public void OnClientDisconnect(int client)
 {
+	BMNav_ResetClient(client);
 	g_bReviewNoclip[client] = false;
 	BM_StopReview(client);
 	g_bReviewShowResolved[client] = false;
@@ -321,6 +327,8 @@ public Action Cmd_LoadNow(int client, int args)
 
 public Action Cmd_ClearVis(int client, int args)
 {
+	if (client > 0 && client <= MaxClients)
+		BMNav_Close(client);
 	if (!BM_IsClientOK(client)) return Plugin_Handled;
 	BM_StopReview(client);
 	BM_StopBrowsing(client);
@@ -342,8 +350,12 @@ public Action Cmd_ClearVis(int client, int args)
 
 static void OpenMainMenu(int client)
 {
+	BMNav_Close(client);
+	BMNav_EndAdd(client);
 	BM_StopReview(client);
 	BM_StopBrowsing(client);
+	g_bAnyMenuOpen[client] = true;
+	StartVisTimer(client);
 	char cpfmt[16];
 	BM_CPFmt(g_iSelectedCP[client], cpfmt, sizeof cpfmt);
 
@@ -359,6 +371,8 @@ static void OpenMainMenu(int client)
 	m.AddItem("4", "Save to file");
 	m.AddItem("5", "Browse spawns");
 	m.AddItem("6", "Review marked areas");
+	m.AddItem("7", "Check saved spawns (NAV/clearance)");
+	m.AddItem("8", "Editor display settings");
 
 	m.ExitButton = true;
 	m.Display(client, 0);
@@ -397,7 +411,13 @@ public int H_Main(Menu m, MenuAction a, int client, int item)
 			case '4': OpenSaveConfirm(client);
 			case '5': OpenBrowseTypeMenu(client, true);
 			case '6': OpenReviewList(client);
+			case '7': BMNav_StartScan(client);
+			case '8': BMNav_Settings(client);
 		}
+	}
+	else if (a == MenuAction_Cancel && item != MenuCancel_Interrupted) {
+		g_bAnyMenuOpen[client] = false;
+		KillVisTimer(client);
 	}
 	return 0;
 }
@@ -670,6 +690,7 @@ static void BM_UpdateBrowsePositions(int cp, bool isCA, int removedIndex = -1) {
 	int kind = isCA ? 1 : 0;
 	ArrayList spawns = isCA ? g_CASpawns[cp] : g_CPSpawns[cp];
 	g_iSpawnRevision[cp][kind]++;
+	BMNav_Changed(cp, kind);
 	for (int client = 1; client <= MaxClients; client++) {
 		int index = g_iBrowseIndex[client][cp][kind];
 		if (removedIndex < 0 || spawns.Length == 0)
@@ -1023,6 +1044,7 @@ static void OpenAddMenu(int client)
 	m.AddItem("a3", "Add spawn for CA");
 	m.AddItem("a4", " ", ITEMDRAW_DISABLED | ITEMDRAW_SPACER);
 	m.AddItem("a5", "Undo (this CP)");
+	m.AddItem("a6", "Editor display settings");
 
 	m.ExitBackButton = true;
 	m.Display(client, 0);
@@ -1037,41 +1059,13 @@ public int H_Add(Menu m, MenuAction a, int client, int item)
 		int cp = g_iSelectedCP[client];
 		if (cp < 0 || cp >= g_iNumCPs) { OpenMainMenu(client); return 0; }
 
-		if (StrEqual(info, "a1"))
-		{
-			float v[3];
-			GetClientAbsOrigin(client, v);
-			v[2] += kZOffsetOnAdd;
-
-			if (!BM_CanAddSpawn(client, cp, Add_CP, v))
-			{
-				StartVisTimer(client);
-				OpenAddMenu(client);
-				return 0;
-			}
-
-			g_CPSpawns[cp].PushArray(v, 3);
-			BM_PushUndo(client, cp, Add_CP);
-			BM_NotifyCounts(client, cp);
-			StartVisTimer(client);
+		if (StrEqual(info, "a1") || StrEqual(info, "a3")) {
+			BMNav_TryAdd(client, cp, StrEqual(info, "a3") ? Add_CA : Add_CP);
+			return 0;
 		}
-		else if (StrEqual(info, "a3"))
-		{
-			float v[3];
-			GetClientAbsOrigin(client, v);
-			v[2] += kZOffsetOnAdd;
-
-			if (!BM_CanAddSpawn(client, cp, Add_CA, v))
-			{
-				StartVisTimer(client);
-				OpenAddMenu(client);
-				return 0;
-			}
-
-			g_CASpawns[cp].PushArray(v, 3);
-			BM_PushUndo(client, cp, Add_CA);
-			BM_NotifyCounts(client, cp);
-			StartVisTimer(client);
+		else if (StrEqual(info, "a6")) {
+			BMNav_Settings(client);
+			return 0;
 		}
 		else if (StrEqual(info, "a5"))
 		{
@@ -1097,7 +1091,7 @@ public int H_Add(Menu m, MenuAction a, int client, int item)
 	return 0;
 }
 
-static void OpenRemoveMenu(int client)
+static void OpenRemoveMenu(int client, int position = 0)
 {
 	if (!BM_EnsureSelectedCP(client)) { OpenMainMenu(client); return; }
 
@@ -1120,10 +1114,13 @@ static void OpenRemoveMenu(int client)
 	m.AddItem("r2", " ", ITEMDRAW_DISABLED | ITEMDRAW_SPACER);
 	m.AddItem("r3", "Remove closest to you");
 	m.AddItem("r4", " ", ITEMDRAW_DISABLED | ITEMDRAW_SPACER);
-	m.AddItem("r5", "Remove all spawns");
+	m.AddItem("r5", "Remove all spawns (selected CP)");
+	m.AddItem("r6", " ", ITEMDRAW_DISABLED | ITEMDRAW_SPACER);
+	m.AddItem("r8", "Remove all spawns for ALL CPs", BM_TotalCountAll() > 0 ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
 
 	m.ExitBackButton = true;
-	m.Display(client, 0);
+	m.Pagination = 6;
+	m.DisplayAt(client, position, 0);
 }
 
 public int H_RemoveRoot(Menu m, MenuAction a, int client, int item)
@@ -1154,6 +1151,10 @@ public int H_RemoveRoot(Menu m, MenuAction a, int client, int item)
 
 			BM_HighlightPoint(client, pos, isCA ? kColor_CA : kColor_CP, true);
 			OpenRemoveOneConfirm(client, isCA, idx);
+			return 0;
+		}
+		else if (StrEqual(info, "r8")) {
+			OpenRemoveMapConfirm(client);
 			return 0;
 		}
 		else if (StrEqual(info, "r5"))
@@ -1397,9 +1398,6 @@ static void StartVisTimer(int client)
 	KillVisTimer(client);
 	if (!g_bAnyMenuOpen[client]) return;
 
-	g_bFlipDrawOrder[client] = false;
-	g_iVisCurCP[client] = 0;
-	g_iVisCurCA[client] = 0;
 
 	g_hVisTimer[client] = CreateTimer(kVisTickInterval, T_DrawVis, GetClientUserId(client),
 									TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
@@ -1414,92 +1412,17 @@ static void KillVisTimer(int client)
 	}
 }
 
-static void BM_DrawPointBudget(int client, const float pos[3], const int color[4], int &drawn, int budget)
-{
-	if (drawn < budget)
-	{
-		BM_DrawPoint(client, pos, color);
-		drawn++;
-	}
-}
-
-public Action T_DrawVis(Handle timer, any userid)
-{
+public Action T_DrawVis(Handle timer, any userid) {
 	int client = GetClientOfUserId(userid);
-	if (!BM_IsClientOK(client) || !g_bAnyMenuOpen[client]) return Plugin_Stop;
+	if (!BM_IsClientOK(client))
+		return Plugin_Stop;
+	if (!g_bAnyMenuOpen[client]) {
+		g_hVisTimer[client] = null;
+		return Plugin_Stop;
+	}
 	if (g_bReviewOpen[client] && g_iReviewID[client] > 0)
 		BM_DrawPoint(client, g_vReviewPoint[client], kColor_Hi);
-
-	int cp = g_iSelectedCP[client];
-	if (cp < 0 || cp >= g_iNumCPs) return Plugin_Continue;
-
-	int nCP = g_CPSpawns[cp].Length;
-	int nCA = g_CASpawns[cp].Length;
-
-	int drawn = 0;
-
-	bool caFirst = g_bFlipDrawOrder[client];
-	g_bFlipDrawOrder[client] = !g_bFlipDrawOrder[client];
-
-	int i = (nCP > 0) ? (g_iVisCurCP[client] % nCP) : 0;
-	int j = (nCA > 0) ? (g_iVisCurCA[client] % nCA) : 0;
-
-	if (caFirst)
-	{
-		while (drawn < kDrawPointBudget && (nCP > 0 || nCA > 0))
-		{
-			if (nCA > 0)
-			{
-				float vA[3]; g_CASpawns[cp].GetArray(j, vA, 3);
-				BM_DrawPointBudget(client, vA, kColor_CA, drawn, kDrawPointBudget);
-				j = (j + 1) % nCA;
-				if (drawn >= kDrawPointBudget) break;
-			}
-			if (nCP > 0)
-			{
-				float vC[3]; g_CPSpawns[cp].GetArray(i, vC, 3);
-				BM_DrawPointBudget(client, vC, kColor_CP, drawn, kDrawPointBudget);
-				i = (i + 1) % nCP;
-			}
-			if ((nCA == 0 || j == g_iVisCurCA[client] % (nCA == 0 ? 1 : nCA)) &&
-				(nCP == 0 || i == g_iVisCurCP[client] % (nCP == 0 ? 1 : nCP)))
-			{
-				break;
-			}
-		}
-	}
-	else
-	{
-		while (drawn < kDrawPointBudget && (nCP > 0 || nCA > 0))
-		{
-			if (nCP > 0)
-			{
-				float vC[3]; g_CPSpawns[cp].GetArray(i, vC, 3);
-				BM_DrawPointBudget(client, vC, kColor_CP, drawn, kDrawPointBudget);
-				i = (i + 1) % nCP;
-				if (drawn >= kDrawPointBudget) break;
-			}
-			if (nCA > 0)
-			{
-				float vA[3]; g_CASpawns[cp].GetArray(j, vA, 3);
-				BM_DrawPointBudget(client, vA, kColor_CA, drawn, kDrawPointBudget);
-				j = (j + 1) % nCA;
-			}
-			if ((nCA == 0 || j == g_iVisCurCA[client] % (nCA == 0 ? 1 : nCA)) &&
-				(nCP == 0 || i == g_iVisCurCP[client] % (nCP == 0 ? 1 : nCP)))
-			{
-				break;
-			}
-		}
-	}
-
-	if (nCP > 0) g_iVisCurCP[client] = i;
-	if (nCA > 0) g_iVisCurCA[client] = j;
-
-	// only while Add menu is open
-	if (g_bAddMenuOpen[client])
-		BM_DrawClosestCPDebug(client, cp);
-
+	BMNav_Draw(client);
 	return Plugin_Continue;
 }
 
@@ -1510,56 +1433,9 @@ static void BM_DrawPoint(int client, const float pos[3], const int color[4])
 	top[1] = pos[1];
 	top[2] = pos[2] + kPillarHeight;
 
-	TE_SetupBeamPoints(pos, top, g_iSpriteBeam, 0, 0, 0,
+	TE_SetupBeamPoints(pos, top, BMNav_Sprite(client), 0, 0, 0,
 					   kBeamLife, kBeamWidth, kBeamWidth, 0, 0.0, color, 0);
 	TE_SendToClient(client);
-}
-
-static void BM_DrawClosestCPDebug(int client, int cp)
-{
-	if (cp < 0 || cp >= g_iNumCPs) return;
-
-	int n = g_CPSpawns[cp].Length;
-	if (n <= 0) return;
-
-	float eye[3];
-	GetClientEyePosition(client, eye);
-
-	// lower so it doesn't blind you
-	eye[2] -= 20.0;
-
-	float best[3];
-	float bestD2 = 0.0;
-	bool found = false;
-
-	for (int i = 0; i < n; i++)
-	{
-		float v[3];
-		g_CPSpawns[cp].GetArray(i, v, 3);
-
-		float d2 = GetVectorDistance(eye, v, true);
-		if (!found || d2 < bestD2)
-		{
-			found = true;
-			bestD2 = d2;
-			best[0] = v[0];
-			best[1] = v[1];
-			best[2] = v[2];
-		}
-	}
-
-	if (!found) return;
-
-	// don’t let the line go below the spawn point
-	if (eye[2] < best[2] + 8.0)
-		eye[2] = best[2] + 8.0;
-
-	TE_SetupBeamPoints(eye, best, g_iSpriteBeam, 0, 0, 0,
-		kBeamLife, kBeamWidth, kBeamWidth, 0, 0.0, kColor_Hi, 0);
-	TE_SendToClient(client);
-
-	float dist = SquareRoot(bestD2);
-	PrintHintText(client, "Closest CP spawn: %.0f u", dist);
 }
 
 static void BM_HighlightPoint(int client, const float pos[3], const int baseColor[4], bool strongerPulse)
@@ -1578,7 +1454,7 @@ static void BM_HighlightPoint(int client, const float pos[3], const int baseColo
 	c[2] = (baseColor[2] + kColor_Hi[2]) / 2;
 	c[3] = 255;
 
-	TE_SetupBeamPoints(pos, top, g_iSpriteBeam, 0, 0, 0, life, w, w, 0, 0.0, c, 0);
+	TE_SetupBeamPoints(pos, top, BMNav_Sprite(client), 0, 0, 0, life, w, w, 0, 0.0, c, 0);
 	TE_SendToClient(client);
 }
 
@@ -1595,10 +1471,20 @@ static bool BM_SaveToFile(const char[] map)
 	char path[PLATFORM_MAX_PATH];
 	Format(path, sizeof path, "%s/%s.txt", dir, map);
 
+	char savedAt[192];
+	FormatTime(savedAt, sizeof savedAt, "%Y-%m-%d %H:%M:%S %Z");
+	TrimString(savedAt);
+
 	File f = OpenFile(path, "w");
 	if (f == null)
 	{
 		PrintToServer("[BM] Save FAILED: cannot open '%s' for write.", path);
+		return false;
+	}
+
+	if (!f.WriteLine("// Last saved: %s", savedAt)) {
+		delete f;
+		PrintToServer("[BM] Save FAILED: cannot write timestamp to '%s'.", path);
 		return false;
 	}
 
@@ -1950,6 +1836,7 @@ static bool BM_FindClosestSpawn(int cp, const float me[3], bool &outIsCA, int &o
 
 static void BM_PushUndo(int client, int cp, EAddKind kind)
 {
+	BM_UpdateBrowsePositions(cp, kind == Add_CA);
 	if (g_UndoStack[client] == null) g_UndoStack[client] = new ArrayList();
 	g_UndoStack[client].Push( BM_PackUndoCode(cp, (kind == Add_CA)) );
 }
@@ -2059,6 +1946,7 @@ int LetterIndex(int n)
 
 public void OnPluginEnd()
 {
+	BMNav_Shutdown();
 	for (int c = 1; c <= MaxClients; c++)
 		BM_StopReview(c);
 	// Restore capture-zone flags if we were blocking
@@ -2084,4 +1972,1364 @@ public void OnPluginEnd()
 	g_iNumCPs     = 0;
 	BM_CZAllowClients(true);
 	g_iCapBlockUsers = 0;
+}
+
+// Optional reader interface. The editor continues to work without navmesh.smx.
+native bool NavMesh_Exists();
+native int NavMesh_WorldToGridX(float x);
+native int NavMesh_WorldToGridY(float y);
+native void NavMesh_GetAreasOnGrid(ArrayStack areas, int x, int y);
+native int NavMeshArea_GetID(int area);
+native void NavMeshArea_GetClosestPointOnArea(int area, const float pos[3], float closest[3]);
+native void NavMeshArea_GetCorner(int area, int corner, float pos[3]);
+
+static const char kNavNatives[][] = {
+	"NavMesh_Exists", "NavMesh_WorldToGridX", "NavMesh_WorldToGridY",
+	"NavMesh_GetAreasOnGrid", "NavMeshArea_GetID",
+	"NavMeshArea_GetClosestPointOnArea", "NavMeshArea_GetCorner"
+};
+
+#define NAV_NEAR 1
+#define NAV_OFF 2
+#define NAV_SOLID 4
+#define NAV_NO_FLOOR 8
+#define NAV_STEEP 16
+#define NAV_CROUCH 32
+#define NAV_UNKNOWN 64
+#define NAV_UNCHECKED 128
+#define NAV_HIGH 256
+
+static const float kNavHeightTolerance = 18.0;
+static const float kNavNearDistance = 64.0;
+static const float kNavMarkerRadius = 1200.0;
+static const float kNavOutlineRadius = 256.0;
+static const float kNavCacheSeconds = 10.0;
+static const int kNavMaxCandidates = 512;
+static const int kNavScanBatch = 8;
+#define kNavMaxOutlines 8
+static const int kNavGood[4] = {70, 255, 110, 255};
+static const int kNavWarn[4] = {255, 215, 40, 255};
+static const int kNavBad[4] = {255, 60, 60, 255};
+static const int kNavUnknown[4] = {170, 170, 170, 220};
+
+enum struct BMNavResult {
+	int flags;
+	int areaID;
+	float distance;
+	float checked;
+	int epoch;
+}
+
+enum struct BMNavIssue {
+	int cp;
+	int kind;
+	int index;
+	int revision;
+	int flags;
+	float distance;
+}
+
+ArrayList g_NavCache[MAX_CPS][2];
+int g_NavRevision;
+int g_NavEpoch;
+int g_NavXraySprite = -1;
+bool g_NavOutlines[MAXPLAYERS + 1] = {true, ...};
+bool g_NavXray[MAXPLAYERS + 1];
+bool g_ObjectiveMarker[MAXPLAYERS + 1] = {true, ...};
+int g_ObjectiveResourceRef = INVALID_ENT_REFERENCE;
+bool g_NavSettingsAdd[MAXPLAYERS + 1];
+bool g_NavSettingsOpen[MAXPLAYERS + 1];
+bool g_NavAuditOpen[MAXPLAYERS + 1];
+Handle g_NavScanTimer[MAXPLAYERS + 1];
+ArrayList g_NavIssues[MAXPLAYERS + 1];
+int g_NavScanCP[MAXPLAYERS + 1];
+int g_NavScanKind[MAXPLAYERS + 1];
+int g_NavScanIndex[MAXPLAYERS + 1];
+int g_NavScanRevision[MAXPLAYERS + 1];
+int g_NavScanEpoch[MAXPLAYERS + 1];
+int g_NavScanChecked[MAXPLAYERS + 1];
+int g_NavIssueSelected[MAXPLAYERS + 1] = {-1, ...};
+bool g_NavPending[MAXPLAYERS + 1];
+int g_NavPendingCP[MAXPLAYERS + 1];
+EAddKind g_NavPendingKind[MAXPLAYERS + 1];
+float g_NavPendingPos[MAXPLAYERS + 1][3];
+
+enum BMNavEditKind {
+	NavEdit_None,
+	NavEdit_Delete,
+	NavEdit_Replace,
+	NavEdit_Bulk
+}
+
+enum struct BMNavUndoPoint {
+	int cp;
+	int kind;
+	int index;
+	float pos[3];
+	bool replacement;
+}
+
+BMNavEditKind g_NavEditKind[MAXPLAYERS + 1];
+BMNavIssue g_NavEditPoint[MAXPLAYERS + 1];
+float g_NavEditPosition[MAXPLAYERS + 1][3];
+int g_NavEditRevision[MAXPLAYERS + 1];
+int g_NavEditEpoch[MAXPLAYERS + 1];
+ArrayList g_NavBulkPoints[MAXPLAYERS + 1];
+ArrayList g_NavEditUndo[MAXPLAYERS + 1];
+int g_NavUndoRevision[MAXPLAYERS + 1];
+int g_NavUndoResume[MAXPLAYERS + 1];
+bool g_NavScanBulk[MAXPLAYERS + 1];
+int g_NavScanResume[MAXPLAYERS + 1];
+float g_NavBulkConfirmedAt[MAXPLAYERS + 1];
+
+
+static void BMNav_OptionalNatives() {
+	for (int i = 0; i < sizeof(kNavNatives); i++)
+		MarkNativeAsOptional(kNavNatives[i]);
+}
+
+static bool BMNav_Ready() {
+	for (int i = 0; i < sizeof(kNavNatives); i++) {
+		if (GetFeatureStatus(FeatureType_Native, kNavNatives[i]) != FeatureStatus_Available)
+			return false;
+	}
+	return NavMesh_Exists();
+}
+
+public void OnNavMeshLoaded(bool success) {
+	g_NavEpoch++;
+}
+
+public void OnLibraryAdded(const char[] name) {
+	if (StrEqual(name, "navmesh"))
+		g_NavEpoch++;
+}
+
+public void OnLibraryRemoved(const char[] name) {
+	if (StrEqual(name, "navmesh"))
+		g_NavEpoch++;
+}
+
+static void BMNav_Changed(int cp, int kind) {
+	g_NavRevision++;
+	if (g_NavCache[cp][kind] != null)
+		g_NavCache[cp][kind].Clear();
+}
+
+static void BMNav_EndAdd(int client) {
+	g_NavPending[client] = false;
+	if (!g_bAddMenuOpen[client])
+		return;
+	g_bAddMenuOpen[client] = false;
+	g_bAnyMenuOpen[client] = false;
+	KillVisTimer(client);
+	BM_RemoveCapUser();
+}
+
+static void BMNav_Close(int client) {
+	BMNav_CancelEdit(client);
+	if (g_NavScanTimer[client] != null) {
+		delete g_NavScanTimer[client];
+	}
+	if (g_NavAuditOpen[client]) {
+		g_NavAuditOpen[client] = false;
+		BM_RemoveCapUser();
+		g_bAnyMenuOpen[client] = false;
+		KillVisTimer(client);
+	}
+	if (g_NavSettingsOpen[client] && !g_bAddMenuOpen[client]) {
+		g_bAnyMenuOpen[client] = false;
+		KillVisTimer(client);
+	}
+	g_NavSettingsOpen[client] = false;
+	g_NavIssueSelected[client] = -1;
+	g_NavPending[client] = false;
+}
+
+static void BMNav_ResetClient(int client) {
+	BMNav_Close(client);
+	delete g_NavEditUndo[client];
+	g_NavOutlines[client] = true;
+	g_NavXray[client] = false;
+	g_ObjectiveMarker[client] = true;
+	delete g_NavIssues[client];
+}
+
+static void BMNav_MapStart() {
+	g_ObjectiveResourceRef = INVALID_ENT_REFERENCE;
+	g_NavEpoch++;
+	g_NavXraySprite = PrecacheModel("materials/debug/debugwireframevertexcolorignorez.vmt", true);
+	for (int client = 1; client <= MaxClients; client++)
+		BMNav_ResetClient(client);
+	for (int cp = 0; cp < MAX_CPS; cp++) {
+		for (int kind = 0; kind < 2; kind++)
+			BMNav_Changed(cp, kind);
+	}
+}
+
+static void BMNav_Shutdown() {
+	for (int client = 1; client <= MaxClients; client++)
+		BMNav_ResetClient(client);
+	for (int cp = 0; cp < MAX_CPS; cp++) {
+		for (int kind = 0; kind < 2; kind++)
+			delete g_NavCache[cp][kind];
+	}
+}
+
+public bool BMNav_TraceFilter(int entity, int mask) {
+	if (entity == 0)
+		return true;
+	if (entity <= MaxClients)
+		return false;
+	if (!IsValidEntity(entity))
+		return true;
+	char classname[64];
+	GetEntityClassname(entity, classname, sizeof classname);
+	if (StrContains(classname, "weapon_") == 0)
+		return false;
+	return !(HasEntProp(entity, Prop_Send, "m_iClip1") && HasEntProp(entity, Prop_Data, "m_iPrimaryAmmoType"));
+}
+
+// Returns false if the bounded grid query was truncated; never call that a NAV failure.
+static bool BMNav_Areas(const float pos[3], float radius, ArrayList areas) {
+	int loX = NavMesh_WorldToGridX(pos[0] - radius);
+	int hiX = NavMesh_WorldToGridX(pos[0] + radius);
+	int loY = NavMesh_WorldToGridY(pos[1] - radius);
+	int hiY = NavMesh_WorldToGridY(pos[1] + radius);
+	ArrayStack cell = new ArrayStack();
+	int inspected;
+	bool complete = true;
+	for (int x = loX; x <= hiX && complete; x++) {
+		for (int y = loY; y <= hiY && complete; y++) {
+			NavMesh_GetAreasOnGrid(cell, x, y);
+			while (!cell.Empty) {
+				int area = cell.Pop();
+				if (++inspected > kNavMaxCandidates) {
+					complete = false;
+					break;
+				}
+				if (areas.FindValue(area) == -1)
+					areas.Push(area);
+			}
+		}
+	}
+	delete cell;
+	return complete;
+}
+
+static bool BMNav_ClearHull(const float pos[3], const float floor[3], float height) {
+	float mins[3] = {-16.0, -16.0, 0.0};
+	float maxs[3] = {16.0, 16.0, 72.0};
+	float end[3];
+	end = floor;
+	end[2] += 1.0;
+	maxs[2] = height;
+	Handle trace = TR_TraceHullFilterEx(pos, end, mins, maxs, MASK_PLAYERSOLID, BMNav_TraceFilter);
+	bool clear = !TR_StartSolid(trace) && !TR_AllSolid(trace);
+	if (clear && TR_DidHit(trace)) {
+		float normal[3];
+		TR_GetPlaneNormal(trace, normal);
+		clear = normal[2] >= 0.7;
+	}
+	delete trace;
+	return clear;
+}
+
+static void BMNav_Check(const float pos[3], BMNavResult result) {
+	result.flags = 0;
+	result.areaID = -1;
+	result.distance = -1.0;
+	result.checked = GetGameTime();
+	result.epoch = g_NavEpoch;
+	float end[3], floor[3], normal[3];
+	end = pos;
+	end[2] -= 64.0;
+	Handle trace = TR_TraceRayFilterEx(pos, end, MASK_PLAYERSOLID, RayType_EndPoint, BMNav_TraceFilter);
+	if (TR_StartSolid(trace) || TR_AllSolid(trace)) {
+		result.flags = NAV_SOLID;
+		delete trace;
+		return;
+	}
+	if (!TR_DidHit(trace)) {
+		result.flags = NAV_NO_FLOOR;
+		delete trace;
+		return;
+	}
+	TR_GetEndPosition(floor, trace);
+	TR_GetPlaneNormal(trace, normal);
+	delete trace;
+	if (normal[2] < 0.7)
+		result.flags |= NAV_STEEP;
+	if (pos[2] - floor[2] > kZOffsetOnAdd + 18.0)
+		result.flags |= NAV_HIGH;
+	if (!BMNav_ClearHull(pos, floor, 72.0)) {
+		if (BMNav_ClearHull(pos, floor, 36.0))
+			result.flags |= NAV_CROUCH;
+		else
+			result.flags |= NAV_SOLID;
+	}
+	if (!BMNav_Ready()) {
+		result.flags |= NAV_UNKNOWN;
+		return;
+	}
+	ArrayList areas = new ArrayList();
+	bool complete = BMNav_Areas(floor, kNavNearDistance, areas);
+	float best = kNavNearDistance + 1.0;
+	for (int i = 0; i < areas.Length; i++) {
+		int area = areas.Get(i);
+		float closest[3];
+		NavMeshArea_GetClosestPointOnArea(area, floor, closest);
+		if (FloatAbs(closest[2] - floor[2]) > kNavHeightTolerance)
+			continue;
+		float dx = closest[0] - floor[0];
+		float dy = closest[1] - floor[1];
+		float distance = SquareRoot(dx * dx + dy * dy);
+		if (distance < best) {
+			best = distance;
+			result.areaID = NavMeshArea_GetID(area);
+		}
+	}
+	delete areas;
+	if (result.areaID >= 0 && best <= kNavNearDistance) {
+		result.distance = best;
+		if (best > 1.0)
+			result.flags |= NAV_NEAR;
+	}
+	else
+		result.flags |= complete ? NAV_OFF : NAV_UNKNOWN;
+}
+
+static void BMNav_Describe(int flags, float distance, char[] text, int length) {
+	text[0] = '\0';
+	if (flags == 0) {
+		strcopy(text, length, "On NAV; standing clearance OK");
+		return;
+	}
+	if (flags & NAV_UNCHECKED)
+		StrCat(text, length, "Check pending; ");
+	if (flags & NAV_SOLID)
+		StrCat(text, length, "Body obstructed; ");
+	if (flags & NAV_NO_FLOOR)
+		StrCat(text, length, "No floor within 64u below; ");
+	if (flags & NAV_STEEP)
+		StrCat(text, length, "Steep floor; ");
+	if (flags & NAV_HIGH)
+		StrCat(text, length, "High above floor; ");
+	if (flags & NAV_CROUCH)
+		StrCat(text, length, "Crouch clearance only; ");
+	if (flags & NAV_OFF)
+		StrCat(text, length, "No same-floor NAV within 64u; ");
+	if (flags & NAV_NEAR) {
+		char label[48];
+		Format(label, sizeof label, "Outside NAV: %.0fu; ", distance);
+		StrCat(text, length, label);
+	}
+	if (flags & NAV_UNKNOWN)
+		StrCat(text, length, "NAV unavailable or lookup incomplete; ");
+	int size = strlen(text);
+	if (size >= 2)
+		text[size - 2] = '\0';
+}
+
+static void BMNav_Color(int flags, int color[4]) {
+	if (flags & (NAV_OFF | NAV_SOLID | NAV_NO_FLOOR | NAV_STEEP))
+		color = kNavBad;
+	else if (flags & (NAV_NEAR | NAV_CROUCH | NAV_HIGH))
+		color = kNavWarn;
+	else if (flags & (NAV_UNKNOWN | NAV_UNCHECKED))
+		color = kNavUnknown;
+	else
+		color = kNavGood;
+}
+
+static ArrayList BMNav_Spawns(int cp, int kind) {
+	return kind == 1 ? g_CASpawns[cp] : g_CPSpawns[cp];
+}
+
+static void BMNav_Cached(int cp, int kind, int index, BMNavResult result, int &budget, bool force = false) {
+	if (g_NavCache[cp][kind] == null)
+		g_NavCache[cp][kind] = new ArrayList(sizeof(BMNavResult));
+	ArrayList cache = g_NavCache[cp][kind];
+	while (cache.Length <= index) {
+		BMNavResult empty;
+		empty.flags = NAV_UNCHECKED;
+		empty.epoch = -1;
+		cache.PushArray(empty, sizeof(empty));
+	}
+	cache.GetArray(index, result, sizeof(result));
+	if (force || result.epoch != g_NavEpoch || GetGameTime() - result.checked >= kNavCacheSeconds) {
+		if (budget > 0) {
+			budget--;
+			float pos[3];
+			BMNav_Spawns(cp, kind).GetArray(index, pos, 3);
+			BMNav_Check(pos, result);
+			cache.SetArray(index, result, sizeof(result));
+		}
+		else
+			result.flags = NAV_UNCHECKED;
+	}
+}
+
+static int BMNav_Sprite(int client) {
+	return g_NavXray[client] && g_NavXraySprite > 0 ? g_NavXraySprite : g_iSpriteBeam;
+}
+
+static void BMNav_Line(int client, const float start[3], const float end[3], const int color[4], float width = 2.0) {
+	TE_SetupBeamPoints(start, end, BMNav_Sprite(client), 0, 0, 0, kBeamLife, width, width, 0, 0.0, color, 0);
+	TE_SendToClient(client);
+}
+
+static void BMNav_Footprint(int client, const float pos[3], const int color[4]) {
+	float a[3], b[3];
+	for (int side = 0; side < 4; side++) {
+		a = pos;
+		b = pos;
+		a[0] += (side == 0 || side == 3) ? -16.0 : 16.0;
+		a[1] += side < 2 ? -16.0 : 16.0;
+		int next = (side + 1) % 4;
+		b[0] += (next == 0 || next == 3) ? -16.0 : 16.0;
+		b[1] += next < 2 ? -16.0 : 16.0;
+		BMNav_Line(client, a, b, color);
+	}
+}
+
+static void BMNav_DrawAreas(int client, const float pos[3]) {
+	if (!g_NavOutlines[client] || !BMNav_Ready())
+		return;
+	ArrayList areas = new ArrayList();
+	BMNav_Areas(pos, kNavOutlineRadius, areas);
+	int chosen[kNavMaxOutlines];
+	float distances[kNavMaxOutlines];
+	int count;
+	for (int i = 0; i < areas.Length; i++) {
+		int area = areas.Get(i);
+		float point[3];
+		NavMeshArea_GetClosestPointOnArea(area, pos, point);
+		float distance = GetVectorDistance(pos, point, true);
+		if (distance > kNavOutlineRadius * kNavOutlineRadius || FloatAbs(point[2] - pos[2]) > 96.0)
+			continue;
+		int slot = count;
+		if (slot >= kNavMaxOutlines)
+			slot = kNavMaxOutlines - 1;
+		if (count == kNavMaxOutlines && distance >= distances[slot])
+			continue;
+		while (slot > 0 && distance < distances[slot - 1]) {
+			chosen[slot] = chosen[slot - 1];
+			distances[slot] = distances[slot - 1];
+			slot--;
+		}
+		chosen[slot] = area;
+		distances[slot] = distance;
+		if (count < kNavMaxOutlines)
+			count++;
+	}
+	delete areas;
+	for (int i = 0; i < count; i++) {
+		for (int edge = 0; edge < 4; edge++) {
+			float a[3], b[3];
+			NavMeshArea_GetCorner(chosen[i], edge, a);
+			NavMeshArea_GetCorner(chosen[i], (edge + 1) % 4, b);
+			a[2] += 2.0;
+			b[2] += 2.0;
+			BMNav_Line(client, a, b, i == 0 ? kNavGood : kNavUnknown);
+		}
+	}
+}
+
+static void BMNav_DescribeHint(int flags, float distance, char[] text, int length) {
+	if (flags & NAV_NO_FLOOR)
+		strcopy(text, length, "No floor");
+	else if (flags & NAV_SOLID)
+		strcopy(text, length, "Blocked");
+	else if (flags & NAV_STEEP)
+		strcopy(text, length, "Steep floor");
+	else if (flags & NAV_OFF)
+		strcopy(text, length, "No nearby NAV");
+	else if (flags & NAV_HIGH)
+		strcopy(text, length, "Too high");
+	else if (flags & NAV_CROUCH)
+		strcopy(text, length, "Crouch only");
+	else if (flags & NAV_UNKNOWN)
+		strcopy(text, length, "NAV unknown");
+	else if (flags & NAV_UNCHECKED)
+		strcopy(text, length, "Check pending");
+	else if (flags & NAV_NEAR)
+		Format(text, length, "NAV %.0fu away", distance);
+	else
+		strcopy(text, length, "On NAV; clear");
+}
+
+static void BMNav_Draw(int client) {
+	float me[3];
+	GetClientAbsOrigin(client, me);
+	char objective[128];
+	BMNav_DrawObjective(client, me, objective, sizeof objective);
+	BMNav_DrawAreas(client, me);
+	int cp = g_iSelectedCP[client];
+	int kinds[kDrawPointBudget], indices[kDrawPointBudget];
+	float distances[kDrawPointBudget];
+	int count;
+	if (cp >= 0 && cp < g_iNumCPs) {
+		for (int kind = 0; kind < 2; kind++) {
+			ArrayList spawns = BMNav_Spawns(cp, kind);
+			for (int index = 0; index < spawns.Length; index++) {
+				float pos[3];
+				spawns.GetArray(index, pos, 3);
+				float distance = GetVectorDistance(me, pos, true);
+				if (distance > kNavMarkerRadius * kNavMarkerRadius)
+					continue;
+				int slot = count;
+				if (slot >= kDrawPointBudget)
+					slot = kDrawPointBudget - 1;
+				if (count == kDrawPointBudget && distance >= distances[slot])
+					continue;
+				while (slot > 0 && distance < distances[slot - 1]) {
+					kinds[slot] = kinds[slot - 1];
+					indices[slot] = indices[slot - 1];
+					distances[slot] = distances[slot - 1];
+					slot--;
+				}
+				kinds[slot] = kind;
+				indices[slot] = index;
+				distances[slot] = distance;
+				if (count < kDrawPointBudget)
+					count++;
+			}
+		}
+	}
+	int budget = 6;
+	char nearest[224];
+	strcopy(nearest, sizeof nearest, "No nearby spawns");
+	for (int i = 0; i < count; i++) {
+		float pos[3];
+		BMNav_Spawns(cp, kinds[i]).GetArray(indices[i], pos, 3);
+		BMNavResult result;
+		BMNav_Cached(cp, kinds[i], indices[i], result, budget);
+		int color[4];
+		if (result.flags == 0)
+			color = kinds[i] == 1 ? kColor_CA : kColor_CP;
+		else
+			BMNav_Color(result.flags, color);
+		BM_DrawPoint(client, pos, color);
+		BMNav_Footprint(client, pos, kinds[i] == 1 ? kColor_CA : kColor_CP);
+		if (i == 0) {
+			char status[144];
+			BMNav_DescribeHint(result.flags, result.distance, status, sizeof status);
+			Format(nearest, sizeof nearest, "%s %s #%d | %.0fu | %s", ga_Letters[LetterIndex(cp)],
+				kinds[i] == 1 ? "CA" : "CP", indices[i], SquareRoot(distances[i]), status);
+		}
+	}
+	if (g_bAddMenuOpen[client] && IsPlayerAlive(client)) {
+		float candidate[3];
+		candidate = me;
+		candidate[2] += kZOffsetOnAdd;
+		BMNavResult result;
+		BMNav_Check(candidate, result);
+		char status[192];
+		BMNav_DescribeHint(result.flags, result.distance, status, sizeof status);
+		int color[4];
+		BMNav_Color(result.flags, color);
+		BMNav_Footprint(client, candidate, color);
+		PrintHintText(client, "%sPlace: %s\n%s", objective, status, nearest);
+	}
+	else if (!g_bReviewOpen[client])
+		PrintHintText(client, "%s%s", objective, nearest);
+	else if (objective[0] != '\0')
+		PrintHintText(client, "%s", objective);
+	if (g_NavAuditOpen[client] && g_NavIssueSelected[client] >= 0 && BMNav_ScanValid(client)) {
+		BMNavIssue issue;
+		g_NavIssues[client].GetArray(g_NavIssueSelected[client], issue, sizeof issue);
+		float pos[3];
+		BMNav_Spawns(issue.cp, issue.kind).GetArray(issue.index, pos, 3);
+		if (GetVectorDistance(me, pos, true) <= kNavMarkerRadius * kNavMarkerRadius)
+			BM_HighlightPoint(client, pos, kNavBad, true);
+	}
+}
+
+static void BMNav_Settings(int client) {
+	if (!g_NavSettingsOpen[client])
+		g_NavSettingsAdd[client] = g_bAddMenuOpen[client];
+	g_NavSettingsOpen[client] = true;
+	g_bAnyMenuOpen[client] = true;
+	StartVisTimer(client);
+	Menu menu = new Menu(BMNav_SettingsHandler);
+	menu.SetTitle("Editor display (only visible to you)\nBlue: CP | Orange: CA | Red: warning\nNAV: %s", BMNav_Ready() ? "loaded" : "unavailable");
+	char label[96];
+	Format(label, sizeof label, "Nearby NAV outlines: %s", g_NavOutlines[client] ? "ON" : "OFF");
+	menu.AddItem("nav", label);
+	Format(label, sizeof label, "Show markers through walls: %s", g_NavXray[client] ? "ON" : "OFF");
+	menu.AddItem("xray", label, g_NavXraySprite > 0 ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+	Format(label, sizeof label, "Selected objective beacon (through walls): %s", g_ObjectiveMarker[client] ? "ON" : "OFF");
+	menu.AddItem("objective", label);
+	menu.ExitBackButton = true;
+	menu.Display(client, 0);
+}
+
+public int BMNav_SettingsHandler(Menu menu, MenuAction action, int client, int item) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Select) {
+		if (!g_NavSettingsOpen[client])
+			return 0;
+		char key[16];
+		menu.GetItem(item, key, sizeof key);
+		if (StrEqual(key, "nav"))
+			g_NavOutlines[client] = !g_NavOutlines[client];
+		else if (StrEqual(key, "objective"))
+			g_ObjectiveMarker[client] = !g_ObjectiveMarker[client];
+		else
+			g_NavXray[client] = !g_NavXray[client];
+		BMNav_Settings(client);
+	}
+	else if (action == MenuAction_Cancel && item != MenuCancel_Interrupted) {
+		bool backToAdd = g_NavSettingsAdd[client] && item == MenuCancel_ExitBack;
+		BMNav_Close(client);
+		if (backToAdd)
+			OpenAddMenu(client);
+		else {
+			BMNav_EndAdd(client);
+			if (item == MenuCancel_ExitBack)
+				OpenMainMenu(client);
+		}
+	}
+	return 0;
+}
+
+static bool BMNav_ObjectivePosition(int cp, float pos[3]) {
+	if (cp < 0 || cp >= g_iNumCPs)
+		return false;
+	int entity = EntRefToEntIndex(g_ObjectiveResourceRef);
+	if (entity == INVALID_ENT_REFERENCE || !IsValidEntity(entity)) {
+		entity = FindEntityByClassname(-1, "ins_objective_resource");
+		if (entity == -1)
+			return false;
+		g_ObjectiveResourceRef = EntIndexToEntRef(entity);
+	}
+	if (!HasEntProp(entity, Prop_Send, "m_vCPPositions") || !HasEntProp(entity, Prop_Send, "m_iNumControlPoints"))
+		return false;
+	int count = GetEntProp(entity, Prop_Send, "m_iNumControlPoints");
+	if (cp >= count || cp >= GetEntPropArraySize(entity, Prop_Send, "m_vCPPositions"))
+		return false;
+	GetEntPropVector(entity, Prop_Send, "m_vCPPositions", pos, cp);
+	for (int axis = 0; axis < 3; axis++) {
+		if (pos[axis] != pos[axis] || FloatAbs(pos[axis]) > 32768.0)
+			return false;
+	}
+	return true;
+}
+
+static void BMNav_ObjectiveLine(int client, const float a[3], const float b[3], float width) {
+	int color[4] = {255, 60, 230, 255};
+	int sprite = g_NavXraySprite > 0 ? g_NavXraySprite : g_iSpriteBeam;
+	TE_SetupBeamPoints(a, b, sprite, 0, 0, 0, kBeamLife, width, width, 0, 0.0, color, 0);
+	TE_SendToClient(client);
+}
+
+static void BMNav_DrawObjective(int client, const float me[3], char[] label, int length) {
+	label[0] = '\0';
+	if (!g_ObjectiveMarker[client])
+		return;
+	int cp = g_iSelectedCP[client];
+	float pos[3];
+	if (!BMNav_ObjectivePosition(cp, pos)) {
+		Format(label, length, "Obj %s: unavailable\n", ga_Letters[LetterIndex(cp)]);
+		return;
+	}
+	float distance = GetVectorDistance(me, pos);
+	float height = pos[2] - me[2];
+	char vertical[32];
+	if (FloatAbs(height) < 32.0)
+		strcopy(vertical, sizeof vertical, "level");
+	else
+		Format(vertical, sizeof vertical, "%.0fu %s", FloatAbs(height), height > 0.0 ? "above" : "below");
+	Format(label, length, "Obj %s (magenta) | %.0fu | %s\n", ga_Letters[LetterIndex(cp)], distance, vertical);
+	// One map-wide beacon; its foot is the actual objective position.
+	float top[3], start[3], end[3];
+	top = pos;
+	top[2] += 256.0;
+	BMNav_ObjectiveLine(client, pos, top, 8.0);
+	for (int axis = 0; axis < 2; axis++) {
+		start = pos;
+		end = pos;
+		start[axis] -= 40.0;
+		end[axis] += 40.0;
+		BMNav_ObjectiveLine(client, start, end, 5.0);
+	}
+	// Billboard diamond above the objective, facing the editing player's view.
+	float angles[3], right[3];
+	GetClientEyeAngles(client, angles);
+	angles[0] = 0.0;
+	angles[2] = 0.0;
+	GetAngleVectors(angles, NULL_VECTOR, right, NULL_VECTOR);
+	float points[4][3];
+	for (int i = 0; i < 4; i++) {
+		points[i] = pos;
+		points[i][2] += 184.0;
+	}
+	points[0][2] += 48.0;
+	points[2][2] -= 48.0;
+	for (int axis = 0; axis < 2; axis++) {
+		points[1][axis] += right[axis] * 48.0;
+		points[3][axis] -= right[axis] * 48.0;
+	}
+	for (int i = 0; i < 4; i++)
+		BMNav_ObjectiveLine(client, points[i], points[(i + 1) % 4], 5.0);
+	start = me;
+	start[2] += 8.0;
+	BMNav_ObjectiveLine(client, start, pos, 1.0);
+}
+
+static void BMNav_Commit(int client, int cp, EAddKind kind, const float pos[3]) {
+	BMNav_Spawns(cp, view_as<int>(kind)).PushArray(pos, 3);
+	BM_PushUndo(client, cp, kind);
+	BM_NotifyCounts(client, cp);
+	OpenAddMenu(client);
+}
+
+static void BMNav_TryAdd(int client, int cp, EAddKind kind) {
+	g_NavPending[client] = false;
+	if (!IsPlayerAlive(client)) {
+		PrintToChat(client, "[BM] You must be alive to place a spawn.");
+		OpenAddMenu(client);
+		return;
+	}
+	float pos[3];
+	GetClientAbsOrigin(client, pos);
+	pos[2] += kZOffsetOnAdd;
+	if (!BM_CanAddSpawn(client, cp, kind, pos)) {
+		OpenAddMenu(client);
+		return;
+	}
+	BMNavResult result;
+	BMNav_Check(pos, result);
+	if (result.flags == 0) {
+		BMNav_Commit(client, cp, kind, pos);
+		return;
+	}
+	g_NavPending[client] = true;
+	g_NavPendingCP[client] = cp;
+	g_NavPendingKind[client] = kind;
+	g_NavPendingPos[client] = pos;
+	char status[256];
+	BMNav_Describe(result.flags, result.distance, status, sizeof status);
+	Menu menu = new Menu(BMNav_AddHandler);
+	menu.SetTitle("Spawn warning: %s\n%s\nAdd at recorded position: %.0f %.0f %.0f?",
+		kind == Add_CA ? "CA" : "CP", status, pos[0], pos[1], pos[2]);
+	menu.AddItem("yes", "Add anyway (recorded position)");
+	menu.AddItem("no", "Cancel and reposition");
+	menu.Display(client, 0);
+}
+
+public int BMNav_AddHandler(Menu menu, MenuAction action, int client, int item) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Select) {
+		bool pending = g_NavPending[client];
+		g_NavPending[client] = false;
+		if (!pending || !g_bAddMenuOpen[client])
+			return 0;
+		int cp = g_NavPendingCP[client];
+		EAddKind kind = g_NavPendingKind[client];
+		if (item == 0 && pending && IsPlayerAlive(client) && g_bAddMenuOpen[client]
+			&& cp == g_iSelectedCP[client] && cp >= 0 && cp < g_iNumCPs
+			&& BM_CanAddSpawn(client, cp, kind, g_NavPendingPos[client]))
+			BMNav_Commit(client, cp, kind, g_NavPendingPos[client]);
+		else
+			OpenAddMenu(client);
+	}
+	else if (action == MenuAction_Cancel && item != MenuCancel_Interrupted) {
+		if (!g_bAddMenuOpen[client])
+			return 0;
+		g_NavPending[client] = false;
+		OpenAddMenu(client);
+	}
+	return 0;
+}
+
+static void BMNav_StartScan(int client, bool bulk = false, int resume = -1) {
+	BMNav_Close(client);
+	g_NavScanBulk[client] = bulk;
+	g_NavScanResume[client] = resume;
+	BMNav_EndAdd(client);
+	BM_StopReview(client);
+	BM_StopBrowsing(client);
+	g_NavAuditOpen[client] = true;
+	g_bAnyMenuOpen[client] = true;
+	BM_AddCapUser();
+	StartVisTimer(client);
+	if (g_NavIssues[client] == null)
+		g_NavIssues[client] = new ArrayList(sizeof(BMNavIssue));
+	g_NavIssues[client].Clear();
+	g_NavScanCP[client] = 0;
+	g_NavScanKind[client] = 0;
+	g_NavScanIndex[client] = 0;
+	g_NavScanChecked[client] = 0;
+	g_NavScanRevision[client] = g_NavRevision;
+	g_NavScanEpoch[client] = g_NavEpoch;
+	Menu menu = new Menu(BMNav_ScanWaitHandler);
+	menu.SetTitle("Checking saved CP/CA spawns...\nChecks NAV coverage and body clearance.\nFiles will not be changed.");
+	menu.AddItem("wait", "Scanning in small batches...", ITEMDRAW_DISABLED);
+	menu.ExitBackButton = true;
+	menu.Display(client, 0);
+	g_NavScanTimer[client] = CreateTimer(0.1, BMNav_ScanTick, GetClientUserId(client), TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+}
+
+public int BMNav_ScanWaitHandler(Menu menu, MenuAction action, int client, int item) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Cancel && item != MenuCancel_Interrupted) {
+		BMNav_Close(client);
+		if (item == MenuCancel_ExitBack)
+			OpenMainMenu(client);
+	}
+	return 0;
+}
+
+public Action BMNav_ScanTick(Handle timer, any userid) {
+	int client = GetClientOfUserId(userid);
+	if (client <= 0)
+		return Plugin_Stop;
+	if (!g_NavAuditOpen[client] || g_NavScanRevision[client] != g_NavRevision || g_NavScanEpoch[client] != g_NavEpoch) {
+		g_NavScanTimer[client] = null;
+		PrintToChat(client, "[BM] Spawn list or NAV changed; run Check saved spawns again.");
+		OpenMainMenu(client);
+		return Plugin_Stop;
+	}
+	int budget = kNavScanBatch;
+	while (budget > 0 && g_NavScanCP[client] < g_iNumCPs) {
+		int cp = g_NavScanCP[client], kind = g_NavScanKind[client], index = g_NavScanIndex[client];
+		ArrayList spawns = BMNav_Spawns(cp, kind);
+		if (index >= spawns.Length) {
+			g_NavScanIndex[client] = 0;
+			if (++g_NavScanKind[client] == 2) {
+				g_NavScanKind[client] = 0;
+				g_NavScanCP[client]++;
+			}
+			continue;
+		}
+		BMNavResult result;
+		BMNav_Cached(cp, kind, index, result, budget, true);
+		g_NavScanChecked[client]++;
+		if (result.flags != 0) {
+			BMNavIssue issue;
+			issue.cp = cp;
+			issue.kind = kind;
+			issue.index = index;
+			issue.revision = g_iSpawnRevision[cp][kind];
+			issue.flags = result.flags;
+			issue.distance = result.distance;
+			g_NavIssues[client].PushArray(issue, sizeof issue);
+		}
+		g_NavScanIndex[client]++;
+	}
+	if (g_NavScanCP[client] < g_iNumCPs)
+		return Plugin_Continue;
+	g_NavScanTimer[client] = null;
+	PrintToChat(client, "[BM] Checked %d spawns: %d warnings/unknown results. Files unchanged.", g_NavScanChecked[client], g_NavIssues[client].Length);
+	if (g_NavScanBulk[client])
+		BMNav_BulkConfirm(client);
+	else if (g_NavScanResume[client] >= 0 && g_NavIssues[client].Length > 0)
+		BMNav_IssuePoint(client, g_NavScanResume[client] < g_NavIssues[client].Length ? g_NavScanResume[client] : 0, false);
+	else
+		BMNav_IssueList(client);
+	return Plugin_Stop;
+}
+
+static bool BMNav_ScanValid(int client) {
+	return g_NavIssues[client] != null && g_NavScanRevision[client] == g_NavRevision && g_NavScanEpoch[client] == g_NavEpoch;
+}
+
+static void BMNav_IssueList(int client) {
+	if (!g_NavAuditOpen[client])
+		return;
+	if (!BMNav_ScanValid(client)) {
+		PrintToChat(client, "[BM] Results became stale. Run Check saved spawns again.");
+		OpenMainMenu(client);
+		return;
+	}
+	Menu menu = new Menu(BMNav_IssueListHandler);
+	menu.SetTitle("Saved spawn checks: %d checked, %d flagged\nWarnings are not proof a bot cannot move.", g_NavScanChecked[client], g_NavIssues[client].Length);
+	menu.AddItem("rescan", "Recheck all saved spawns");
+	menu.AddItem("bulk", "Delete all red/problem spawns...", BMNav_Ready() ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+	menu.AddItem("undo", "Undo last warning edit", BMNav_CanUndo(client) ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+	for (int i = 0; i < g_NavIssues[client].Length; i++) {
+		BMNavIssue issue;
+		g_NavIssues[client].GetArray(i, issue, sizeof issue);
+		char key[16], label[240], status[176];
+		IntToString(i, key, sizeof key);
+		BMNav_Describe(issue.flags, issue.distance, status, sizeof status);
+		Format(label, sizeof label, "%s | %s #%d: %s", ga_Letters[LetterIndex(issue.cp)], issue.kind == 1 ? "CA" : "CP", issue.index, status);
+		menu.AddItem(key, label);
+	}
+	if (g_NavIssues[client].Length == 0)
+		menu.AddItem("none", "No warnings found", ITEMDRAW_DISABLED);
+	menu.ExitBackButton = true;
+	menu.Display(client, 0);
+}
+
+public int BMNav_IssueListHandler(Menu menu, MenuAction action, int client, int item) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Select) {
+		if (!g_NavAuditOpen[client])
+			return 0;
+		char key[16];
+		menu.GetItem(item, key, sizeof key);
+		if (StrEqual(key, "rescan"))
+			BMNav_StartScan(client);
+		else if (StrEqual(key, "bulk"))
+			BMNav_StartScan(client, true);
+		else if (StrEqual(key, "undo"))
+			BMNav_UndoEdit(client);
+		else
+			BMNav_IssuePoint(client, StringToInt(key), false);
+	}
+	else if (action == MenuAction_Cancel && item != MenuCancel_Interrupted) {
+		BMNav_Close(client);
+		if (item == MenuCancel_ExitBack)
+			OpenMainMenu(client);
+	}
+	return 0;
+}
+
+static void BMNav_IssuePoint(int client, int number, bool teleport) {
+	if (!g_NavAuditOpen[client])
+		return;
+	if (!BMNav_ScanValid(client) || g_NavIssues[client].Length == 0) {
+		BMNav_IssueList(client);
+		return;
+	}
+	int count = g_NavIssues[client].Length;
+	number = ((number % count) + count) % count;
+	BMNavIssue issue;
+	g_NavIssues[client].GetArray(number, issue, sizeof issue);
+	if (issue.revision != g_iSpawnRevision[issue.cp][issue.kind]) {
+		OpenMainMenu(client);
+		return;
+	}
+	g_NavIssueSelected[client] = number;
+	g_iSelectedCP[client] = issue.cp;
+	float pos[3];
+	BMNav_Spawns(issue.cp, issue.kind).GetArray(issue.index, pos, 3);
+	if (teleport)
+		BM_TeleportToBrowseSpawn(client, pos);
+	BMNavResult result;
+	int budget = 1;
+	BMNav_Cached(issue.cp, issue.kind, issue.index, result, budget, true);
+	char status[224];
+	BMNav_Describe(result.flags, result.distance, status, sizeof status);
+	Menu menu = new Menu(BMNav_IssuePointHandler);
+	menu.SetTitle("Warning %d/%d | %s %s #%d\nCurrent check: %s\n%.0f %.0f %.0f", number + 1, count,
+		ga_Letters[LetterIndex(issue.cp)], issue.kind == 1 ? "CA" : "CP", issue.index, status, pos[0], pos[1], pos[2]);
+	menu.AddItem("tele", "Teleport to this spawn");
+	menu.AddItem("next", "Next warning (teleport)", count > 1 ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+	menu.AddItem("prev", "Previous warning (teleport)", count > 1 ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+	menu.AddItem("refresh", "Recheck this position");
+	menu.AddItem("delete", "Delete this spawn...");
+	menu.AddItem("replace", "Replace with my current position...");
+	menu.AddItem("undo", "Undo last warning edit", BMNav_CanUndo(client) ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+	menu.ExitBackButton = true;
+	menu.Display(client, 0);
+}
+
+public int BMNav_IssuePointHandler(Menu menu, MenuAction action, int client, int item) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Select) {
+		char key[16];
+		menu.GetItem(item, key, sizeof key);
+		int number = g_NavIssueSelected[client];
+		if (StrEqual(key, "delete") || StrEqual(key, "replace")) {
+			BMNav_PointConfirm(client, StrEqual(key, "replace"));
+			return 0;
+		}
+		if (StrEqual(key, "undo")) {
+			BMNav_UndoEdit(client);
+			return 0;
+		}
+		if (StrEqual(key, "next"))
+			number++;
+		else if (StrEqual(key, "prev"))
+			number--;
+		BMNav_IssuePoint(client, number, !StrEqual(key, "refresh"));
+	}
+	else if (action == MenuAction_Cancel && item != MenuCancel_Interrupted) {
+		if (item == MenuCancel_ExitBack)
+			BMNav_IssueList(client);
+		else
+			BMNav_Close(client);
+	}
+	return 0;
+}
+
+static void BMNav_CancelEdit(int client) {
+	g_NavEditKind[client] = NavEdit_None;
+	g_NavScanBulk[client] = false;
+	g_NavScanResume[client] = -1;
+	delete g_NavBulkPoints[client];
+}
+
+static bool BMNav_CanUndo(int client) {
+	return g_NavEditUndo[client] != null && g_NavEditUndo[client].Length > 0
+		&& g_NavUndoRevision[client] == g_NavRevision;
+}
+
+static bool BMNav_RedForBulk(int flags) {
+	return (flags & (NAV_OFF | NAV_SOLID | NAV_NO_FLOOR | NAV_STEEP)) != 0
+		&& (flags & (NAV_UNKNOWN | NAV_UNCHECKED)) == 0;
+}
+
+static bool BMNav_ValidIssue(BMNavIssue issue) {
+	if (issue.cp < 0 || issue.cp >= g_iNumCPs || issue.kind < 0 || issue.kind > 1)
+		return false;
+	return issue.revision == g_iSpawnRevision[issue.cp][issue.kind]
+		&& issue.index >= 0 && issue.index < BMNav_Spawns(issue.cp, issue.kind).Length;
+}
+
+static void BMNav_EditChanged(int cp, int kind, int removed = -1) {
+	BM_UpdateBrowsePositions(cp, kind == 1, removed);
+	// Legacy Add-menu undo stores only CP/type, so discard affected list entries.
+	for (int client = 1; client <= MaxClients; client++) {
+		if (g_UndoStack[client] == null)
+			continue;
+		for (int i = g_UndoStack[client].Length - 1; i >= 0; i--) {
+			if (g_UndoStack[client].Get(i) == BM_PackUndoCode(cp, kind == 1))
+				g_UndoStack[client].Erase(i);
+		}
+	}
+}
+
+static void BMNav_BeginUndo(int client) {
+	delete g_NavEditUndo[client];
+	g_NavEditUndo[client] = new ArrayList(sizeof(BMNavUndoPoint));
+	g_NavUndoResume[client] = g_NavIssueSelected[client];
+}
+
+static void BMNav_RememberPoint(int client, BMNavIssue issue, bool replacement) {
+	BMNavUndoPoint point;
+	point.cp = issue.cp;
+	point.kind = issue.kind;
+	point.index = issue.index;
+	point.replacement = replacement;
+	BMNav_Spawns(issue.cp, issue.kind).GetArray(issue.index, point.pos, 3);
+	g_NavEditUndo[client].PushArray(point, sizeof point);
+}
+
+static bool BMNav_ReplacementSpacing(int client, BMNavIssue issue, const float pos[3]) {
+	ArrayList spawns = BMNav_Spawns(issue.cp, issue.kind);
+	for (int i = 0; i < spawns.Length; i++) {
+		if (i == issue.index)
+			continue;
+		float existing[3];
+		spawns.GetArray(i, existing, 3);
+		if (GetVectorDistance(pos, existing, true) < kDuplicateMinDist * kDuplicateMinDist) {
+			PrintToChat(client, "[BM] Replacement is too close to %s spawn #%d (min %.0fu). Nothing changed.",
+				issue.kind == 1 ? "CA" : "CP", i, kDuplicateMinDist);
+			return false;
+		}
+	}
+	return true;
+}
+
+static void BMNav_PointConfirm(int client, bool replacement) {
+	if (!g_NavAuditOpen[client])
+		return;
+	int number = g_NavIssueSelected[client];
+	if (!BMNav_ScanValid(client) || number < 0 || number >= g_NavIssues[client].Length) {
+		BMNav_IssueList(client);
+		return;
+	}
+	BMNavIssue issue;
+	g_NavIssues[client].GetArray(number, issue, sizeof issue);
+	if (!BMNav_ValidIssue(issue)) {
+		BMNav_IssueList(client);
+		return;
+	}
+	BMNav_CancelEdit(client);
+	g_NavEditPoint[client] = issue;
+	g_NavEditRevision[client] = g_NavRevision;
+	g_NavEditEpoch[client] = g_NavEpoch;
+	if (replacement) {
+		if (!IsPlayerAlive(client)) {
+			PrintToChat(client, "[BM] You must be alive to replace a spawn with your position.");
+			BMNav_IssuePoint(client, number, false);
+			return;
+		}
+		GetClientAbsOrigin(client, g_NavEditPosition[client]);
+		g_NavEditPosition[client][2] += kZOffsetOnAdd;
+		if (!BMNav_ReplacementSpacing(client, issue, g_NavEditPosition[client])) {
+			BMNav_IssuePoint(client, number, false);
+			return;
+		}
+		BMNavResult result;
+		BMNav_Check(g_NavEditPosition[client], result);
+		BMNav_ShowReplaceConfirm(client, result);
+		return;
+	}
+	g_NavEditKind[client] = NavEdit_Delete;
+	Menu menu = new Menu(BMNav_EditConfirmHandler);
+	menu.SetTitle("Delete %s | %s spawn #%d?\nUndo available after deletion.\nSave to file is still required.",
+		ga_Letters[LetterIndex(issue.cp)], issue.kind == 1 ? "CA" : "CP", issue.index);
+	menu.AddItem("no", "Cancel - keep this spawn");
+	menu.AddItem("yes", "YES - delete this spawn");
+	menu.ExitBackButton = true;
+	menu.Display(client, 0);
+}
+
+static void BMNav_ShowReplaceConfirm(int client, BMNavResult result) {
+	g_NavEditKind[client] = NavEdit_Replace;
+	BMNavIssue issue;
+	issue = g_NavEditPoint[client];
+	// Store the approved warning set so new warnings require another confirmation.
+	g_NavEditPoint[client].flags = result.flags;
+	char status[224];
+	BMNav_Describe(result.flags, result.distance, status, sizeof status);
+	Menu menu = new Menu(BMNav_EditConfirmHandler);
+	menu.SetTitle("Replace %s | %s spawn #%d?\nRecorded position: %.0f %.0f %.0f\n%s\nCP/type preserved. Save to file is still required.",
+		ga_Letters[LetterIndex(issue.cp)], issue.kind == 1 ? "CA" : "CP", issue.index,
+		g_NavEditPosition[client][0], g_NavEditPosition[client][1], g_NavEditPosition[client][2], status);
+	menu.AddItem("no", "Cancel - keep old position");
+	menu.AddItem("yes", result.flags == 0 ? "Confirm replacement" : "Replace anyway (recorded position)");
+	menu.ExitBackButton = true;
+	menu.Display(client, 0);
+}
+
+static void BMNav_BulkConfirm(int client) {
+	g_NavScanBulk[client] = false;
+	if (!BMNav_ScanValid(client) || !BMNav_Ready()) {
+		PrintToChat(client, "[BM] Bulk deletion requires a fresh scan with NAV available.");
+		BMNav_IssueList(client);
+		return;
+	}
+	BMNav_CancelEdit(client);
+	g_NavBulkPoints[client] = new ArrayList(sizeof(BMNavIssue));
+	int counts[2];
+	for (int i = 0; i < g_NavIssues[client].Length; i++) {
+		BMNavIssue issue;
+		g_NavIssues[client].GetArray(i, issue, sizeof issue);
+		if (!BMNav_RedForBulk(issue.flags))
+			continue;
+		g_NavBulkPoints[client].PushArray(issue, sizeof issue);
+		counts[issue.kind]++;
+	}
+	if (g_NavBulkPoints[client].Length == 0) {
+		PrintToChat(client, "[BM] No red/problem spawns found. Yellow and unknown results are kept.");
+		BMNav_CancelEdit(client);
+		BMNav_IssueList(client);
+		return;
+	}
+	g_NavEditKind[client] = NavEdit_Bulk;
+	g_NavEditRevision[client] = g_NavRevision;
+	g_NavEditEpoch[client] = g_NavEpoch;
+	g_NavBulkConfirmedAt[client] = GetGameTime();
+	char map[64];
+	GetCurrentMap(map, sizeof map);
+	Menu menu = new Menu(BMNav_EditConfirmHandler);
+	menu.SetTitle("Delete %d red/problem spawns on %s?\nAcross ALL CPs: CP %d | CA %d\nYellow/unknown results are kept.\nUndo available. Save to file is still required.",
+		counts[0] + counts[1], map, counts[0], counts[1]);
+	menu.AddItem("no", "Cancel - keep all spawns");
+	menu.AddItem("yes", "YES - delete these problem spawns");
+	menu.ExitBackButton = true;
+	menu.Display(client, 0);
+}
+
+static void BMNav_ReturnAfterCancel(int client, bool bulk) {
+	BMNav_CancelEdit(client);
+	if (bulk)
+		BMNav_IssueList(client);
+	else
+		BMNav_IssuePoint(client, g_NavIssueSelected[client], false);
+}
+
+public int BMNav_EditConfirmHandler(Menu menu, MenuAction action, int client, int item) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Select) {
+		if (!g_NavAuditOpen[client] || g_NavEditKind[client] == NavEdit_None)
+			return 0;
+		char key[8];
+		menu.GetItem(item, key, sizeof key);
+		bool bulk = g_NavEditKind[client] == NavEdit_Bulk;
+		if (!StrEqual(key, "yes")) {
+			BMNav_ReturnAfterCancel(client, bulk);
+			return 0;
+		}
+		if (g_NavEditRevision[client] != g_NavRevision || g_NavEditEpoch[client] != g_NavEpoch) {
+			PrintToChat(client, "[BM] Spawn list or NAV changed. Nothing edited; scanning again.");
+			BMNav_StartScan(client);
+			return 0;
+		}
+		if (bulk)
+			BMNav_DeleteBulk(client);
+		else
+			BMNav_ApplyPointEdit(client);
+	}
+	else if (action == MenuAction_Cancel && item != MenuCancel_Interrupted) {
+		if (g_NavAuditOpen[client])
+			BMNav_ReturnAfterCancel(client, g_NavEditKind[client] == NavEdit_Bulk);
+		else
+			BMNav_CancelEdit(client);
+	}
+	return 0;
+}
+
+static void BMNav_ApplyPointEdit(int client) {
+	BMNavIssue issue;
+	issue = g_NavEditPoint[client];
+	if (!BMNav_ValidIssue(issue)) {
+		BMNav_StartScan(client);
+		return;
+	}
+	bool replacement = g_NavEditKind[client] == NavEdit_Replace;
+	if (replacement) {
+		if (!IsPlayerAlive(client) || !BMNav_ReplacementSpacing(client, issue, g_NavEditPosition[client])) {
+			BMNav_ReturnAfterCancel(client, false);
+			return;
+		}
+		BMNavResult result;
+		BMNav_Check(g_NavEditPosition[client], result);
+		if ((result.flags & ~issue.flags) != 0) {
+			PrintToChat(client, "[BM] New warnings at the recorded position. Please review again.");
+			BMNav_ShowReplaceConfirm(client, result);
+			return;
+		}
+	}
+	int resume = g_NavIssueSelected[client];
+	BMNav_BeginUndo(client);
+	BMNav_RememberPoint(client, issue, replacement);
+	ArrayList spawns = BMNav_Spawns(issue.cp, issue.kind);
+	if (replacement)
+		spawns.SetArray(issue.index, g_NavEditPosition[client], 3);
+	else
+		spawns.Erase(issue.index);
+	BMNav_EditChanged(issue.cp, issue.kind, replacement ? -1 : issue.index);
+	g_NavUndoRevision[client] = g_NavRevision;
+	PrintToChat(client, "[BM] %s %s | %s spawn #%d. Undo available. Save to file to keep this change.",
+		replacement ? "Replaced" : "Deleted", ga_Letters[LetterIndex(issue.cp)], issue.kind == 1 ? "CA" : "CP", issue.index);
+	BMNav_StartScan(client, false, resume);
+}
+
+static void BMNav_DeleteBulk(int client) {
+	if (!BMNav_Ready() || g_NavBulkPoints[client] == null) {
+		PrintToChat(client, "[BM] NAV or bulk selection is unavailable. Nothing deleted.");
+		BMNav_ReturnAfterCancel(client, true);
+		return;
+	}
+	if (GetGameTime() - g_NavBulkConfirmedAt[client] > 30.0) {
+		PrintToChat(client, "[BM] Confirmation expired. Rechecking before asking again; nothing deleted.");
+		BMNav_StartScan(client, true);
+		return;
+	}
+	// Validate the entire transaction before changing any array.
+	for (int i = 0; i < g_NavBulkPoints[client].Length; i++) {
+		BMNavIssue issue;
+		g_NavBulkPoints[client].GetArray(i, issue, sizeof issue);
+		if (!BMNav_ValidIssue(issue) || !BMNav_RedForBulk(issue.flags)) {
+			PrintToChat(client, "[BM] Bulk selection changed. Nothing deleted; scanning again.");
+			BMNav_StartScan(client);
+			return;
+		}
+	}
+	int count = g_NavBulkPoints[client].Length;
+	BMNav_BeginUndo(client);
+	// Scan order is CP, type, index ascending. Undo uses the same order.
+	for (int i = 0; i < count; i++) {
+		BMNavIssue issue;
+		g_NavBulkPoints[client].GetArray(i, issue, sizeof issue);
+		BMNav_RememberPoint(client, issue, false);
+	}
+	for (int i = count - 1; i >= 0; i--) {
+		BMNavIssue issue;
+		g_NavBulkPoints[client].GetArray(i, issue, sizeof issue);
+		BMNav_Spawns(issue.cp, issue.kind).Erase(issue.index);
+		BMNav_EditChanged(issue.cp, issue.kind, issue.index);
+	}
+	g_NavUndoRevision[client] = g_NavRevision;
+	PrintToChat(client, "[BM] Deleted %d red/problem spawns. Undo restores the whole batch. Save to file to keep changes.", count);
+	BMNav_StartScan(client);
+}
+
+static void BMNav_UndoEdit(int client) {
+	if (!g_NavAuditOpen[client])
+		return;
+	if (!BMNav_CanUndo(client)) {
+		PrintToChat(client, "[BM] Undo unavailable: another edit or reload changed the spawn list.");
+		BMNav_StartScan(client);
+		return;
+	}
+	int count = g_NavEditUndo[client].Length;
+	int resume = g_NavUndoResume[client];
+	for (int i = 0; i < count; i++) {
+		BMNavUndoPoint point;
+		g_NavEditUndo[client].GetArray(i, point, sizeof point);
+		ArrayList spawns = BMNav_Spawns(point.cp, point.kind);
+		if (point.replacement)
+			spawns.SetArray(point.index, point.pos, 3);
+		else if (point.index == spawns.Length)
+			spawns.PushArray(point.pos, 3);
+		else {
+			spawns.ShiftUp(point.index);
+			spawns.SetArray(point.index, point.pos, 3);
+		}
+		BMNav_EditChanged(point.cp, point.kind);
+	}
+	delete g_NavEditUndo[client];
+	PrintToChat(client, "[BM] Undid last warning edit (%d points restored). Save to file to keep this change.", count);
+	BMNav_StartScan(client, false, resume);
+}
+
+static void OpenRemoveMapConfirm(int client) {
+	int count = BM_TotalCountAll();
+	if (count == 0) {
+		PrintToChat(client, "[BM] No spawns to remove on this map.");
+		OpenRemoveMenu(client, 6);
+		return;
+	}
+	char key[48];
+	Format(key, sizeof key, "%d:%d", g_NavEpoch, g_NavRevision);
+	Menu menu = new Menu(H_RemoveMapConfirm);
+	menu.SetTitle("Remove ALL %d spawns across ALL %d control points?\nThis clears CP and CA spawns.\nSave to file is still required.", count, g_iNumCPs);
+	menu.AddItem("no", "Cancel - keep all spawns");
+	menu.AddItem(key, "YES - remove all spawns on this map");
+	menu.ExitBackButton = true;
+	menu.Display(client, 30);
+}
+
+public int H_RemoveMapConfirm(Menu menu, MenuAction action, int client, int item) {
+	if (action == MenuAction_End)
+		delete menu;
+	else if (action == MenuAction_Select) {
+		char key[48], expected[48];
+		menu.GetItem(item, key, sizeof key);
+		if (!StrEqual(key, "no")) {
+			Format(expected, sizeof expected, "%d:%d", g_NavEpoch, g_NavRevision);
+			if (!StrEqual(key, expected)) {
+				PrintToChat(client, "[BM] Spawn list changed. Nothing deleted; confirm again.");
+				OpenRemoveMenu(client, 6);
+				return 0;
+			}
+			int count = BM_TotalCountAll();
+			for (int cp = 0; cp < g_iNumCPs; cp++) {
+				for (int kind = 0; kind < 2; kind++) {
+					ArrayList spawns = BMNav_Spawns(cp, kind);
+					if (spawns.Length == 0)
+						continue;
+					spawns.Clear();
+					BMNav_EditChanged(cp, kind);
+				}
+			}
+			PrintToChat(client, "[BM] Removed %d CP/CA spawns across all control points. Save to file to keep this change.", count);
+		}
+		OpenRemoveMenu(client, 6);
+	}
+	else if (action == MenuAction_Cancel) {
+		if (item == MenuCancel_ExitBack)
+			OpenRemoveMenu(client, 6);
+		else if (item == MenuCancel_Exit || item == MenuCancel_Timeout) {
+			g_bAnyMenuOpen[client] = false;
+			g_bAddMenuOpen[client] = false;
+			KillVisTimer(client);
+		}
+	}
+	return 0;
 }

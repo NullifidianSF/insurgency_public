@@ -22,7 +22,11 @@ static const char g_SpawnTrimRules[][][] = {
 	{ "prospect_coop_b6", "insurgent", "1"},
 	{ "congress_open_coop", "insurgent", "1"},
 	{ "ins_coastdawn_a3", "insurgent", "1"},
-	{ "congress_coop", "insurgent", "1"}
+	{ "congress_coop", "insurgent", "1"},
+	{ "ps7", "insurgent", "1"},
+	{ "drycanal_coop", "insurgent", "1"},
+	{ "drycanal_open_coop", "insurgent", "1"},
+	{ "dead_air", "insurgent", "1"}
 };
 
 enum struct TrimZone {
