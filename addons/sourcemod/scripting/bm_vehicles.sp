@@ -984,7 +984,7 @@ bool EnterSeat(int client, int v, int seat) {
 		}
 		g_R[client].LastInputYaw = PassengerRearYaw(client);
 		g_V[v].LastMove = GetGameTime();
-		PrintToChat(client, "[Vehicles] Rear passenger. Normal weapon controls | Mouse: aim behind and to either side | Use: exit.");
+		PrintToChat(client, "[Vehicles] Rear passenger. Press Use to exit.");
 		return true;
 	}
 	if (!CreateDriverDisplay(client, vehicle) || !CreateCamera(client, vehicle) || !ApplySeatWeaponLock(client) || (!IsATV(v) && !ApplySeatArmor(client))) {
