@@ -6,6 +6,7 @@ Some plugins need smlib from https://github.com/Rushaway/smlib/tree/transitional
 
 ## Credits
 
+- KitRifty: https://github.com/KitRifty
 - Jared Ballou: https://github.com/jaredballou/insurgency-sourcemod
 - thecannons: https://github.com/thecannons/Insurgency-dy-sourcemod
 - zDestinate: https://github.com/zDestinate/INS_sourcemod
