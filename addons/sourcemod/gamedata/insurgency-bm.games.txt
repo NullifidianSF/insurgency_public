@@ -4,6 +4,12 @@
 	{
 		"Offsets"
 		{
+			"CBaseAnimatingOverlay::AnimationOverlayVector"
+			{
+				"windows" "1176"
+				"linux" "1196"
+			}
+
 			// Vehicle wreck hull teardown: Windows sub_10086080; Linux VPhysicsDestroyObject.
 			"CBaseEntity::VPhysicsDestroyObject"
 			{
@@ -357,6 +363,14 @@
 
 		"Signatures"
 		{
+			// void (int count). Sets the number of animation overlay layers.
+			"CBaseAnimatingOverlay::SetNumAnimOverlays"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x8B\x55\x08\x56\x8B\xF1\x57\x8B\xBE\xA4\x04\x00\x00\x3B\xFA\x7D\x13\x2B\xD7\x8D\x8E\x98\x04\x00\x00\x52\xFF\x71\x0C"
+				"linux" "@_ZN21CBaseAnimatingOverlay18SetNumAnimOverlaysEi"
+			}
+
 			// IBody * (). Raw INextBot subobject this, not entity base. Linux uses the matching adjustment thunk.
 			"CINSNextBot::GetBodyInterface"
 			{
