@@ -8,7 +8,18 @@
 #include <adminmenu>
 #define REQUIRE_PLUGIN
 
-#define PLUGIN_VERSION "1.3.6"
+#define PLUGIN_VERSION "1.4.19"
+
+native bool ThirdPerson_IsClientActive(int client);
+Handle g_PassengerSetLayers;
+Handle g_PassengerGetMuzzle;
+int g_PassengerOverlayOffset = -1;
+Handle g_AimControlTimer[MAXPLAYERS + 1];
+int g_AimControlStep[MAXPLAYERS + 1];
+int g_AimControlWeapon[MAXPLAYERS + 1];
+bool g_AimControlHeld[MAXPLAYERS + 1];
+bool g_AimControlLifted[MAXPLAYERS + 1];
+float g_AimControlOrigin[MAXPLAYERS + 1][3];
 #define ATV_WRECK_MODEL "models/botmassacre/atv_wreck_v1/wreck.mdl"
 #define VEHICLE_WRECK_MODEL "models/botmassacre/humvee_wreck_v1/wreck.mdl"
 #define VEHICLE_DEBRIS_LIFETIME 15.0 // Seconds before loose wheels and panels are removed.
@@ -37,6 +48,7 @@
 #define VEHICLE_SUSPENSION_TRAVEL 32.0 // Maximum suspension extension/uneven ground allowance in Source units.
 #define VEHICLE_MIN_GROUND_Z 0.707107 // Slope limit: value = cos(degrees * PI / 180); degrees = acos(value) * 180 / PI. 0.707107 = 45 degrees; lower allows steeper slopes.
 #define VEHICLE_IMPACT_INTERVAL 0.25 // Seconds between pushes to the same target from this vehicle.
+#define VEHICLE_IMPACT_BOT_DAMAGE 100.0 // Damage per push to a bot on the opposing team.
 #define VEHICLE_IMPACT_PUSH_SCALE 1.3 // Player and bot push speed multiplier.
 #define VEHICLE_IMPACT_MAX_PUSH 650.0 // Maximum horizontal player and bot push, in units/second.
 #define VEHICLE_PUSH_DURATION 0.35 // Horizontal external force; eases out over the final half.
@@ -48,9 +60,9 @@
 #define DRIVER_IDLE_SEQUENCE 1
 #define DRIVER_BONEMERGE_EFFECTS (1 | 128)
 #define ENGINE_SAMPLE ")soundscape/emitters/loop/car_engine_loop_01.wav"
-#define VEHICLE_HORN_SAMPLE ")soundscape/emitters/oneshot/car_horn_02.ogg"
+#define VEHICLE_HORN_SAMPLE ")botmassacre/vehicles/horn_01.wav"
 #define VEHICLE_HORN_COOLDOWN 5.0 // Seconds between horn activations per player.
-#define VEHICLE_HORN_SOUND_LEVEL 90
+#define VEHICLE_HORN_SOUND_LEVEL 100 // Higher carries farther; sample volume is normalized separately.
 #define VEHICLE_HORN_VOLUME 1.0
 #define VEHICLE_ENGINE_IDLE_PITCH 90 // Idle pitch; 100 is the sample's original pitch.
 #define VEHICLE_ENGINE_MAX_PITCH 135 // Pitch at full driving speed and throttle.
@@ -76,6 +88,21 @@
 #define BTN_LEFT            (1 << 9)
 #define BTN_RIGHT           (1 << 10)
 #define BTN_RELOAD          (1 << 11)
+#define BTN_DUCK            (1 << 2)
+#define BTN_PRONE           (1 << 3)
+#define BTN_TURN_LEFT       (1 << 7)
+#define BTN_TURN_RIGHT      (1 << 8)
+#define BTN_LEAN_LEFT       (1 << 13)
+#define BTN_LEAN_RIGHT      (1 << 14)
+#define BTN_SPRINT          (1 << 15)
+#define BTN_WALK            (1 << 16)
+#define BTN_SPECIAL1        (1 << 17)
+#define BTN_DUCK_TOGGLE     (1 << 24)
+#define BTN_SPRINT_TOGGLE   (1 << 26)
+#define BTN_STANCE_TOGGLE   (1 << 29)
+#define ATV_PASSENGER_BLOCKED_BUTTONS (BTN_JUMP | BTN_DUCK | BTN_PRONE | BTN_FORWARD | BTN_BACKWARD | BTN_USE \
+	| BTN_TURN_LEFT | BTN_TURN_RIGHT | BTN_LEFT | BTN_RIGHT | BTN_LEAN_LEFT | BTN_LEAN_RIGHT | BTN_SPRINT | BTN_WALK \
+	| BTN_SPECIAL1 | BTN_DUCK_TOGGLE | BTN_SPRINT_TOGGLE | BTN_STANCE_TOGGLE)
 
 
 #define PASSENGER_RIG_MODEL "models/botmassacre/humvee_passenger_v3/bm_passenger_ranger.mdl"
@@ -94,6 +121,10 @@
 #define VEHICLE_TYPES 2
 #define ATV_MODEL "models/botmassacre/atv_v4/bm_atv.mdl"
 #define ATV_RIDER_MODEL "models/botmassacre/atv_rider_v3/bm_atv_ranger.mdl"
+#define ATV_PASSENGER_ANIM_MODEL "models/botmassacre/atv_passenger_v2/animations_player_%c.mdl"
+#define ATV_PASSENGER_YAW 80.0
+#define ATV_PASSENGER_REAR -34.0
+#define ATV_PASSENGER_HEIGHT 10.0
 #define ATV_HEALTH 10000.0 // Exposed rider receives normal damage; this HP belongs to the ATV only.
 #define ATV_FORWARD_SPEED 500.0 // Source units per second.
 #define ATV_REVERSE_SPEED 110.0
@@ -141,6 +172,12 @@ char g_TypeNames[VEHICLE_TYPES][16] = {"Humvee", "ATV"};
 char g_TypeKeys[VEHICLE_TYPES][16] = {"humvee", "atv"};
 char g_TypeModels[VEHICLE_TYPES][128] = {VEHICLE_MODEL, ATV_MODEL};
 bool g_ATVRiderReady;
+bool g_ATVPassengerReady[3];
+char g_ATVPassengerModels[3][PLATFORM_MAX_PATH] = {
+	"models/botmassacre/atv_passenger_v2/ranger.mdl",
+	"models/botmassacre/atv_passenger_v2/ranger_des.mdl",
+	"models/botmassacre/atv_passenger_v2/ranger_shad.mdl"
+};
 
 void InitVehicleProfiles() {
 	g_Types[VEHICLE_HUMVEE].Seats = 4;
@@ -167,7 +204,7 @@ void InitVehicleProfiles() {
 	g_Types[VEHICLE_HUMVEE].EngineIdlePitch = VEHICLE_ENGINE_IDLE_PITCH;
 	g_Types[VEHICLE_HUMVEE].EngineMaxPitch = VEHICLE_ENGINE_MAX_PITCH;
 	g_Types[VEHICLE_ATV] = g_Types[VEHICLE_HUMVEE];
-	g_Types[VEHICLE_ATV].Seats = 1;
+	g_Types[VEHICLE_ATV].Seats = 2;
 	g_Types[VEHICLE_ATV].Health = ATV_HEALTH;
 	g_Types[VEHICLE_ATV].ForwardSpeed = ATV_FORWARD_SPEED;
 	g_Types[VEHICLE_ATV].ReverseSpeed = ATV_REVERSE_SPEED;
@@ -200,7 +237,7 @@ void WheelLocal(int type, int wheel, float local[3]) {
 public Plugin myinfo = {
 	name = "BM Vehicles",
 	author = "Nullifidian, GPT/Codex",
-	description = "Humvees and solo ATVs, admin placement and per-map saved vehicles.",
+	description = "Humvees and two-seat ATVs with armed rear passengers, admin placement and per-map saved vehicles.",
 	version = PLUGIN_VERSION,
 	url = ""
 };
@@ -306,6 +343,24 @@ enum struct RiderState {
 	bool ArmorApplied;
 	int SavedTakeDamage;
 	bool WasWeaponRestricted;
+	bool PassengerModelApplied;
+	bool PassengerMotionApplied;
+	bool SoloDrive;
+	float SoloDriveEnds;
+	float SoloDriveInputTime;
+	int PassengerSupportRef;
+	int PassengerCollisionVehicleRef;
+	int PassengerSavedVehicleOwnerRef;
+	int PassengerWeaponRef;
+	int PassengerWeaponNoDraw;
+	int AimTestStep;
+	int AimTestWeaponRef;
+	Handle AimTestTimer;
+	float AimTestOrigin[3];
+	float AimTestOutside[3];
+	char SavedModel[PLATFORM_MAX_PATH];
+	int SavedSkin;
+	int SavedBody;
 }
 
 enum struct Placement {
@@ -371,15 +426,25 @@ TopMenu g_AdminMenu;
 ArrayList g_SecuritySpawns;
 char g_SeatNames[SEATS][24] = {"Driver", "Front passenger", "Rear left", "Rear right"};
 
+public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int errMax) {
+	MarkNativeAsOptional("ThirdPerson_IsClientActive");
+	return APLRes_Success;
+}
+
 public void OnPluginStart() {
 	if (GetEngineVersion() != Engine_Insurgency)
 		SetFailState("BM Vehicles is for Insurgency 2014 only.");
 	InitVehicleProfiles();
 	PrepareWreckPhysics();
+	PreparePassengerDisplay();
 	for (int v = 0; v < MAX_VEHICLES; v++)
 		ResetVehicle(v);
 	for (int client = 1; client <= MaxClients; client++)
 		ResetRider(client);
+	RegAdminCmd("sm_atvpassengerdrive", Command_PassengerDrive, ADMFLAG_ROOT, "Toggle a 60-second solo rear-seat driving test");
+	RegAdminCmd("sm_atvaimcontrol", Command_AimControl, ADMFLAG_ROOT, "Run or cancel an on-foot ADS ground-contact control test");
+	RegAdminCmd("sm_atvaimtest", Command_PassengerAimTest, ADMFLAG_ROOT, "Compare passenger position, display entities and native view setup");
+	RegAdminCmd("sm_atvpassengerstatus", Command_PassengerStatus, ADMFLAG_ROOT, "Show seated passenger velocity and animation state");
 	RegAdminCmd("sm_vehicles", Command_AdminVehicles, ADMFLAG_ROOT, "Vehicle administration menu");
 	HookEvent("player_death", Event_VehicleDeath, EventHookMode_Pre);
 	HookEvent("player_team", Event_RiderLeave, EventHookMode_Pre);
@@ -428,6 +493,19 @@ public void OnMapStart() {
 			LogError("%s model unavailable: %s", g_TypeNames[type], g_TypeModels[type]);
 	}
 	g_ATVRiderReady = FileExists(ATV_RIDER_MODEL, true) && PrecacheModel(ATV_RIDER_MODEL, true) > 0;
+	bool passengerAnimReady = true;
+	for (int animation = 0; animation < 5; animation++) {
+		char model[PLATFORM_MAX_PATH], data[PLATFORM_MAX_PATH];
+		Format(model, sizeof(model), ATV_PASSENGER_ANIM_MODEL, 'a' + animation);
+		strcopy(data, sizeof(data), model);
+		ReplaceString(data, sizeof(data), ".mdl", ".ani");
+		if (!FileExists(model, true) || !FileExists(data, true) || PrecacheModel(model, true) <= 0) {
+			passengerAnimReady = false;
+			LogError("ATV passenger animation unavailable: %s / %s", model, data);
+		}
+	}
+	for (int modelIndex = 0; modelIndex < sizeof(g_ATVPassengerModels); modelIndex++)
+		g_ATVPassengerReady[modelIndex] = passengerAnimReady && FileExists(g_ATVPassengerModels[modelIndex], true) && PrecacheModel(g_ATVPassengerModels[modelIndex], true) > 0;
 	g_DriverRigReady = FileExists(DRIVER_RIG_MODEL, true) && PrecacheModel(DRIVER_RIG_MODEL, true) > 0;
 	g_PassengerRigReady = FileExists(PASSENGER_RIG_MODEL, true) && PrecacheModel(PASSENGER_RIG_MODEL, true) > 0;
 	PrepareVehicleSounds();
@@ -444,6 +522,8 @@ public void OnConfigsExecuted() {
 }
 
 public void OnMapEnd() {
+	for (int client = 1; client <= MaxClients; client++)
+		StopAimControl(client);
 	ClearVehicles();
 	delete g_SecuritySpawns;
 	g_EndingMap = true;
@@ -451,12 +531,16 @@ public void OnMapEnd() {
 	for (int type = 0; type < VEHICLE_TYPES; type++)
 		g_Types[type].Ready = false;
 	g_ATVRiderReady = false;
+	for (int modelIndex = 0; modelIndex < sizeof(g_ATVPassengerReady); modelIndex++)
+		g_ATVPassengerReady[modelIndex] = false;
 	g_DamageEffectsReady = false;
 	g_MapSerial++;
 	delete g_Watch;
 }
 
 public void OnPluginEnd() {
+	for (int client = 1; client <= MaxClients; client++)
+		StopAimControl(client);
 	ClearVehicles();
 	delete g_SecuritySpawns;
 }
@@ -469,12 +553,16 @@ public void OnClientPutInServer(int client) {
 }
 
 public void OnClientDisconnect(int client) {
+	StopAimControl(client);
 	StopPlayerPush(client);
 	ExitRider(client, true);
 	ResetRider(client);
 }
 
 int g_ExplosionVictimUserId;
+int g_ImpactVictimUserId;
+int g_ImpactAttackerUserId;
+int g_ImpactVehicleType = -1;
 
 public Action Event_VehicleDeath(Event event, const char[] name, bool dontBroadcast) {
 	int userId = event.GetInt("userid");
@@ -484,19 +572,29 @@ public Action Event_VehicleDeath(Event event, const char[] name, bool dontBroadc
 		g_ExplosionVictimUserId = 0;
 		event.SetString("weapon", VEHICLE_EXPLOSION_DEATH_NAME);
 	}
+	bool impact = userId > 0 && userId == g_ImpactVictimUserId
+		&& event.GetInt("attacker") == g_ImpactAttackerUserId && (event.GetInt("damagebits") & DMG_VEHICLE) != 0
+		&& g_ImpactVehicleType >= 0 && g_ImpactVehicleType < VEHICLE_TYPES;
+	if (impact) {
+		g_ImpactVictimUserId = 0;
+		event.SetString("weapon", g_TypeNames[g_ImpactVehicleType]);
+	}
 	Event_RiderLeave(event, name, dontBroadcast);
-	return blast ? Plugin_Changed : Plugin_Continue;
+	return blast || impact ? Plugin_Changed : Plugin_Continue;
 }
 
 public void Event_RiderLeave(Event event, const char[] name, bool dontBroadcast) {
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	if (client > 0) {
+		StopAimControl(client);
 		StopPlayerPush(client);
 		ExitRider(client, true);
 	}
 }
 
 public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
+	for (int client = 1; client <= MaxClients; client++)
+		StopAimControl(client);
 	ClearVehicles();
 	RequestFrame(Frame_SpawnSaved, g_MapSerial);
 }
@@ -522,10 +620,15 @@ void ResetRider(int client) {
 	RiderState blank;
 	g_R[client] = blank;
 	g_R[client].Vehicle = -1;
+	g_R[client].AimTestStep = -1;
 	g_R[client].CameraRef = INVALID_ENT_REFERENCE;
 	g_R[client].DisplayRef = INVALID_ENT_REFERENCE;
 	g_R[client].DriverRigRef = INVALID_ENT_REFERENCE;
 	g_R[client].SavedWeaponRef = INVALID_ENT_REFERENCE;
+	g_R[client].PassengerWeaponRef = INVALID_ENT_REFERENCE;
+	g_R[client].PassengerSupportRef = INVALID_ENT_REFERENCE;
+	g_R[client].PassengerCollisionVehicleRef = INVALID_ENT_REFERENCE;
+	g_R[client].PassengerSavedVehicleOwnerRef = INVALID_ENT_REFERENCE;
 	g_R[client].DriverAnimTimeOffset = -1;
 }
 
@@ -551,6 +654,53 @@ int RiderInSeat(int v, int seat) {
 	return client > 0 && g_R[client].Vehicle == v && g_R[client].Seat == seat ? client : 0;
 }
 
+int DrivingClient(int v) {
+	int driver = RiderInSeat(v, 0);
+	if (driver != 0 || !IsATV(v))
+		return driver;
+	int passenger = RiderInSeat(v, 1);
+	return passenger > 0 && g_R[passenger].SoloDrive ? passenger : 0;
+}
+
+void StopPassengerDrive(int client) {
+	if (!g_R[client].SoloDrive)
+		return;
+	g_R[client].SoloDrive = false;
+	int v = g_R[client].Vehicle;
+	if (v != -1 && Vehicle(v) != -1 && RiderInSeat(v, 0) == 0)
+		StopEngine(v);
+}
+
+public Action Command_PassengerDrive(int client, int args) {
+	if (!HumanAlive(client) || !ArmedATVPassenger(client)) {
+		ReplyToCommand(client, "[Vehicles] Run this while sitting in the ATV rear passenger seat.");
+		return Plugin_Handled;
+	}
+	if (g_R[client].SoloDrive) {
+		StopPassengerDrive(client);
+		ReplyToCommand(client, "[Vehicles] Solo driving test stopped.");
+		return Plugin_Handled;
+	}
+	int v = g_R[client].Vehicle;
+	int vehicle = Vehicle(v);
+	if (vehicle == -1 || g_V[v].Destroyed || g_V[v].Health <= 0.0 || g_V[v].Airborne
+		|| FloatAbs(g_V[v].Speed) > 0.1 || RiderInSeat(v, 0) != 0 || g_R[client].Changing) {
+		ReplyToCommand(client, "[Vehicles] Use a stopped, working ATV with an empty driver seat.");
+		return Plugin_Handled;
+	}
+	StopPassengerAimTest(client);
+	if (!ArmedATVPassenger(client))
+		return Plugin_Handled;
+	g_R[client].SoloDrive = true;
+	g_R[client].SoloDriveEnds = GetGameTime() + 60.0;
+	g_R[client].SoloDriveInputTime = GetGameTime();
+	g_V[v].DriveButtons = 0;
+	g_V[v].LastMove = GetGameTime();
+	StartVehicleEngineSound(v, vehicle);
+	ReplyToCommand(client, "[Vehicles] Solo driving test: WASD drives the ATV, Space brakes; aim and fire normally. Speed capped at 120 units/s. Stops after 60 seconds, on exit, or by repeating sm_atvpassengerdrive.");
+	return Plugin_Handled;
+}
+
 bool Occupied(int v) {
 	for (int s = 0; s < VehicleSeats(v); s++) {
 		if (g_V[v].Occupants[s] != 0)
@@ -561,6 +711,12 @@ bool Occupied(int v) {
 
 void SeatLocal(int v, int seat, float local[3], int kind = 0) {
 	if (IsATV(v)) {
+		if (seat == 1) {
+			local[0] = 0.0;
+			local[1] = kind == 3 ? -52.0 : ATV_PASSENGER_REAR;
+			local[2] = kind == 3 ? 48.0 : (kind == 2 ? 76.0 : ATV_PASSENGER_HEIGHT);
+			return;
+		}
 		local[0] = 0.0;
 		local[1] = kind == 0 ? 0.0 : -12.0;
 		local[2] = kind == 0 ? 0.0 : (kind == 2 ? 70.0 : (kind == 3 ? 35.0 : 4.0));
@@ -622,7 +778,8 @@ public bool FilterVehicle(int entity, int contentsMask, any v) {
 		if (client == 0)
 			continue;
 		if (entity == client || entity == EntRefToEntIndex(g_R[client].DisplayRef)
-			|| entity == EntRefToEntIndex(g_R[client].CameraRef) || entity == EntRefToEntIndex(g_R[client].DriverRigRef))
+			|| entity == EntRefToEntIndex(g_R[client].CameraRef) || entity == EntRefToEntIndex(g_R[client].DriverRigRef)
+			|| entity == EntRefToEntIndex(g_R[client].PassengerSupportRef))
 			return false;
 	}
 	return true;
@@ -651,6 +808,13 @@ public bool FilterDriving(int entity, int contentsMask, any v) {
 		return false;
 	char classname[64];
 	GetEntityClassname(entity, classname, sizeof(classname));
+	if (StrEqual(classname, "prop_ragdoll")) {
+		char targetname[64];
+		GetEntPropString(entity, Prop_Data, "m_iName", targetname, sizeof(targetname));
+		// Medic bodies must not obstruct driving or act as wheel support.
+		if (StrContains(targetname, "playervital_ragdoll_", false) == 0)
+			return false;
+	}
 	if (StrContains(classname, "weapon_") != 0 || !HasEntProp(entity, Prop_Send, "m_hOwnerEntity"))
 		return true;
 	return GetEntPropEnt(entity, Prop_Send, "m_hOwnerEntity") != -1
@@ -704,25 +868,38 @@ void EnterNearestSeat(int client, bool quiet = false) {
 }
 
 bool EnterSeat(int client, int v, int seat) {
+	StopAimControl(client);
 	int vehicle = Vehicle(v);
 	if (vehicle == -1 || !HumanAlive(client) || g_R[client].Vehicle != -1 || g_R[client].Changing)
 		return false;
 	if (seat < 0 || seat >= VehicleSeats(v))
 		return false;
+	bool armedPassenger = IsATV(v) && seat == 1;
+	int passengerVariant = -1;
 	if (IsATV(v)) {
 		char model[PLATFORM_MAX_PATH];
 		GetClientModel(client, model, sizeof(model));
-		if (!g_ATVRiderReady || !SupportsSeatedDriver(model)) {
+		passengerVariant = ATVPassengerVariant(model);
+		if (!SupportsSeatedDriver(model) || (!armedPassenger && !g_ATVRiderReady)
+			|| (armedPassenger && (passengerVariant == -1 || !g_ATVPassengerReady[passengerVariant]))) {
 			PrintToChat(client, "[Vehicles] ATV rider pose unavailable for your model. Supported: Ranger woodland, desert and shadow variants.");
 			return false;
 		}
 		float origin[3], angles[3], fraction = 1.0, surface = -999999.0;
 		GetEntPropVector(vehicle, Prop_Data, "m_vecAbsOrigin", origin);
 		GetEntPropVector(vehicle, Prop_Data, "m_angAbsRotation", angles);
-		if (!TraceATVRider(v, origin, origin, angles, angles, fraction, surface)) {
+		if (!TraceATVRider(v, origin, origin, angles, angles, fraction, surface, false, seat)) {
 			PrintToChat(client, "[Vehicles] Not enough clearance above the ATV for a rider.");
 			return false;
 		}
+	}
+	if (armedPassenger && (g_PassengerSetLayers == null || g_PassengerOverlayOffset <= 0)) {
+		PrintToChat(client, "[Vehicles] Rear passenger display unavailable; check passenger gamedata.");
+		return false;
+	}
+	if (armedPassenger && GetEntProp(client, Prop_Send, "m_iCurrentStance") != 0) {
+		PrintToChat(client, "[Vehicles] Stand up before entering the rear passenger seat.");
+		return false;
 	}
 	if (g_V[v].Health <= 0.0 || FloatAbs(g_V[v].Speed) > 40.0 || g_V[v].Occupants[seat] != 0)
 		return false;
@@ -743,6 +920,11 @@ bool EnterSeat(int client, int v, int seat) {
 	if (!HasEntProp(client, Prop_Send, "m_iPlayerFlags")) {
 		PrintToChat(client, "[Vehicles] Weapon restriction is unavailable; entry cancelled.");
 		return false;
+	}
+	if (seat == 0 && IsATV(v)) {
+		int passenger = RiderInSeat(v, 1);
+		if (passenger > 0)
+			StopPassengerDrive(passenger);
 	}
 	StopPlayerPush(client);
 	ResetRider(client);
@@ -766,6 +948,45 @@ bool EnterSeat(int client, int v, int seat) {
 	g_NextUse[client] = GetGameTime() + 0.75;
 	// Queue rollback before any helper or player-state native can fail.
 	RequestFrame(Frame_VerifyEntry, g_R[client].UserId);
+	if (armedPassenger) {
+		GetClientModel(client, g_R[client].SavedModel, PLATFORM_MAX_PATH);
+		g_R[client].SavedSkin = GetEntProp(client, Prop_Send, "m_nSkin");
+		g_R[client].SavedBody = GetEntProp(client, Prop_Send, "m_nBody");
+		g_R[client].PassengerModelApplied = true;
+		SetEntityModel(client, g_ATVPassengerModels[passengerVariant]);
+		SetEntProp(client, Prop_Send, "m_nSkin", g_R[client].SavedSkin);
+		SetEntProp(client, Prop_Send, "m_nBody", g_R[client].SavedBody);
+		SetEntityMoveType(client, MOVETYPE_NONE);
+		g_R[client].PassengerMotionApplied = true;
+		if (!CreatePassengerSupport(client, vehicle)) {
+			ExitRider(client, true);
+			PrintToChat(client, "[Vehicles] Rear passenger ground support unavailable; entry cancelled.");
+			return false;
+		}
+		int owner = GetEntPropEnt(vehicle, Prop_Send, "m_hOwnerEntity");
+		g_R[client].PassengerCollisionVehicleRef = EntIndexToEntRef(vehicle);
+		g_R[client].PassengerSavedVehicleOwnerRef = owner == -1 ? INVALID_ENT_REFERENCE : EntIndexToEntRef(owner);
+		// Native client/server traces skip owned entities; the support remains ownerless.
+		SetEntPropEnt(vehicle, Prop_Send, "m_hOwnerEntity", client);
+		FollowPassengerSeat(client, true);
+		if (!SDKHookEx(client, SDKHook_PreThinkPost, Hook_PassengerMotion)
+			|| !SDKHookEx(client, SDKHook_PostThink, Hook_PassengerAnimate)
+			|| !SDKHookEx(client, SDKHook_PostThinkPost, Hook_PassengerPostThink)) {
+			ExitRider(client, true);
+			PrintToChat(client, "[Vehicles] Passenger movement setup failed; entry cancelled.");
+			return false;
+		}
+		HoldPassengerMotion(client);
+		if (!CreatePassengerDisplay(client, vehicle, passengerVariant)) {
+			ExitRider(client, true);
+			PrintToChat(client, "[Vehicles] Rear passenger display setup failed; entry cancelled.");
+			return false;
+		}
+		g_R[client].LastInputYaw = PassengerRearYaw(client);
+		g_V[v].LastMove = GetGameTime();
+		PrintToChat(client, "[Vehicles] Rear passenger. Normal weapon controls | Mouse: aim behind and to either side | Use: exit.");
+		return true;
+	}
 	if (!CreateDriverDisplay(client, vehicle) || !CreateCamera(client, vehicle) || !ApplySeatWeaponLock(client) || (!IsATV(v) && !ApplySeatArmor(client))) {
 		ExitRider(client, true);
 		PrintToChat(client, "[Vehicles] Seat display, camera, weapon restriction or armor protection failed; entry cancelled.");
@@ -894,6 +1115,8 @@ public void Frame_VerifyEntry(any userid) {
 	int client = GetClientOfUserId(userid);
 	if (g_EndingMap || client == 0 || g_R[client].Vehicle == -1)
 		return;
+	if (ArmedATVPassenger(client) && HumanAlive(client) && AttachedDriver(client, Vehicle(g_R[client].Vehicle)) && PassengerViewReady(client))
+		return;
 	if (!g_R[client].Changing && HumanAlive(client) && AttachedDriver(client, Vehicle(g_R[client].Vehicle))
 		&& EntRefToEntIndex(g_R[client].CameraRef) != -1 && EntRefToEntIndex(g_R[client].DisplayRef) != -1
 		&& GetEntPropEnt(client, Prop_Send, "m_hViewEntity") == EntRefToEntIndex(g_R[client].CameraRef))
@@ -904,19 +1127,26 @@ public void Frame_VerifyEntry(any userid) {
 
 void CaptureInput(int client, int buttons, const float angles[3], int cmdnum) {
 	int v = g_R[client].Vehicle;
+	bool passenger = ArmedATVPassenger(client);
+	if (passenger && (!g_R[client].SoloDrive || DrivingClient(v) != client))
+		return;
 	if (cmdnum <= g_R[client].LastDriveCmd) {
 		if (g_R[client].Seat == 0)
 			g_V[v].ReplayedDriveCmds++;
 		return;
 	}
 	g_R[client].LastDriveCmd = cmdnum;
-	if (g_R[client].Seat == 0) {
+	if (g_R[client].Seat == 0 || passenger) {
 		g_V[v].DriveButtons = buttons;
+		if (passenger)
+			g_R[client].SoloDriveInputTime = GetGameTime();
 		if (buttons & (BTN_LEFT | BTN_RIGHT)) {
 			g_V[v].LastTurnButtons = buttons;
 			g_V[v].LastTurnTime = GetGameTime();
 		}
 	}
+	if (passenger)
+		return;
 	float change = NormalizeYaw(angles[1] - g_R[client].LastInputYaw);
 	g_R[client].LastInputYaw = angles[1];
 	g_R[client].LookYaw = ClampFloat(g_R[client].LookYaw + change, -110.0, 110.0);
@@ -943,6 +1173,28 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 		else
 			EnterNearestSeat(client, true);
 	}
+	if (ArmedATVPassenger(client)) {
+		float rearYaw = PassengerRearYaw(client);
+		if (!seated) {
+			angles[0] = 0.0;
+			angles[1] = rearYaw;
+		}
+		float yaw = NormalizeYaw(angles[1] - rearYaw);
+		float clampedYaw = ClampFloat(yaw, -ATV_PASSENGER_YAW, ATV_PASSENGER_YAW);
+		float pitch = ClampFloat(angles[0], -50.0, 45.0);
+		bool snap = FloatAbs(yaw - clampedYaw) > 0.01 || FloatAbs(angles[0] - pitch) > 0.01;
+		angles[0] = pitch;
+		angles[1] = NormalizeYaw(rearYaw + clampedYaw);
+		angles[2] = 0.0;
+		g_R[client].LookYaw = clampedYaw;
+		g_R[client].LookPitch = pitch;
+		if (snap)
+			TeleportEntity(client, NULL_VECTOR, angles, NULL_VECTOR);
+		HoldPassengerMotion(client);
+		buttons &= ~ATV_PASSENGER_BLOCKED_BUTTONS;
+		vel[0] = vel[1] = vel[2] = 0.0;
+		return Plugin_Changed;
+	}
 	if (seated && g_R[client].Vehicle != -1 && !g_R[client].Changing && (pressed & BTN_RELOAD)) {
 		g_R[client].ChaseView = !g_R[client].ChaseView;
 		UpdateCamera(client, Vehicle(g_R[client].Vehicle));
@@ -968,13 +1220,22 @@ public void OnGameFrame() {
 		int vehicle = Vehicle(v);
 		if (vehicle == -1 || g_V[v].Destroyed || (!Occupied(v) && !g_V[v].Airborne))
 			continue;
+		int passenger = IsATV(v) ? RiderInSeat(v, 1) : 0;
+		if (passenger > 0 && g_R[passenger].SoloDrive
+			&& (now >= g_R[passenger].SoloDriveEnds || now - g_R[passenger].SoloDriveInputTime > 0.5
+				|| !HumanAlive(passenger) || g_R[passenger].Changing || !AttachedDriver(passenger, vehicle)
+				|| RiderInSeat(v, 0) != 0 || g_V[v].Health <= 0.0)) {
+			StopPassengerDrive(passenger);
+			if (IsClientInGame(passenger))
+				PrintToChat(passenger, "[Vehicles] Solo driving test stopped.");
+		}
 		float elapsed = now - g_V[v].LastMove;
 		if (elapsed <= 0.0)
 			continue;
 		g_V[v].LastMove = now;
 		float dt = FloatMin(elapsed, 0.05);
 		g_V[v].LastStepTime = dt;
-		int driver = RiderInSeat(v, 0);
+		int driver = DrivingClient(v);
 		if (g_V[v].Airborne || (driver > 0 && !g_R[driver].Changing && HumanAlive(driver) && AttachedDriver(driver, vehicle))) {
 			DriveVehicleStep(v, vehicle, dt);
 			if (Vehicle(v) != vehicle)
@@ -986,6 +1247,14 @@ public void OnGameFrame() {
 			int client = RiderInSeat(v, s);
 			if (client == 0 || g_R[client].Changing || !HumanAlive(client))
 				continue;
+			if (ArmedATVPassenger(client)) {
+				if (g_R[client].AimTestStep != -1 && (FloatAbs(g_V[v].Speed) > 0.1 || g_V[v].Airborne)) {
+					StopPassengerAimTest(client);
+					PrintToChat(client, "[Vehicles] ADS comparison cancelled because the ATV moved; seated state restored.");
+				}
+				FollowPassengerSeat(client);
+				continue;
+			}
 			UpdateDriverPose(client, dt);
 			UpdateCamera(client, vehicle);
 		}
@@ -1015,6 +1284,11 @@ public Action Timer_Watch(Handle timer) {
 		int v = g_R[client].Vehicle;
 		if (v == -1)
 			continue;
+		if (ArmedATVPassenger(client)) {
+			if (!HumanAlive(client) || !AttachedDriver(client, Vehicle(v)) || !PassengerViewReady(client))
+				ExitRider(client, true);
+			continue;
+		}
 		if (!HumanAlive(client) || !AttachedDriver(client, Vehicle(v)) || EntRefToEntIndex(g_R[client].DisplayRef) == -1
 			|| EntRefToEntIndex(g_R[client].CameraRef) == -1 || (g_R[client].SeatedPose && EntRefToEntIndex(g_R[client].DriverRigRef) == -1))
 			ExitRider(client, true);
@@ -1253,6 +1527,150 @@ bool IsATV(int v) {
 	return v >= 0 && v < MAX_VEHICLES && g_V[v].Type == VEHICLE_ATV;
 }
 
+bool ArmedATVPassenger(int client) {
+	return g_R[client].Seat == 1 && IsATV(g_R[client].Vehicle);
+}
+
+int ATVPassengerVariant(const char[] model) {
+	if (StrEqual(model, "models/characters/us_ranger_infantry_00.mdl", false))
+		return 0;
+	if (StrEqual(model, "models/characters/us_ranger_infantry_00_des.mdl", false))
+		return 1;
+	if (StrEqual(model, "models/characters/us_ranger_infantry_00_shad.mdl", false))
+		return 2;
+	return -1;
+}
+
+bool PassengerViewReady(int client) {
+	int view = GetEntPropEnt(client, Prop_Send, "m_hViewEntity");
+	if (view > 0 && view != client)
+		return false;
+	int modelIndex = ATVPassengerVariant(g_R[client].SavedModel);
+	char model[PLATFORM_MAX_PATH];
+	GetClientModel(client, model, sizeof(model));
+	return EntRefToEntIndex(g_R[client].PassengerSupportRef) > MaxClients
+		&& (PassengerAimTestNoDisplay(client) || EntRefToEntIndex(g_R[client].DisplayRef) > MaxClients)
+		&& modelIndex != -1 && g_R[client].PassengerModelApplied && StrEqual(model, g_R[client].AimTestStep == 4 ? g_R[client].SavedModel : g_ATVPassengerModels[modelIndex], false);
+}
+
+float PassengerRearYaw(int client) {
+	float angles[3];
+	int vehicle = Vehicle(g_R[client].Vehicle);
+	if (vehicle != -1)
+		GetEntPropVector(vehicle, Prop_Data, "m_angAbsRotation", angles);
+	return NormalizeYaw(angles[1] - 90.0);
+}
+
+void FollowPassengerSeat(int client, bool entering = false) {
+	int vehicle = Vehicle(g_R[client].Vehicle);
+	if (!AttachedDriver(client, vehicle))
+		return;
+	float origin[3], angles[3], local[3], point[3], current[3], zero[3];
+	GetEntPropVector(vehicle, Prop_Data, "m_vecAbsOrigin", origin);
+	GetEntPropVector(vehicle, Prop_Data, "m_angAbsRotation", angles);
+	SeatLocal(g_R[client].Vehicle, g_R[client].Seat, local, 1);
+	VehiclePoint(origin, angles, local, point);
+	if (g_R[client].AimTestStep == 1)
+		point = g_R[client].AimTestOutside;
+	GetClientAbsOrigin(client, current);
+	if (entering) {
+		float view[3];
+		view[1] = NormalizeYaw(angles[1] - 90.0);
+		TeleportEntity(client, point, view, zero);
+	} else if (GetVectorDistance(current, point, true) > 0.0001) {
+		// Keep native view and muzzle coordinates unparented; only the display is parented.
+		TeleportEntity(client, point, NULL_VECTOR, zero);
+		if (GetVectorDistance(current, point, true) <= 4096.0)
+			SetEntProp(client, Prop_Send, "m_fEffects", GetEntProp(client, Prop_Send, "m_fEffects") & ~EF_NOINTERP);
+	}
+}
+
+bool CreatePassengerSupport(int client, int vehicle) {
+	int support = CreateEntityByName("prop_dynamic_override");
+	if (support == -1)
+		return false;
+	g_R[client].PassengerSupportRef = EntIndexToEntRef(support);
+	DispatchKeyValue(support, "targetname", "bm_atv_passenger_support");
+	DispatchKeyValue(support, "model", g_TypeModels[VEHICLE_ATV]);
+	DispatchKeyValue(support, "solid", "0");
+	DispatchKeyValue(support, "DisableBoneFollowers", "1");
+	DispatchKeyValue(support, "disableshadows", "1");
+	DispatchKeyValue(support, "disableshadowdepth", "1");
+	if (!DispatchSpawn(support))
+		return false;
+	SetEntityMoveType(support, MOVETYPE_NONE);
+	SetEntityRenderMode(support, RENDER_NONE);
+	SetEntProp(support, Prop_Data, "m_takedamage", 0);
+	SetEntProp(support, Prop_Send, "m_CollisionGroup", 0);
+	float mins[3] = {-8.0, -8.0, -4.0};
+	float maxs[3] = {8.0, 8.0, -0.5};
+	SetEntPropVector(support, Prop_Send, "m_vecMins", mins);
+	SetEntPropVector(support, Prop_Send, "m_vecMaxs", maxs);
+	SetEntProp(support, Prop_Send, "m_nSolidType", 2); // SOLID_BBOX, without VPhysics.
+	SetEntProp(support, Prop_Send, "m_nSurroundType", 0);
+	SetEntProp(support, Prop_Send, "m_usSolidFlags", 4 | 64); // NOT_SOLID until enabled; FORCE_WORLD_ALIGNED.
+	float local[3];
+	SeatLocal(g_R[client].Vehicle, g_R[client].Seat, local, 1);
+	ParentAtLocal(support, vehicle, local, 0.0);
+	// The native input registers the bbox in the server collision partition.
+	AcceptEntityInput(support, "EnableCollision");
+	ActivateEntity(support);
+	// Keep this networked and ownerless so the passenger's prediction can collide with it.
+	SetEdictFlags(support, GetEdictFlags(support) | FL_EDICT_ALWAYS);
+	return GetEntProp(support, Prop_Send, "m_nSolidType") == 2
+		&& (GetEntProp(support, Prop_Send, "m_usSolidFlags") & 4) == 0;
+}
+
+void SetPassengerGrounded(int client, bool grounded) {
+	int offset = FindDataMapInfo(client, "m_fFlags");
+	int flags = GetEntData(client, offset, 4);
+	// Insurgency's raw ground bit is 1. Preserve other bits and notify clients; SetEntityFlags does neither reliably.
+	SetEntData(client, offset, grounded ? (flags | 1) : (flags & ~1), 4, true);
+}
+
+void HoldPassengerMotion(int client) {
+	int vehicle = Vehicle(g_R[client].Vehicle);
+	if (vehicle == -1 || !AttachedDriver(client, vehicle))
+		return;
+	// Usercmd velocity is only input; native walking and spread read entity velocity.
+	float zero[3];
+	SetEntDataVector(client, FindDataMapInfo(client, "m_vecVelocity"), zero, true);
+	SetEntPropVector(client, Prop_Data, "m_vecAbsVelocity", zero);
+	SetEntPropVector(client, Prop_Data, "m_vecBaseVelocity", zero);
+	SetEntPropFloat(client, Prop_Send, "m_flFallVelocity", 0.0);
+	SetEntProp(client, Prop_Send, "m_bJumping", 0);
+	int support = EntRefToEntIndex(g_R[client].PassengerSupportRef);
+	SetEntPropEnt(client, Prop_Send, "m_hGroundEntity", support);
+	SetPassengerGrounded(client, support > MaxClients);
+}
+
+public void Hook_PassengerAnimate(int client) {
+	if (!g_EndingMap && ArmedATVPassenger(client) && HumanAlive(client) && !g_R[client].Changing) {
+		// EF_NODRAW makes ShouldUpdateAnimState skip the native animation update.
+		SetEntProp(client, Prop_Send, "m_fEffects", GetEntProp(client, Prop_Send, "m_fEffects") & ~EF_NODRAW);
+		HoldPassengerMotion(client);
+	}
+}
+
+public void Hook_PassengerPostThink(int client) {
+	if (g_EndingMap || !ArmedATVPassenger(client) || !HumanAlive(client) || g_R[client].Changing)
+		return;
+	HoldPassengerMotion(client);
+	int effects = GetEntProp(client, Prop_Send, "m_fEffects");
+	SetEntProp(client, Prop_Send, "m_fEffects", g_R[client].AimTestStep == 4 ? ((effects & ~EF_NODRAW) | g_R[client].SavedNoDraw) : (effects | EF_NODRAW));
+	if (!PassengerAimTestNoDisplay(client) && !UpdatePassengerDisplay(client)) {
+		LogError("Rear passenger display update failed for client %d; safely exiting seat.", client);
+		ExitRider(client, true);
+	}
+}
+
+public void Hook_PassengerMotion(int client) {
+	if (!g_EndingMap && ArmedATVPassenger(client) && HumanAlive(client) && !g_R[client].Changing) {
+		FollowPassengerSeat(client);
+		HoldPassengerMotion(client);
+	}
+}
+
 int VehicleSeats(int v) {
 	return g_Types[g_V[v].Type].Seats;
 }
@@ -1275,8 +1693,13 @@ bool HumanAlive(int client) {
 }
 
 bool AttachedDriver(int client, int vehicle) {
-	return client > 0 && IsClientInGame(client) && vehicle > MaxClients
-		&& GetEntPropEnt(client, Prop_Data, "m_hMoveParent") == vehicle;
+	if (client <= 0 || !IsClientInGame(client) || vehicle <= MaxClients)
+		return false;
+	int parent = GetEntPropEnt(client, Prop_Data, "m_hMoveParent");
+	if (ArmedATVPassenger(client))
+		return parent == -1 && g_R[client].PassengerMotionApplied
+			&& Vehicle(g_R[client].Vehicle) == vehicle && GetEntityMoveType(client) == MOVETYPE_NONE;
+	return parent == vehicle;
 }
 
 public bool FilterPlacement(int entity, int contentsMask, any client) {
@@ -1385,11 +1808,46 @@ bool EmergencyExit(int client, float result[3]) {
 	return false;
 }
 
+void RestorePassengerVehicleOwner(int client) {
+	int vehicle = EntRefToEntIndex(g_R[client].PassengerCollisionVehicleRef);
+	int owner = EntRefToEntIndex(g_R[client].PassengerSavedVehicleOwnerRef);
+	g_R[client].PassengerCollisionVehicleRef = INVALID_ENT_REFERENCE;
+	g_R[client].PassengerSavedVehicleOwnerRef = INVALID_ENT_REFERENCE;
+	if (vehicle > MaxClients && IsValidEntity(vehicle)
+		&& GetEntPropEnt(vehicle, Prop_Send, "m_hOwnerEntity") == client)
+		SetEntPropEnt(vehicle, Prop_Send, "m_hOwnerEntity", owner);
+}
+
 void RestoreDriver(int client) {
+	StopPassengerDrive(client);
+	StopPassengerAimTest(client);
+	RestorePassengerWeapon(client);
+	RestorePassengerVehicleOwner(client);
 	if (client < 1 || !IsClientInGame(client))
 		return;
 	ReleaseSeatWeaponLock(client);
 	ReleaseSeatArmor(client);
+	if (g_R[client].PassengerMotionApplied) {
+		SDKUnhook(client, SDKHook_PreThinkPost, Hook_PassengerMotion);
+		SDKUnhook(client, SDKHook_PostThink, Hook_PassengerAnimate);
+		SDKUnhook(client, SDKHook_PostThinkPost, Hook_PassengerPostThink);
+		g_R[client].PassengerMotionApplied = false;
+		SetEntPropEnt(client, Prop_Send, "m_hGroundEntity", -1);
+		SetPassengerGrounded(client, false);
+	}
+	if (g_R[client].PassengerModelApplied) {
+		int modelIndex = ATVPassengerVariant(g_R[client].SavedModel);
+		char model[PLATFORM_MAX_PATH];
+		GetClientModel(client, model, sizeof(model));
+		if (modelIndex != -1 && StrEqual(model, g_ATVPassengerModels[modelIndex], false)) {
+			int skin = GetEntProp(client, Prop_Send, "m_nSkin");
+			int body = GetEntProp(client, Prop_Send, "m_nBody");
+			SetEntityModel(client, g_R[client].SavedModel);
+			SetEntProp(client, Prop_Send, "m_nSkin", skin);
+			SetEntProp(client, Prop_Send, "m_nBody", body);
+		}
+		g_R[client].PassengerModelApplied = false;
+	}
 	SetEntPropEnt(client, Prop_Send, "m_hViewEntity", -1);
 	SetClientViewEntity(client, client);
 	SetEntProp(client, Prop_Send, "m_fEffects", (GetEntProp(client, Prop_Send, "m_fEffects") & ~EF_NODRAW) | g_R[client].SavedNoDraw);
@@ -1397,12 +1855,20 @@ void RestoreDriver(int client) {
 	SetEntProp(client, Prop_Send, "m_bDrawViewmodel", g_R[client].SavedDrawViewmodel);
 	if (IsPlayerAlive(client))
 		SetEntityMoveType(client, g_R[client].SavedMoveType);
-	int activeWeapon = EntRefToEntIndex(g_R[client].SavedWeaponRef);
+	int activeWeapon = ArmedATVPassenger(client) ? -1 : EntRefToEntIndex(g_R[client].SavedWeaponRef);
 	if (activeWeapon > MaxClients && IsValidEntity(activeWeapon))
 		SetEntProp(activeWeapon, Prop_Send, "m_fEffects", (GetEntProp(activeWeapon, Prop_Send, "m_fEffects") & ~EF_NODRAW) | g_R[client].SavedWeaponNoDraw);
 }
 
 void ClearDriverDisplay(int client) {
+	StopPassengerDrive(client);
+	StopPassengerAimTest(client);
+	RestorePassengerWeapon(client);
+	RestorePassengerVehicleOwner(client);
+	int support = EntRefToEntIndex(g_R[client].PassengerSupportRef);
+	g_R[client].PassengerSupportRef = INVALID_ENT_REFERENCE;
+	if (support > MaxClients && IsValidEntity(support))
+		RemoveEntity(support);
 	int camera = EntRefToEntIndex(g_R[client].CameraRef);
 	g_R[client].CameraRef = INVALID_ENT_REFERENCE;
 	if (camera > MaxClients && IsValidEntity(camera))
@@ -2017,7 +2483,7 @@ void FlyVehicleStep(int v, int vehicle, float dt) {
 		if (wheelHit && normal[2] >= g_Types[g_V[v].Type].GroundZ)
 			g_V[v].GroundNormal = normal;
 		g_V[v].Landings++;
-		if (RiderInSeat(v, 0) == 0 || (wheelHit && normal[2] < g_Types[g_V[v].Type].GroundZ))
+		if (DrivingClient(v) == 0 || (wheelHit && normal[2] < g_Types[g_V[v].Type].GroundZ))
 			g_V[v].Speed = 0.0;
 	} else if (wheelHit) {
 		g_V[v].FlightVelocity[0] = g_V[v].FlightVelocity[1] = 0.0;
@@ -2025,7 +2491,8 @@ void FlyVehicleStep(int v, int vehicle, float dt) {
 			g_V[v].FlightVelocity[2] = FloatMin(0.0, g_V[v].FlightVelocity[2]);
 		g_V[v].Speed = 0.0;
 	}
-	VehiclePlayerContacts(v, vehicle, origin, destination, angles, angles);
+	if (!VehiclePlayerContacts(v, vehicle, origin, destination, angles, angles))
+		return;
 	MoveContinuous(vehicle, destination, angles);
 	float contact[4];
 	AnimateVehicleTravel(v, vehicle, origin, destination, angles, contact);
@@ -2051,6 +2518,9 @@ void DriveVehicleStep(int v, int vehicle, float dt) {
 		throttle -= 1.0;
 	bool brake = (g_V[v].DriveButtons & BTN_JUMP) != 0;
 	float targetSpeed = throttle > 0.0 ? g_Types[g_V[v].Type].ForwardSpeed : (throttle < 0.0 ? -g_Types[g_V[v].Type].ReverseSpeed : 0.0);
+	int controller = DrivingClient(v);
+	if (controller > 0 && g_R[controller].SoloDrive)
+		targetSpeed = ClampFloat(targetSpeed, -120.0, 120.0);
 	float acceleration = throttle == 0.0 ? g_Types[g_V[v].Type].Coast : g_Types[g_V[v].Type].Acceleration;
 	g_V[v].BrakeLights = brake || g_V[v].Speed * throttle < 0.0;
 	UpdateVehicleSkin(v, vehicle);
@@ -2126,7 +2596,8 @@ void DriveVehicleStep(int v, int vehicle, float dt) {
 			return;
 		}
 	}
-	VehiclePlayerContacts(v, vehicle, origin, next, oldAngles, angles);
+	if (!VehiclePlayerContacts(v, vehicle, origin, next, oldAngles, angles))
+		return;
 	MoveContinuous(vehicle, next, angles);
 	AnimateVehicleTravel(v, vehicle, origin, next, angles, contact);
 }
@@ -2952,9 +3423,25 @@ bool TraceBodyCell(int v, const float start[3], const float finish[3], const flo
 }
 
 bool TraceATVRider(int v, const float start[3], const float finish[3], const float oldAngles[3], const float newAngles[3],
-	float &fraction, float &surface, bool landing = false) {
+	float &fraction, float &surface, bool landing = false, int enteringSeat = -1) {
 	float center[3] = {0.0, -8.0, 62.0};
 	float half[3] = {18.0, 14.0, 21.0};
+	if ((RiderInSeat(v, 0) != 0 || enteringSeat == 0)
+		&& !TraceBodyCell(v, start, finish, oldAngles, newAngles, center, half, 0, fraction, surface, landing))
+		return false;
+	if (RiderInSeat(v, 1) == 0 && enteringSeat != 1)
+		return true;
+	center[1] = ATV_PASSENGER_REAR;
+	center[2] = 63.0;
+	half[0] = 22.0;
+	half[1] = 20.0;
+	if (!TraceBodyCell(v, start, finish, oldAngles, newAngles, center, half, 0, fraction, surface, landing))
+		return false;
+	center[1] = ATV_PASSENGER_REAR - 19.0;
+	center[2] = 32.0;
+	half[0] = 19.0;
+	half[1] = 14.0;
+	half[2] = 15.0;
 	return TraceBodyCell(v, start, finish, oldAngles, newAngles, center, half, 0, fraction, surface, landing);
 }
 
@@ -3059,20 +3546,22 @@ public void Hook_PushPostThink(int client) {
 	RestorePushBaseVelocity(client);
 }
 
-void VehiclePlayerContacts(int v, int vehicle, const float start[3], const float finish[3], const float oldAngles[3], const float angles[3]) {
-	int driver = RiderInSeat(v, 0);
+bool VehiclePlayerContacts(int v, int vehicle, const float start[3], const float finish[3], const float oldAngles[3], const float angles[3]) {
+	int driver = DrivingClient(v);
 	if (driver == 0 || !HumanAlive(driver) || g_V[v].Health <= 0.0)
-		return;
+		return true;
 	int team = GetClientTeam(driver);
 	if (team <= 1)
-		return;
+		return true;
+	int reference = g_V[v].VehicleRef;
+	int driverUserId = GetClientUserId(driver);
 	float speed = FloatAbs(g_V[v].Speed);
 	float now = GetGameTime();
 	float delta[3], side[3], movement[3];
 	SubtractVectors(finish, start, delta);
 	float step = GetVectorLength(delta);
 	if (step < 0.001)
-		return;
+		return true;
 	movement = delta;
 	movement[2] = 0.0;
 	NormalizeVector(movement, movement);
@@ -3136,7 +3625,26 @@ void VehiclePlayerContacts(int v, int vehicle, const float start[3], const float
 		strength = FloatMin(strength, VEHICLE_IMPACT_MAX_PUSH);
 		StartPlayerPush(client, vehicle, push, strength, now);
 		g_V[v].ImpactPushes++;
+		if (strength > 0.0 && IsFakeClient(client) && GetClientTeam(client) != team) {
+			// Scope death attribution to this damage call, including nested damage callbacks.
+			int previousVictim = g_ImpactVictimUserId;
+			int previousAttacker = g_ImpactAttackerUserId;
+			int previousType = g_ImpactVehicleType;
+			g_ImpactVictimUserId = userid;
+			g_ImpactAttackerUserId = driverUserId;
+			g_ImpactVehicleType = g_V[v].Type;
+			SDKHooks_TakeDamage(client, vehicle, driver, VEHICLE_IMPACT_BOT_DAMAGE, DMG_VEHICLE, -1, NULL_VECTOR, center, false);
+			g_ImpactVictimUserId = previousVictim;
+			g_ImpactAttackerUserId = previousAttacker;
+			g_ImpactVehicleType = previousType;
+			// A kill can end the round, remove the vehicle, or eject its driver.
+			if (g_EndingMap || g_V[v].VehicleRef != reference || Vehicle(v) != vehicle || g_V[v].Health <= 0.0
+				|| DrivingClient(v) != driver || !HumanAlive(driver) || GetClientUserId(driver) != driverUserId
+				|| GetClientTeam(driver) != team)
+				return false;
+		}
 	}
+	return true;
 }
 void CacheSecuritySpawns() {
 	if (g_SecuritySpawns != null)
@@ -3505,7 +4013,7 @@ public int LiveMenuHandler(Menu menu, MenuAction action, int client, int item) {
 			PrintToConsole(client, "[Vehicles] airborne=%d wheel contacts=%d vertical speed=%.1f jumps=%d landings=%d ramp recoveries=%d", g_V[v].Airborne, g_V[v].SupportCount, g_V[v].FlightVelocity[2], g_V[v].Jumps, g_V[v].Landings, g_V[v].RampRecoveries);
 			PrintToConsole(client, "[Vehicles] pitch=%.1f roll=%.1f body traces last move=%d | Security spawns cached=%d", tilt[0], tilt[2], g_V[v].BodyTraces, g_SecuritySpawns == null ? -1 : g_SecuritySpawns.Length);
 			for (int s = 0; s < VehicleSeats(v); s++)
-				PrintToConsole(client, "[Vehicles] seat %s: userid=%d", g_SeatNames[s], g_V[v].Occupants[s]);
+				PrintToConsole(client, "[Vehicles] seat %s: userid=%d", IsATV(v) && s == 1 ? "Armed rear passenger" : g_SeatNames[s], g_V[v].Occupants[s]);
 			PrintToChat(client, "[Vehicles] Status printed to your console.");
 		} else if (g_V[v].Health <= 0.0)
 			PrintToChat(client, "[Vehicles] This vehicle is destroyed. Use Respawn vehicle to restore it when the area is clear.");
@@ -3881,7 +4389,7 @@ void ShowVehicleTypeMenu(int client, bool save) {
 		char info[48], label[96];
 		Format(info, sizeof(info), "%d %d %d", g_MapSerial, save, type);
 		Format(label, sizeof(label), "%s | %d seat%s | %s", g_TypeNames[type], g_Types[type].Seats,
-			g_Types[type].Seats == 1 ? "" : "s", type == VEHICLE_ATV ? "exposed rider" : "armored cabin");
+			g_Types[type].Seats == 1 ? "" : "s", type == VEHICLE_ATV ? "armed rear passenger" : "armored cabin");
 		menu.AddItem(info, label, g_Types[type].Ready && (type != VEHICLE_ATV || g_ATVRiderReady) ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
 	}
 	menu.ExitBackButton = true;
@@ -3921,4 +4429,524 @@ public int VehicleTypeHandler(Menu menu, MenuAction action, int client, int item
 		ShowVehicleTypeMenu(client, save);
 	}
 	return 0;
+}
+
+void PreparePassengerDisplay() {
+	GameData config = new GameData("insurgency-bm.games");
+	if (config == null) {
+		LogError("Missing insurgency-bm.games.txt; rear passenger display disabled.");
+		return;
+	}
+	g_PassengerOverlayOffset = config.GetOffset("CBaseAnimatingOverlay::AnimationOverlayVector");
+	StartPrepSDKCall(SDKCall_Entity);
+	if (PrepSDKCall_SetFromConf(config, SDKConf_Signature, "CBaseAnimatingOverlay::SetNumAnimOverlays")) {
+		PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);
+		g_PassengerSetLayers = EndPrepSDKCall();
+	}
+	StartPrepSDKCall(SDKCall_Player);
+	if (PrepSDKCall_SetFromConf(config, SDKConf_Signature, "CINSPlayer::GetMuzzle")) {
+		PrepSDKCall_AddParameter(SDKType_Vector, SDKPass_ByRef, _, VENCODE_FLAG_COPYBACK);
+		PrepSDKCall_AddParameter(SDKType_QAngle, SDKPass_ByRef, _, VENCODE_FLAG_COPYBACK);
+		g_PassengerGetMuzzle = EndPrepSDKCall();
+	}
+	delete config;
+	if (g_PassengerSetLayers == null || g_PassengerOverlayOffset <= 0)
+		LogError("Rear passenger animation setup unavailable; check passenger gamedata.");
+}
+
+bool CreatePassengerDisplay(int client, int vehicle, int modelVariant) {
+	if (g_PassengerSetLayers == null || g_PassengerOverlayOffset <= 0
+		|| FindDataMapInfo(client, "m_AnimOverlay") != g_PassengerOverlayOffset)
+		return false;
+	// Plain CBaseFlex retains animation overlays without the cycler facial-flex test.
+	int display = CreateEntityByName("funCBaseFlex");
+	if (display == -1)
+		return false;
+	g_R[client].DisplayRef = EntIndexToEntRef(display);
+	DispatchKeyValue(display, "model", g_ATVPassengerModels[modelVariant]);
+	if (!DispatchSpawn(display) || FindDataMapInfo(display, "m_AnimOverlay") != g_PassengerOverlayOffset)
+		return false;
+	SetEntityModel(display, g_ATVPassengerModels[modelVariant]);
+	SetEntProp(display, Prop_Send, "m_nSolidType", 0);
+	SetEntProp(display, Prop_Data, "m_takedamage", 0);
+	SetEntityMoveType(display, MOVETYPE_NONE);
+	SetEntPropEnt(display, Prop_Send, "m_hOwnerEntity", client);
+	SetEntProp(display, Prop_Send, "m_bClientSideAnimation", 0);
+	SetEntPropFloat(display, Prop_Send, "m_flPlaybackRate", 0.0);
+	if (!SDKHookEx(display, SDKHook_SetTransmit, Hook_PassengerDisplayTransmit))
+		return false;
+	SDKCall(g_PassengerSetLayers, display, 15);
+	g_R[client].DriverAnimTimeOffset = FindDataMapInfo(display, "m_flAnimTime");
+	if (g_R[client].DriverAnimTimeOffset <= 0)
+		return false;
+	float local[3];
+	SeatLocal(g_R[client].Vehicle, g_R[client].Seat, local, 1);
+	ParentAtLocal(display, vehicle, local, -90.0);
+	SetEntProp(client, Prop_Send, "m_fEffects", GetEntProp(client, Prop_Send, "m_fEffects") | EF_NODRAW);
+	return UpdatePassengerDisplay(client);
+}
+
+public Action Hook_PassengerDisplayTransmit(int entity, int viewer) {
+	int owner = GetEntPropEnt(entity, Prop_Send, "m_hOwnerEntity");
+	if (owner <= 0 || owner > MaxClients || !IsClientInGame(viewer))
+		return Plugin_Continue;
+	bool firstPerson = viewer == owner;
+	if (firstPerson && GetFeatureStatus(FeatureType_Native, "ThirdPerson_IsClientActive") == FeatureStatus_Available)
+		firstPerson = !ThirdPerson_IsClientActive(viewer);
+	if (viewer != owner && GetEntProp(viewer, Prop_Send, "m_iObserverMode") == 4)
+		firstPerson = GetEntPropEnt(viewer, Prop_Send, "m_hObserverTarget") == owner;
+	return firstPerson ? Plugin_Handled : Plugin_Continue;
+}
+
+bool CopyPassengerLayers(int client, int display) {
+	int count = GetEntData(client, g_PassengerOverlayOffset + 12);
+	if (count < 0 || count > 15 || GetEntData(display, g_PassengerOverlayOffset + 12) != 15)
+		return false;
+	Address source = view_as<Address>(GetEntData(client, g_PassengerOverlayOffset));
+	Address dest = view_as<Address>(GetEntData(display, g_PassengerOverlayOffset));
+	if ((count > 0 && source == Address_Null) || dest == Address_Null)
+		return false;
+	// Verified 32-bit CAnimationLayer layout. Never copy its owner pointer.
+	int fields[] = {8, 12, 16, 20, 60};
+	bool changed;
+	for (int layer = 0; layer < 15; layer++) {
+		for (int f = 0; f < sizeof(fields); f++) {
+			int offset = layer * 76 + fields[f];
+			int value = layer < count ? LoadFromAddress(source + view_as<Address>(offset), NumberType_Int32) : (fields[f] == 60 ? 15 : 0);
+			Address target = dest + view_as<Address>(offset);
+			if (LoadFromAddress(target, NumberType_Int32) != value) {
+				StoreToAddress(target, value, NumberType_Int32);
+				changed = true;
+			}
+		}
+	}
+	if (changed)
+		ChangeEdictState(display);
+	return true;
+}
+
+void RestorePassengerWeapon(int client) {
+	int weapon = EntRefToEntIndex(g_R[client].PassengerWeaponRef);
+	if (weapon > MaxClients && IsValidEntity(weapon))
+		SetEntProp(weapon, Prop_Send, "m_fEffects", (GetEntProp(weapon, Prop_Send, "m_fEffects") & ~EF_NODRAW) | g_R[client].PassengerWeaponNoDraw);
+	g_R[client].PassengerWeaponRef = INVALID_ENT_REFERENCE;
+}
+
+bool UpdatePassengerWeapon(int client, int display) {
+	int weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+	int previous = EntRefToEntIndex(g_R[client].PassengerWeaponRef);
+	int prop = EntRefToEntIndex(g_R[client].DriverRigRef);
+	if (weapon != previous) {
+		RestorePassengerWeapon(client);
+		if (prop > MaxClients && IsValidEntity(prop))
+			RemoveEntity(prop);
+		g_R[client].DriverRigRef = INVALID_ENT_REFERENCE;
+		prop = -1;
+	}
+	if (weapon <= MaxClients || !IsValidEntity(weapon))
+		return true;
+	if (prop == -1) {
+		int model = GetEntProp(weapon, Prop_Send, "m_iWorldModelIndex");
+		int table = FindStringTable("modelprecache");
+		char path[PLATFORM_MAX_PATH];
+		if (model <= 0 || table == INVALID_STRING_TABLE || model >= GetStringTableNumStrings(table))
+			return false;
+		ReadStringTable(table, model, path, sizeof(path));
+		prop = CreateEntityByName("prop_dynamic_override");
+		if (prop == -1)
+			return false;
+		g_R[client].DriverRigRef = EntIndexToEntRef(prop);
+		DispatchKeyValue(prop, "model", path);
+		DispatchKeyValue(prop, "solid", "0");
+		DispatchKeyValue(prop, "DisableBoneFollowers", "1");
+		if (!DispatchSpawn(prop) || !SDKHookEx(prop, SDKHook_SetTransmit, Hook_PassengerDisplayTransmit))
+			return false;
+		SetEntityMoveType(prop, MOVETYPE_NONE);
+		SetEntPropEnt(prop, Prop_Send, "m_hOwnerEntity", client);
+		float local[3];
+		ParentAtLocal(prop, display, local, 0.0);
+		SetEntProp(prop, Prop_Send, "m_fEffects", GetEntProp(prop, Prop_Send, "m_fEffects") | DRIVER_BONEMERGE_EFFECTS);
+		g_R[client].PassengerWeaponRef = EntIndexToEntRef(weapon);
+		g_R[client].PassengerWeaponNoDraw = GetEntProp(weapon, Prop_Send, "m_fEffects") & EF_NODRAW;
+	}
+	SetEntProp(prop, Prop_Send, "m_nSkin", GetEntProp(weapon, Prop_Send, "m_nSkin"));
+	SetEntProp(prop, Prop_Send, "m_nBody", GetEntProp(weapon, Prop_Send, "m_nBody"));
+	int effects = GetEntProp(weapon, Prop_Send, "m_fEffects");
+	SetEntProp(weapon, Prop_Send, "m_fEffects", effects | EF_NODRAW);
+	return true;
+}
+
+bool UpdatePassengerDisplay(int client) {
+	int display = EntRefToEntIndex(g_R[client].DisplayRef);
+	if (display <= MaxClients || !IsValidEntity(display) || !CopyPassengerLayers(client, display))
+		return false;
+	SetEntProp(display, Prop_Send, "m_nSequence", GetEntProp(client, Prop_Send, "m_nSequence"));
+	SetEntPropFloat(display, Prop_Send, "m_flCycle", GetEntPropFloat(client, Prop_Send, "m_flCycle"));
+	SetEntProp(display, Prop_Send, "m_nNewSequenceParity", GetEntProp(client, Prop_Send, "m_nNewSequenceParity"));
+	SetEntProp(display, Prop_Send, "m_nSkin", GetEntProp(client, Prop_Send, "m_nSkin"));
+	SetEntProp(display, Prop_Send, "m_nBody", GetEntProp(client, Prop_Send, "m_nBody"));
+	SetEntDataFloat(display, g_R[client].DriverAnimTimeOffset, GetGameTime(), true);
+	for (int i = 0; i < 5; i++)
+		SetEntPropFloat(display, Prop_Send, "m_flPoseParameter", GetEntPropFloat(client, Prop_Send, "m_flPoseParameter", i), i);
+	// v2 libraries: body_pitch, body_yaw, body_height, move_y, move_x.
+	SetEntPropFloat(display, Prop_Send, "m_flPoseParameter", (80.0 - g_R[client].LookYaw) / 160.0, 1);
+	return UpdatePassengerWeapon(client, display);
+}
+
+public bool FilterPassengerGround(int entity, int contentsMask, any client) {
+	return entity != client;
+}
+
+public bool FilterPassengerOwnedGround(int entity, int contentsMask, any client) {
+	if (entity == client)
+		return false;
+	if (entity <= 0 || !IsValidEntity(entity))
+		return true;
+	// Match PassServerEntityFilter's ownership exclusions, not just the plugin's vehicle list.
+	return GetEntPropEnt(entity, Prop_Send, "m_hOwnerEntity") != client
+		&& GetEntPropEnt(client, Prop_Send, "m_hOwnerEntity") != entity;
+}
+
+public Action Command_PassengerStatus(int client, int args) {
+	for (int rider = 1; rider <= MaxClients; rider++) {
+		if (!HumanAlive(rider) || (rider != client && !ArmedATVPassenger(rider)))
+			continue;
+		bool seated = ArmedATVPassenger(rider);
+		float velocity[3], eye[3], muzzle[3], muzzleAngles[3], parentAngles[3];
+		GetEntPropVector(rider, Prop_Data, "m_vecAbsVelocity", velocity);
+		GetClientEyeAngles(rider, eye);
+		int parent = GetEntPropEnt(rider, Prop_Data, "m_hMoveParent");
+		if (parent > MaxClients && IsValidEntity(parent))
+			GetEntPropVector(parent, Prop_Data, "m_angAbsRotation", parentAngles);
+		int display = EntRefToEntIndex(g_R[rider].DisplayRef);
+		ReplyToCommand(client, "[Vehicles] v%s %N: seated=%d, abs speed=%.2f, grounded=%d, jumping=%d, stance=%d, display=%d",
+			PLUGIN_VERSION, rider, seated, GetVectorLength(velocity), (GetEntityFlags(rider) & FL_ONGROUND) != 0,
+			GetEntProp(rider, Prop_Send, "m_bJumping"), GetEntProp(rider, Prop_Send, "m_iCurrentStance"), display);
+		ReplyToCommand(client, "[Vehicles] eye pitch/yaw=%.2f/%.2f, parent=%d, parent pitch/yaw/roll=%.2f/%.2f/%.2f, player sequence=%d, display sequence=%d",
+			eye[0], eye[1], parent, parentAngles[0], parentAngles[1], parentAngles[2], GetEntProp(rider, Prop_Send, "m_nSequence"),
+			display > MaxClients ? GetEntProp(display, Prop_Send, "m_nSequence") : -1);
+		if (seated) {
+			int support = EntRefToEntIndex(g_R[rider].PassengerSupportRef);
+			float origin[3], below[3], mins[3], maxs[3], normal[3];
+			GetClientAbsOrigin(rider, origin);
+			GetClientMins(rider, mins);
+			GetClientMaxs(rider, maxs);
+			below = origin;
+			below[2] -= 2.0;
+			Handle trace = TR_TraceHullFilterEx(origin, below, mins, maxs, MASK_PLAYERSOLID, FilterPassengerGround, rider);
+			bool hit = TR_DidHit(trace);
+			if (hit)
+				TR_GetPlaneNormal(trace, normal);
+			int blocker = hit ? TR_GetEntityIndex(trace) : -1;
+			char classname[64] = "none";
+			if (blocker >= 0 && IsValidEntity(blocker))
+				GetEntityClassname(blocker, classname, sizeof(classname));
+			int vehicle = Vehicle(g_R[rider].Vehicle);
+			ReplyToCommand(client, "[Vehicles] vehicle=%d owner=%d support=%d, raw ground trace hit=%d entity=%d (%s) startsolid=%d normal Z=%.2f",
+				vehicle, vehicle > MaxClients ? GetEntPropEnt(vehicle, Prop_Send, "m_hOwnerEntity") : -1,
+				support, hit, blocker, classname, TR_StartSolid(trace), normal[2]);
+			delete trace;
+			trace = TR_TraceHullFilterEx(origin, below, mins, maxs, MASK_PLAYERSOLID, FilterPassengerOwnedGround, rider);
+			normal[2] = 0.0;
+			hit = TR_DidHit(trace);
+			if (hit)
+				TR_GetPlaneNormal(trace, normal);
+			ReplyToCommand(client, "[Vehicles] owner-filtered ground trace hit=%d entity=%d startsolid=%d normal Z=%.2f",
+				hit, hit ? TR_GetEntityIndex(trace) : -1, TR_StartSolid(trace), normal[2]);
+			delete trace;
+			if (support > MaxClients) {
+				trace = TR_ClipRayHullToEntityEx(origin, below, mins, maxs, MASK_PLAYERSOLID, support);
+				ReplyToCommand(client, "[Vehicles] support-only trace hit=%d startsolid=%d fraction=%.2f",
+					TR_DidHit(trace), TR_StartSolid(trace), TR_GetFraction(trace));
+				delete trace;
+			}
+		}
+		int activeWeapon = GetEntPropEnt(rider, Prop_Send, "m_hActiveWeapon");
+		if (activeWeapon > MaxClients && IsValidEntity(activeWeapon) && HasEntProp(activeWeapon, Prop_Send, "m_bWeaponBlocked"))
+			ReplyToCommand(client, "[Vehicles] weapon blocked=%d", GetEntProp(activeWeapon, Prop_Send, "m_bWeaponBlocked"));
+		if (g_PassengerGetMuzzle != null) {
+			SDKCall(g_PassengerGetMuzzle, rider, muzzle, muzzleAngles);
+			ReplyToCommand(client, "[Vehicles] muzzle pitch/yaw=%.2f/%.2f, muzzle-eye delta=%.2f/%.2f",
+				muzzleAngles[0], muzzleAngles[1], NormalizeYaw(muzzleAngles[0] - eye[0]), NormalizeYaw(muzzleAngles[1] - eye[1]));
+		}
+	}
+	return Plugin_Handled;
+}
+
+bool PassengerAimTestNoDisplay(int client) {
+	return g_R[client].AimTestStep == 3 || g_R[client].AimTestStep == 4;
+}
+
+bool ApplyPassengerAimTest(int client) {
+	int vehicle = Vehicle(g_R[client].Vehicle);
+	if (vehicle == -1)
+		return false;
+	if (g_R[client].AimTestStep == 1 && !StandingClear(client, g_R[client].AimTestOutside))
+		return false;
+	int modelIndex = ATVPassengerVariant(g_R[client].SavedModel);
+	if (modelIndex == -1)
+		return false;
+	char model[PLATFORM_MAX_PATH];
+	GetClientModel(client, model, sizeof(model));
+	bool nativeVisuals = g_R[client].AimTestStep == 4;
+	if (!StrEqual(model, nativeVisuals ? g_R[client].SavedModel : g_ATVPassengerModels[modelIndex], false)) {
+		int skin = GetEntProp(client, Prop_Send, "m_nSkin");
+		int body = GetEntProp(client, Prop_Send, "m_nBody");
+		SetEntityModel(client, nativeVisuals ? g_R[client].SavedModel : g_ATVPassengerModels[modelIndex]);
+		SetEntProp(client, Prop_Send, "m_nSkin", skin);
+		SetEntProp(client, Prop_Send, "m_nBody", body);
+	}
+	int effects = GetEntProp(client, Prop_Send, "m_fEffects");
+	SetEntProp(client, Prop_Send, "m_fEffects", nativeVisuals ? ((effects & ~EF_NODRAW) | g_R[client].SavedNoDraw) : (effects | EF_NODRAW));
+	if (nativeVisuals)
+		RestorePassengerWeapon(client);
+	if (PassengerAimTestNoDisplay(client)) {
+		int prop = EntRefToEntIndex(g_R[client].DriverRigRef);
+		g_R[client].DriverRigRef = INVALID_ENT_REFERENCE;
+		if (prop > MaxClients && IsValidEntity(prop))
+			RemoveEntity(prop);
+		int display = EntRefToEntIndex(g_R[client].DisplayRef);
+		g_R[client].DisplayRef = INVALID_ENT_REFERENCE;
+		if (display > MaxClients && IsValidEntity(display))
+			RemoveEntity(display);
+	} else if (EntRefToEntIndex(g_R[client].DisplayRef) == INVALID_ENT_REFERENCE) {
+		// Restore before recreation so its saved visibility remains the original value.
+		RestorePassengerWeapon(client);
+		if (!CreatePassengerDisplay(client, vehicle, modelIndex))
+			return false;
+	}
+	FollowPassengerSeat(client);
+	HoldPassengerMotion(client);
+	return true;
+}
+
+void LogPassengerAimSample(int client, const char[] label) {
+	float eye[3], muzzle[3], muzzleAngles[3], velocity[3], aimPunch[3], viewPunch[3], viewOffset[3];
+	GetClientEyeAngles(client, eye);
+	SDKCall(g_PassengerGetMuzzle, client, muzzle, muzzleAngles);
+	GetEntPropVector(client, Prop_Data, "m_vecAbsVelocity", velocity);
+	GetEntPropVector(client, Prop_Data, "m_vecViewOffset", viewOffset);
+	bool hasAimPunch = HasEntProp(client, Prop_Send, "m_aimPunchAngle");
+	bool hasViewPunch = HasEntProp(client, Prop_Send, "m_viewPunchAngle");
+	if (hasAimPunch)
+		GetEntPropVector(client, Prop_Send, "m_aimPunchAngle", aimPunch);
+	if (hasViewPunch)
+		GetEntPropVector(client, Prop_Send, "m_viewPunchAngle", viewPunch);
+	char line[512];
+	Format(line, sizeof(line), "[ATV ADS test] v%s %s: ADS=%d, pitch delta=%.3f, yaw delta=%.3f, speed=%.2f, ground=%d, flags=%d, movetype=%d",
+		PLUGIN_VERSION, label, GetEntProp(client, Prop_Send, "m_iPlayerFlags") & 1,
+		NormalizeYaw(muzzleAngles[0] - eye[0]), NormalizeYaw(muzzleAngles[1] - eye[1]), GetVectorLength(velocity),
+		GetEntPropEnt(client, Prop_Send, "m_hGroundEntity"), GetEntityFlags(client), GetEntityMoveType(client));
+	PrintToConsole(client, "%s", line);
+	LogMessage("%N %s", client, line);
+	Format(line, sizeof(line), "[ATV ADS test] %s: eye pitch=%.3f, muzzle pitch=%.3f, aim punch=%d/%.3f, view punch=%d/%.3f, view height=%.2f",
+		label, eye[0], NormalizeYaw(muzzleAngles[0]), hasAimPunch, aimPunch[0], hasViewPunch, viewPunch[0], viewOffset[2]);
+	PrintToConsole(client, "%s", line);
+	LogMessage("%N %s", client, line);
+	float origin[3];
+	GetClientAbsOrigin(client, origin);
+	Format(line, sizeof(line), "[ATV ADS test] %s: origin=%.1f/%.1f/%.1f, view=%d, display=%d, display weapon=%d",
+		label, origin[0], origin[1], origin[2], GetEntPropEnt(client, Prop_Send, "m_hViewEntity"),
+		EntRefToEntIndex(g_R[client].DisplayRef), EntRefToEntIndex(g_R[client].DriverRigRef));
+	PrintToConsole(client, "%s", line);
+	LogMessage("%N %s", client, line);
+}
+
+void StopPassengerAimTest(int client) {
+	delete g_R[client].AimTestTimer;
+	if (g_R[client].AimTestStep == -1)
+		return;
+	g_R[client].AimTestStep = -1;
+	// ExitRider has already chosen and applied an exit position when Changing is set.
+	if (HumanAlive(client) && ArmedATVPassenger(client) && g_R[client].PassengerMotionApplied && !g_R[client].Changing
+		&& !ApplyPassengerAimTest(client)) {
+		LogError("Could not restore passenger display after ADS comparison; exiting client %d.", client);
+		ExitRider(client, true);
+	}
+}
+
+public Action Command_PassengerAimTest(int client, int args) {
+	if (!HumanAlive(client) || !ArmedATVPassenger(client)) {
+		ReplyToCommand(client, "[Vehicles] Run this from the rear passenger's game console.");
+		return Plugin_Handled;
+	}
+	if (g_R[client].AimTestStep != -1) {
+		StopPassengerAimTest(client);
+		ReplyToCommand(client, "[Vehicles] ADS comparison cancelled.");
+		return Plugin_Handled;
+	}
+	StopPassengerDrive(client);
+	int v = g_R[client].Vehicle;
+	int vehicle = Vehicle(v);
+	int weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+	if (vehicle == -1 || FloatAbs(g_V[v].Speed) > 0.1 || g_V[v].Airborne || weapon <= MaxClients || g_PassengerGetMuzzle == null) {
+		ReplyToCommand(client, "[Vehicles] Stop the ATV and equip a firearm first; muzzle gamedata must be available.");
+		return Plugin_Handled;
+	}
+	float exitPoint[3];
+	if (!FindExit(client, exitPoint)) {
+		ReplyToCommand(client, "[Vehicles] Park with clear space beside the ATV first; the position comparison needs a safe point outside it.");
+		return Plugin_Handled;
+	}
+	g_R[client].AimTestOutside = exitPoint;
+	g_R[client].AimTestStep = 0;
+	g_R[client].AimTestWeaponRef = EntIndexToEntRef(weapon);
+	GetEntPropVector(vehicle, Prop_Data, "m_vecAbsOrigin", g_R[client].AimTestOrigin);
+	g_R[client].AimTestTimer = CreateTimer(4.0, Timer_PassengerAimTest, GetClientUserId(client), TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+	ReplyToCommand(client, "[Vehicles] Hold first-person ADS without firing or moving for 28 seconds. The test temporarily moves your viewpoint beside the ATV and removes the display, then restores the seat.");
+	return Plugin_Handled;
+}
+
+public Action Timer_PassengerAimTest(Handle timer, any userid) {
+	int client = GetClientOfUserId(userid);
+	if (client == 0 || g_R[client].AimTestTimer != timer)
+		return Plugin_Stop;
+	int v = g_R[client].Vehicle;
+	int vehicle = Vehicle(v);
+	bool ready = !g_EndingMap && HumanAlive(client) && ArmedATVPassenger(client) && vehicle != -1;
+	if (ready) {
+		float origin[3];
+		GetEntPropVector(vehicle, Prop_Data, "m_vecAbsOrigin", origin);
+		ready = FloatAbs(g_V[v].Speed) <= 0.1 && !g_V[v].Airborne
+			&& GetVectorDistance(origin, g_R[client].AimTestOrigin, true) < 1.0
+			&& GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon") == EntRefToEntIndex(g_R[client].AimTestWeaponRef);
+	}
+	if (!ready) {
+		g_R[client].AimTestTimer = null;
+		StopPassengerAimTest(client);
+		if (IsClientInGame(client))
+			PrintToChat(client, "[Vehicles] ADS comparison stopped because the rider, weapon or ATV changed; seated state restored.");
+		return Plugin_Stop;
+	}
+	char labels[][] = {"seated baseline", "outside position only", "seat position restored", "display entities removed", "native visuals without display entities", "display entities restored", "native view refreshed"};
+	int step = g_R[client].AimTestStep;
+	LogPassengerAimSample(client, labels[step]);
+	if (step == 6) {
+		g_R[client].AimTestTimer = null;
+		StopPassengerAimTest(client);
+		PrintToChat(client, "[Vehicles] ADS comparison complete. Copy all [ATV ADS test] lines; seated state restored.");
+		return Plugin_Stop;
+	}
+	g_R[client].AimTestStep++;
+	if (!ApplyPassengerAimTest(client)) {
+		g_R[client].AimTestTimer = null;
+		StopPassengerAimTest(client);
+		PrintToChat(client, "[Vehicles] ADS comparison stopped: test position blocked or display setup failed.");
+		return Plugin_Stop;
+	}
+	if (g_R[client].AimTestStep == 6) {
+		SetEntPropEnt(client, Prop_Send, "m_hViewEntity", -1);
+		SetClientViewEntity(client, client);
+	}
+	return Plugin_Continue;
+}
+
+bool AimControlLiftClear(int client) {
+	float raised[3], mins[3], maxs[3];
+	raised = g_AimControlOrigin[client];
+	raised[2] += 16.0;
+	GetClientMins(client, mins);
+	GetClientMaxs(client, maxs);
+	Handle trace = TR_TraceHullFilterEx(g_AimControlOrigin[client], raised, mins, maxs, MASK_PLAYERSOLID, FilterPlacement, client);
+	bool clear = !TR_DidHit(trace) && !TR_StartSolid(trace) && !TR_AllSolid(trace);
+	delete trace;
+	return clear;
+}
+
+void StopAimControl(int client) {
+	delete g_AimControlTimer[client];
+	if (g_AimControlHeld[client] && HumanAlive(client) && g_R[client].Vehicle == -1
+		&& GetEntityMoveType(client) == MOVETYPE_NONE) {
+		float origin[3], raised[3], zero[3];
+		GetClientAbsOrigin(client, origin);
+		raised = g_AimControlOrigin[client];
+		raised[2] += 16.0;
+		if (g_AimControlLifted[client] && GetVectorDistance(origin, raised, true) <= 4.0
+			&& StandingClear(client, g_AimControlOrigin[client]))
+			TeleportEntity(client, g_AimControlOrigin[client], NULL_VECTOR, zero);
+		SetEntityMoveType(client, MOVETYPE_WALK);
+	}
+	g_AimControlHeld[client] = false;
+	g_AimControlLifted[client] = false;
+}
+
+public Action Command_AimControl(int client, int args) {
+	if (client > 0 && g_AimControlTimer[client] != null) {
+		StopAimControl(client);
+		ReplyToCommand(client, "[Vehicles] On-foot ADS control cancelled; movement restored.");
+		return Plugin_Handled;
+	}
+	if (!HumanAlive(client) || g_R[client].Vehicle != -1 || GetEntityMoveType(client) != MOVETYPE_WALK
+		|| GetEntPropEnt(client, Prop_Send, "m_hGroundEntity") != 0
+		|| (GetEntityFlags(client) & FL_ONGROUND) == 0 || GetEntProp(client, Prop_Send, "m_iCurrentStance") != 0) {
+		ReplyToCommand(client, "[Vehicles] Run this while standing normally on the map floor outside the ATV.");
+		return Plugin_Handled;
+	}
+	int weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+	float velocity[3];
+	GetEntPropVector(client, Prop_Data, "m_vecAbsVelocity", velocity);
+	if (weapon <= MaxClients || g_PassengerGetMuzzle == null || GetVectorLength(velocity) > 0.1) {
+		ReplyToCommand(client, "[Vehicles] Stop moving and equip a firearm first; muzzle gamedata must be available.");
+		return Plugin_Handled;
+	}
+	GetClientAbsOrigin(client, g_AimControlOrigin[client]);
+	if (!AimControlLiftClear(client)) {
+		ReplyToCommand(client, "[Vehicles] Move to an open area; the ground-contact control needs clearance above you.");
+		return Plugin_Handled;
+	}
+	g_AimControlStep[client] = 0;
+	g_AimControlHeld[client] = true;
+	g_AimControlLifted[client] = false;
+	g_AimControlWeapon[client] = EntIndexToEntRef(weapon);
+	SetEntityMoveType(client, MOVETYPE_NONE);
+	g_AimControlTimer[client] = CreateTimer(4.0, Timer_AimControl, GetClientUserId(client), TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+	ReplyToCommand(client, "[Vehicles] Hold first-person ADS without firing or moving for 12 seconds: supported, lifted 16 units, supported again. MOVETYPE_NONE stays the same; walking restores automatically.");
+	return Plugin_Handled;
+}
+
+public Action Timer_AimControl(Handle timer, any userid) {
+	int client = GetClientOfUserId(userid);
+	if (client == 0 || g_AimControlTimer[client] != timer)
+		return Plugin_Stop;
+	bool ready = !g_EndingMap && HumanAlive(client) && g_R[client].Vehicle == -1;
+	if (ready) {
+		float origin[3], expected[3];
+		GetClientAbsOrigin(client, origin);
+		expected = g_AimControlOrigin[client];
+		if (g_AimControlLifted[client])
+			expected[2] += 16.0;
+		ready = GetVectorDistance(origin, expected, true) <= 4.0
+			&& GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon") == EntRefToEntIndex(g_AimControlWeapon[client])
+			&& GetEntityMoveType(client) == MOVETYPE_NONE;
+	}
+	if (!ready) {
+		g_AimControlTimer[client] = null;
+		StopAimControl(client);
+		PrintToChat(client, "[Vehicles] On-foot ADS control cancelled: player state, weapon or position changed.");
+		return Plugin_Stop;
+	}
+	char labels[][] = {"supported MOVETYPE_NONE", "lifted MOVETYPE_NONE", "supported again MOVETYPE_NONE"};
+	int step = g_AimControlStep[client];
+	LogPassengerAimSample(client, labels[step]);
+	if (step == 2) {
+		g_AimControlTimer[client] = null;
+		StopAimControl(client);
+		PrintToChat(client, "[Vehicles] Ground-contact ADS control complete; walking restored. Copy all [ATV ADS test] lines.");
+		return Plugin_Stop;
+	}
+	if ((step == 0 && !AimControlLiftClear(client)) || !StandingClear(client, g_AimControlOrigin[client])) {
+		g_AimControlTimer[client] = null;
+		StopAimControl(client);
+		PrintToChat(client, "[Vehicles] Ground-contact ADS control cancelled: return position or lift path blocked; walking restored.");
+		return Plugin_Stop;
+	}
+	float point[3], zero[3];
+	point = g_AimControlOrigin[client];
+	g_AimControlLifted[client] = step == 0;
+	if (g_AimControlLifted[client])
+		point[2] += 16.0;
+	// Leave flags and ground entity to native collision prediction throughout this control.
+	TeleportEntity(client, point, NULL_VECTOR, zero);
+	g_AimControlStep[client]++;
+	return Plugin_Continue;
 }
