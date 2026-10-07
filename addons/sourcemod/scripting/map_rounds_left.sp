@@ -12,7 +12,7 @@ public Plugin myinfo = {
 	name		= "map_rounds_left",
 	author		= "Nullifidian + ChatGPT",
 	description	= "Prints how many rounds & objectives left",
-	version		= "1.1.7",
+	version		= "1.1.8",
 	url			= "https://steamcommunity.com/id/Nullifidian/"
 };
 
@@ -87,6 +87,9 @@ public void OnMapStart() {
 }
 
 public void OnMapEnd() {
+	for (int client = 1; client <= MaxClients; client++)
+		delete ga_hTimer[client];
+
 	g_iObjResEntity = -1;
 	g_sObjResNetClass[0] = '\0';
 }
@@ -111,7 +114,8 @@ public void OnClientPostAdminCheck(int client) {
 	if (client < 1 || client > MaxClients || !IsClientInGame(client) || IsFakeClient(client))
 		return;
 
-	ga_hTimer[client] = CreateTimer(60.0, Timer_NewPlayer, GetClientUserId(client));
+	delete ga_hTimer[client];
+	ga_hTimer[client] = CreateTimer(60.0, Timer_NewPlayer, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
 }
 
 public void OnClientDisconnect(int client) {
@@ -146,9 +150,15 @@ Action TimerR_MonitorCA(Handle timer) {
 
 Action Timer_NewPlayer(Handle timer, int userid) {
 	int client = GetClientOfUserId(userid);
+	if (client == 0 || ga_hTimer[client] != timer)
+		return Plugin_Stop;
+
+	ga_hTimer[client] = null;
+	if (!IsClientInGame(client))
+		return Plugin_Stop;
+
 	PrintToChat(client, "\x070088cc[BM]\x01 Round: \x070088cc%d\x01/\x070088cc%d\x01 | Objective: \x070088cc%s\x01/\x070088cc%s\n[BM]\x01 Use !round command in chat to see this info",
 		g_iRoundNow, g_iMaxRounds, ga_Letters[LetterIndex(g_iActiveObj)], ga_Letters[LetterIndex(g_iMaxObj)]);
-	ga_hTimer[client] = null;
 	return Plugin_Stop;
 }
 
