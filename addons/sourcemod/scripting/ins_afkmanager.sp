@@ -4,7 +4,7 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PL_VERSION		"1.14"
+#define PL_VERSION		"1.15"
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
@@ -523,6 +523,9 @@ public void AFQ_OnDatabaseConnected(Database db, const char[] error, any data) {
 }
 
 public void AFQ_OnRepeatAfkTableCreated(Database db, DBResultSet results, const char[] error, any data) {
+	if (!AFK_IsCurrentDatabase(db))
+		return;
+
 	if (results == null) {
 		LogAFK("Repeat AFK database table setup failed: %s. Using normal timers.", error);
 		AFK_DisconnectDatabase();
@@ -534,6 +537,10 @@ public void AFQ_OnRepeatAfkTableCreated(Database db, DBResultSet results, const 
 	for (int client = 1; client <= MaxClients; client++)
 		if (IsHumanClientInGame(client))
 			AFK_LoadRepeatAFKStatus(client);
+}
+
+bool AFK_IsCurrentDatabase(Database db) {
+	return db != null && g_hDatabase != null && db.IsSameConnection(g_hDatabase);
 }
 
 void AFK_CleanupHistory() {
@@ -560,7 +567,7 @@ void AFK_CleanupScheduleFailed(const char[] error) {
 }
 
 public void AFQ_OnAfkMaintenanceTableCreated(Database db, DBResultSet results, const char[] error, any data) {
-	if (db != g_hDatabase)
+	if (!AFK_IsCurrentDatabase(db))
 		return;
 
 	if (results == null) {
@@ -572,7 +579,7 @@ public void AFQ_OnAfkMaintenanceTableCreated(Database db, DBResultSet results, c
 }
 
 public void AFQ_OnAfkMaintenanceRowCreated(Database db, DBResultSet results, const char[] error, any data) {
-	if (db != g_hDatabase)
+	if (!AFK_IsCurrentDatabase(db))
 		return;
 
 	if (results == null) {
@@ -589,7 +596,7 @@ void AFK_LoadCleanupSchedule() {
 }
 
 public void AFQ_OnAfkCleanupScheduleLoaded(Database db, DBResultSet results, const char[] error, any data) {
-	if (db != g_hDatabase)
+	if (!AFK_IsCurrentDatabase(db))
 		return;
 
 	if (results == null) {
@@ -616,7 +623,7 @@ public void AFQ_OnAfkCleanupScheduleLoaded(Database db, DBResultSet results, con
 }
 
 public void AFQ_OnAfkCleanupClaimed(Database db, DBResultSet results, const char[] error, any data) {
-	if (db != g_hDatabase)
+	if (!AFK_IsCurrentDatabase(db))
 		return;
 
 	if (results == null) {
@@ -640,7 +647,7 @@ public void AFQ_OnAfkCleanupClaimed(Database db, DBResultSet results, const char
 }
 
 public void AFQ_OnAfkHistoryCleaned(Database db, DBResultSet results, const char[] error, any data) {
-	if (db != g_hDatabase)
+	if (!AFK_IsCurrentDatabase(db))
 		return;
 
 	g_bAfkCleanupPending = false;
@@ -704,7 +711,7 @@ public void AFQ_OnRepeatAfkStatusLoaded(Database db, DBResultSet results, const 
 	int client = GetClientOfUserId(pack.ReadCell());
 	int revision = pack.ReadCell();
 	delete pack;
-	if (db != g_hDatabase || !IsHumanClientInGame(client) || revision != ga_iPlayerAfkProfileRevision[client])
+	if (!AFK_IsCurrentDatabase(db) || !IsHumanClientInGame(client) || revision != ga_iPlayerAfkProfileRevision[client])
 		return;
 
 	if (results == null) {
@@ -761,7 +768,7 @@ public void AFQ_OnAfkIncidentRecorded(Database db, DBResultSet results, const ch
 	if (IsHumanClientInGame(client) && ga_iPlayerAfkPendingWrites[client] > 0)
 		ga_iPlayerAfkPendingWrites[client]--;
 
-	if (db == g_hDatabase && results == null) {
+	if (AFK_IsCurrentDatabase(db) && results == null) {
 		LogAFK("Repeat AFK database insert failed: %s. Using normal timers.", error);
 		AFK_DisconnectDatabase();
 		return;
