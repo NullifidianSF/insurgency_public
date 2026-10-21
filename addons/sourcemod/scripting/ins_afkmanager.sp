@@ -4,7 +4,7 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PL_VERSION		"1.12"
+#define PL_VERSION		"1.13"
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
@@ -94,7 +94,6 @@ public void OnPluginStart() {
 
 	BuildLogFilePath();
 	PurgeOldLogs();
-	CreateTimer(60.0, Timer_CleanupAfkHistory, _, TIMER_REPEAT);
 
 	AddCommandListener(ChangeLevelListener, "changelevel");
 	AddCommandListener(ChangeLevelListener, "map");
@@ -147,6 +146,7 @@ public void OnMapStart() {
 	BuildLogFilePath();
 	PurgeOldLogs();
 	AFK_ConnectDatabase();
+	AFK_CleanupHistory();
 	RequestFrame(Frame_ResetMapClients);
 }
 
@@ -532,11 +532,6 @@ public void AFQ_OnRepeatAfkTableCreated(Database db, DBResultSet results, const 
 	for (int client = 1; client <= MaxClients; client++)
 		if (IsHumanClientInGame(client))
 			AFK_LoadRepeatAFKStatus(client);
-}
-
-public Action Timer_CleanupAfkHistory(Handle timer) {
-	AFK_CleanupHistory();
-	return Plugin_Continue;
 }
 
 void AFK_CleanupHistory() {
