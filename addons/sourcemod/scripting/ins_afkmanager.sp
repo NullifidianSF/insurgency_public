@@ -4,7 +4,7 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PL_VERSION		"1.13"
+#define PL_VERSION		"1.14"
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
@@ -67,6 +67,8 @@ bool g_bDatabaseConfigWarningLogged				= false;
 
 Database g_hDatabase = null;
 int g_iNextAfkCleanupAt = 0;
+bool g_bAfkCleanupReady = false;
+bool g_bAfkCleanupPending = false;
 
 char g_sLogDir[PLATFORM_MAX_PATH];
 char g_sLogFile[PLATFORM_MAX_PATH];
@@ -535,20 +537,105 @@ public void AFQ_OnRepeatAfkTableCreated(Database db, DBResultSet results, const 
 }
 
 void AFK_CleanupHistory() {
-	if (!g_bDatabaseReady || g_hDatabase == null)
+	if (!g_bDatabaseReady || g_hDatabase == null || g_bAfkCleanupPending)
 		return;
 
-	int now = GetTime();
-	if (now < g_iNextAfkCleanupAt)
+	if (GetTime() < g_iNextAfkCleanupAt)
 		return;
+
+	g_bAfkCleanupPending = true;
+	if (!g_bAfkCleanupReady) {
+		g_hDatabase.Query(AFQ_OnAfkMaintenanceTableCreated, "CREATE TABLE IF NOT EXISTS ins_afkmanager_maintenance (id TINYINT UNSIGNED NOT NULL PRIMARY KEY, next_cleanup INT UNSIGNED NOT NULL) ENGINE=InnoDB", _, DBPrio_Low);
+		return;
+	}
+
+	AFK_LoadCleanupSchedule();
+}
+
+void AFK_CleanupScheduleFailed(const char[] error) {
+	g_bAfkCleanupPending = false;
+	g_bAfkCleanupReady = false;
+	g_iNextAfkCleanupAt = GetTime() + 300;
+	LogAFK("AFK cleanup schedule failed: %s. Will check again on a later map.", error);
+}
+
+public void AFQ_OnAfkMaintenanceTableCreated(Database db, DBResultSet results, const char[] error, any data) {
+	if (db != g_hDatabase)
+		return;
+
+	if (results == null) {
+		AFK_CleanupScheduleFailed(error);
+		return;
+	}
+
+	g_hDatabase.Query(AFQ_OnAfkMaintenanceRowCreated, "INSERT IGNORE INTO ins_afkmanager_maintenance (id, next_cleanup) VALUES (1, 0)", _, DBPrio_Low);
+}
+
+public void AFQ_OnAfkMaintenanceRowCreated(Database db, DBResultSet results, const char[] error, any data) {
+	if (db != g_hDatabase)
+		return;
+
+	if (results == null) {
+		AFK_CleanupScheduleFailed(error);
+		return;
+	}
+
+	g_bAfkCleanupReady = true;
+	AFK_LoadCleanupSchedule();
+}
+
+void AFK_LoadCleanupSchedule() {
+	g_hDatabase.Query(AFQ_OnAfkCleanupScheduleLoaded, "SELECT next_cleanup, UNIX_TIMESTAMP() FROM ins_afkmanager_maintenance WHERE id = 1", _, DBPrio_Low);
+}
+
+public void AFQ_OnAfkCleanupScheduleLoaded(Database db, DBResultSet results, const char[] error, any data) {
+	if (db != g_hDatabase)
+		return;
+
+	if (results == null) {
+		AFK_CleanupScheduleFailed(error);
+		return;
+	}
+
+	if (!results.FetchRow()) {
+		AFK_CleanupScheduleFailed("Maintenance row is missing.");
+		return;
+	}
+
+	int secondsUntilCleanup = results.FetchInt(0) - results.FetchInt(1);
+	if (secondsUntilCleanup > 0) {
+		g_iNextAfkCleanupAt = GetTime() + secondsUntilCleanup;
+		g_bAfkCleanupPending = false;
+		return;
+	}
+
+	char query[256];
+	// Only one server can advance the shared due time and claim this cleanup.
+	Format(query, sizeof(query), "UPDATE ins_afkmanager_maintenance SET next_cleanup = UNIX_TIMESTAMP() + %d WHERE id = 1 AND next_cleanup <= UNIX_TIMESTAMP()", gc_iAfkCleanupInterval);
+	g_hDatabase.Query(AFQ_OnAfkCleanupClaimed, query, _, DBPrio_Low);
+}
+
+public void AFQ_OnAfkCleanupClaimed(Database db, DBResultSet results, const char[] error, any data) {
+	if (db != g_hDatabase)
+		return;
+
+	if (results == null) {
+		AFK_CleanupScheduleFailed(error);
+		return;
+	}
+
+	if (results.AffectedRows != 1) {
+		AFK_LoadCleanupSchedule();
+		return;
+	}
 
 	int retention = gc_iAfkHistoryRetention;
 	if (retention < gc_iRepeatAfkWindow)
 		retention = gc_iRepeatAfkWindow;
 
 	char query[160];
-	Format(query, sizeof(query), "DELETE FROM ins_afkmanager_afk_kicks WHERE kicked_at < %d", now - retention);
-	g_iNextAfkCleanupAt = now + gc_iAfkCleanupInterval;
+	Format(query, sizeof(query), "DELETE FROM ins_afkmanager_afk_kicks WHERE kicked_at < UNIX_TIMESTAMP() - %d", retention);
+	g_iNextAfkCleanupAt = GetTime() + gc_iAfkCleanupInterval;
 	g_hDatabase.Query(AFQ_OnAfkHistoryCleaned, query, _, DBPrio_Low);
 }
 
@@ -556,8 +643,9 @@ public void AFQ_OnAfkHistoryCleaned(Database db, DBResultSet results, const char
 	if (db != g_hDatabase)
 		return;
 
+	g_bAfkCleanupPending = false;
 	if (results == null)
-		LogAFK("AFK history cleanup failed: %s. Will retry at the next daily cleanup.", error);
+		LogAFK("AFK history cleanup failed: %s. Will retry at the next shared cleanup.", error);
 }
 
 void AFK_ScheduleDatabaseRetry() {
@@ -577,6 +665,9 @@ public Action Timer_RetryDatabase(Handle timer) {
 void AFK_DisconnectDatabase() {
 	g_bDatabaseReady = false;
 	g_bDatabaseConnecting = false;
+	g_bAfkCleanupReady = false;
+	g_bAfkCleanupPending = false;
+	g_iNextAfkCleanupAt = 0;
 	if (g_hDatabase != null)
 		delete g_hDatabase;
 
