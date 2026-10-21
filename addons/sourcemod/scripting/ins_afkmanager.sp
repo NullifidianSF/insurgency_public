@@ -4,7 +4,7 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PL_VERSION		"1.10"
+#define PL_VERSION		"1.12"
 
 #define TEAM_SPECTATOR	1
 #define TEAM_SECURITY	2
@@ -20,9 +20,11 @@ static const int gc_iMinPlayersInGameBeforeKick		= 10;		// def = 10
 static const int gc_iNumberOfDaysToKeepLogs			= 7;		// def = 7
 
 static const char gc_sDatabaseConfig[]					= "afkmanager";		// afkmanager
-static const int gc_iRepeatAfkWindow					= 86400;	// 24 hours
-static const float gc_fRepeatAfkMoveReduction			= 60.0;		// per previous AFK kick
-static const float gc_fRepeatAfkKickReduction			= 120.0;	// per previous AFK kick
+static const int gc_iRepeatAfkWindow					= 172800;	// 48 hours
+static const int gc_iAfkHistoryRetention				= 604800;	// 7 days
+static const int gc_iAfkCleanupInterval				= 86400;	// 24 hours
+static const float gc_fRepeatAfkMoveReduction			= 60.0;		// per previous AFK incident
+static const float gc_fRepeatAfkKickReduction			= 120.0;	// per previous AFK incident
 static const float gc_fRepeatAfkMoveMinimum				= 90.0;
 static const float gc_fRepeatAfkKickMinimum				= 240.0;
 
@@ -45,9 +47,14 @@ float ga_fTimePlayerLastActive[MAXPLAYERS + 1]	= {0.0, ...};
 float ga_fTimeToNextWarning[MAXPLAYERS + 1]		= {0.0, ...};
 
 bool ga_bIsPlayerPickedSquad[MAXPLAYERS + 1]	= {false, ...};
-int ga_iPlayerRepeatAfkKicks[MAXPLAYERS + 1]	= {0, ...};
+int ga_iPlayerRepeatAfkIncidents[MAXPLAYERS + 1]	= {0, ...};
 bool ga_bPlayerRepeatAfkLoaded[MAXPLAYERS + 1]	= {false, ...};
 bool ga_bPlayerRepeatAfkAvailable[MAXPLAYERS + 1]	= {false, ...};
+bool ga_bPlayerAfkIncidentActive[MAXPLAYERS + 1] = {false, ...};
+float ga_fPlayerIncidentMoveTime[MAXPLAYERS + 1] = {0.0, ...};
+float ga_fPlayerIncidentKickTime[MAXPLAYERS + 1] = {0.0, ...};
+int ga_iPlayerAfkProfileRevision[MAXPLAYERS + 1] = {0, ...};
+int ga_iPlayerAfkPendingWrites[MAXPLAYERS + 1] = {0, ...};
 bool g_bIsLateLoad;
 bool g_bIsMapChanging							= false;
 bool g_bIsGameEnd								= false;
@@ -59,6 +66,7 @@ bool g_bDatabaseRetryQueued					= false;
 bool g_bDatabaseConfigWarningLogged				= false;
 
 Database g_hDatabase = null;
+int g_iNextAfkCleanupAt = 0;
 
 char g_sLogDir[PLATFORM_MAX_PATH];
 char g_sLogFile[PLATFORM_MAX_PATH];
@@ -86,6 +94,7 @@ public void OnPluginStart() {
 
 	BuildLogFilePath();
 	PurgeOldLogs();
+	CreateTimer(60.0, Timer_CleanupAfkHistory, _, TIMER_REPEAT);
 
 	AddCommandListener(ChangeLevelListener, "changelevel");
 	AddCommandListener(ChangeLevelListener, "map");
@@ -145,6 +154,8 @@ public void OnClientPostAdminCheck(int client) {
 	if (!IsHumanClientInGame(client))
 		return;
 
+	ga_bPlayerAfkIncidentActive[client] = false;
+	ga_iPlayerAfkPendingWrites[client] = 0;
 	ResetPlayerGlobals(client);
 	ResetRepeatAFKState(client);
 	AFK_ConnectDatabase();
@@ -156,11 +167,12 @@ public void OnClientPostAdminCheck(int client) {
 }
 
 public void OnClientDisconnect(int client) {
-	if (g_bIsGameEnd || g_bIsMapChanging)
-		return;
-	
+	ga_bPlayerAfkIncidentActive[client] = false;
+	ga_iPlayerAfkPendingWrites[client] = 0;
 	ResetRepeatAFKState(client);
 	ResetPlayerGlobals(client);
+	if (g_bIsGameEnd || g_bIsMapChanging)
+		return;
 	if (!g_bRecountQueued) {
 		g_bRecountQueued = true;
 		RequestFrame(Frame_OnClientDisconnect);
@@ -198,8 +210,10 @@ public Action Event_PlayerTeam(Event event, const char[] name, bool dontBroadcas
 	ga_iPlayerTeam[client] = team;
 	ga_fTimeToNextWarning[client] = 0.0;
 	ga_bIsPlayerPickedSquad[client] = false;
-	if (team == TEAM_SECURITY || team == TEAM_INSURGENT)
+	if (team == TEAM_SECURITY || team == TEAM_INSURGENT) {
+		AFK_EndIncident(client);
 		ga_fTimePlayerLastActive[client] = AFK_Now();
+	}
 
 	return Plugin_Continue;
 }
@@ -211,6 +225,8 @@ public Action Event_PlayerPickSquad(Event event, const char[] name, bool dontBro
 
 	ga_iPlayerTeam[client] = GetClientTeam(client);
 	ga_bIsPlayerPickedSquad[client] = true;
+	if (ga_iPlayerTeam[client] == TEAM_SECURITY || ga_iPlayerTeam[client] == TEAM_INSURGENT)
+		AFK_EndIncident(client);
 	ga_fTimePlayerLastActive[client] = AFK_Now();
 	ga_fTimeToNextWarning[client] = 0.0;
 	return Plugin_Continue;
@@ -224,6 +240,7 @@ public Action OnClientSayCommand(int client, const char[] command, const char[] 
 	if (team != TEAM_SECURITY && team != TEAM_INSURGENT)
 		return Plugin_Continue;
 
+	AFK_EndIncident(client);
 	ga_fTimePlayerLastActive[client] = AFK_Now();
 	ga_fTimeToNextWarning[client] = 0.0;
 	return Plugin_Continue;
@@ -248,6 +265,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 	}
 
 	if (isPlayingTeam && (mouse[0] != 0 || mouse[1] != 0 || buttons != ga_iPlayerLastButtons[client])) {
+		AFK_EndIncident(client);
 		ga_fTimePlayerLastActive[client] = now;
 		ga_iPlayerLastButtons[client] = buttons;
 		ga_fTimeToNextWarning[client] = 0.0;
@@ -312,6 +330,10 @@ void MovePlayerToSpectator(int client, float idle) {
 		return;
 
 	ChangeClientTeam(client, TEAM_SPECTATOR);
+	if (GetClientTeam(client) != TEAM_SPECTATOR)
+		return;
+
+	AFK_RecordIncident(client);
 
 	char name[MAX_NAME_LENGTH];
 	GetClientName(client, name, sizeof(name));
@@ -349,7 +371,7 @@ void KickForAFK(int client, float idle) {
 		strcopy(auth, sizeof(auth), "UNKNOWN");
 
 	LogAFK("KICK: \"%s\" %s idle=%.1fs", name, auth, idle);
-	AFK_RecordRepeatKick(client);
+	AFK_RecordIncident(client);
 	KickClient(client, "[AFK] You were kicked for being AFK.");
 }
 
@@ -381,6 +403,8 @@ void ResetPlayerGlobals(int client) {
 
 void ResetPlayerGlobalsLate(int client, int pr, bool hasSquadProp, float now) {
 	ga_iPlayerTeam[client] = GetClientTeam(client);
+	if (ga_iPlayerTeam[client] == TEAM_SECURITY || ga_iPlayerTeam[client] == TEAM_INSURGENT)
+		AFK_EndIncident(client);
 
 	if (pr != -1 && hasSquadProp) {
 		int squad = GetEntProp(pr, Prop_Send, "m_iSquad", _, client);
@@ -491,6 +515,7 @@ public void AFQ_OnDatabaseConnected(Database db, const char[] error, any data) {
 
 	g_hDatabase = db;
 	char query[512];
+	// Keep the legacy table and column names so existing kick history remains valid.
 	Format(query, sizeof(query), "CREATE TABLE IF NOT EXISTS ins_afkmanager_afk_kicks (steamid VARCHAR(32) NOT NULL, kicked_at INT UNSIGNED NOT NULL, INDEX steamid_kicked_at (steamid, kicked_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 	g_hDatabase.Query(AFQ_OnRepeatAfkTableCreated, query);
 }
@@ -503,9 +528,41 @@ public void AFQ_OnRepeatAfkTableCreated(Database db, DBResultSet results, const 
 	}
 
 	g_bDatabaseReady = true;
+	AFK_CleanupHistory();
 	for (int client = 1; client <= MaxClients; client++)
 		if (IsHumanClientInGame(client))
 			AFK_LoadRepeatAFKStatus(client);
+}
+
+public Action Timer_CleanupAfkHistory(Handle timer) {
+	AFK_CleanupHistory();
+	return Plugin_Continue;
+}
+
+void AFK_CleanupHistory() {
+	if (!g_bDatabaseReady || g_hDatabase == null)
+		return;
+
+	int now = GetTime();
+	if (now < g_iNextAfkCleanupAt)
+		return;
+
+	int retention = gc_iAfkHistoryRetention;
+	if (retention < gc_iRepeatAfkWindow)
+		retention = gc_iRepeatAfkWindow;
+
+	char query[160];
+	Format(query, sizeof(query), "DELETE FROM ins_afkmanager_afk_kicks WHERE kicked_at < %d", now - retention);
+	g_iNextAfkCleanupAt = now + gc_iAfkCleanupInterval;
+	g_hDatabase.Query(AFQ_OnAfkHistoryCleaned, query, _, DBPrio_Low);
+}
+
+public void AFQ_OnAfkHistoryCleaned(Database db, DBResultSet results, const char[] error, any data) {
+	if (db != g_hDatabase)
+		return;
+
+	if (results == null)
+		LogAFK("AFK history cleanup failed: %s. Will retry at the next daily cleanup.", error);
 }
 
 void AFK_ScheduleDatabaseRetry() {
@@ -537,7 +594,7 @@ void AFK_DisconnectDatabase() {
 }
 
 void AFK_LoadRepeatAFKStatus(int client) {
-	if (!IsHumanClientInGame(client) || !g_bDatabaseReady || g_hDatabase == null)
+	if (!IsHumanClientInGame(client) || !g_bDatabaseReady || g_hDatabase == null || ga_iPlayerAfkPendingWrites[client] > 0)
 		return;
 
 	char auth[32];
@@ -549,29 +606,54 @@ void AFK_LoadRepeatAFKStatus(int client) {
 
 	char query[256];
 	Format(query, sizeof(query), "SELECT COUNT(*) FROM ins_afkmanager_afk_kicks WHERE steamid = '%s' AND kicked_at > %d", escapedAuth, GetTime() - gc_iRepeatAfkWindow);
-	g_hDatabase.Query(AFQ_OnRepeatAfkStatusLoaded, query, GetClientUserId(client));
+	DataPack pack = new DataPack();
+	pack.WriteCell(GetClientUserId(client));
+	pack.WriteCell(++ga_iPlayerAfkProfileRevision[client]);
+	g_hDatabase.Query(AFQ_OnRepeatAfkStatusLoaded, query, pack);
 }
 
 public void AFQ_OnRepeatAfkStatusLoaded(Database db, DBResultSet results, const char[] error, any data) {
-	int client = GetClientOfUserId(data);
-	if (results == null) {
-		if (IsHumanClientInGame(client))
-			ResetRepeatAFKState(client);
+	DataPack pack = view_as<DataPack>(data);
+	pack.Reset();
+	int client = GetClientOfUserId(pack.ReadCell());
+	int revision = pack.ReadCell();
+	delete pack;
+	if (db != g_hDatabase || !IsHumanClientInGame(client) || revision != ga_iPlayerAfkProfileRevision[client])
+		return;
 
+	if (results == null) {
 		LogAFK("Repeat AFK database lookup failed: %s. Using normal timers.", error);
 		AFK_DisconnectDatabase();
 		return;
 	}
 
-	if (!IsHumanClientInGame(client) || !results.FetchRow())
+	if (!results.FetchRow())
 		return;
 
-	ga_iPlayerRepeatAfkKicks[client] = results.FetchInt(0);
+	ga_iPlayerRepeatAfkIncidents[client] = results.FetchInt(0);
 	ga_bPlayerRepeatAfkLoaded[client] = true;
 	ga_bPlayerRepeatAfkAvailable[client] = true;
 }
 
-void AFK_RecordRepeatKick(int client) {
+void AFK_EndIncident(int client) {
+	if (!ga_bPlayerAfkIncidentActive[client])
+		return;
+
+	ga_bPlayerAfkIncidentActive[client] = false;
+	AFK_LoadRepeatAFKStatus(client);
+}
+
+void AFK_RecordIncident(int client) {
+	if (ga_bPlayerAfkIncidentActive[client])
+		return;
+
+	// Preserve this idle period's limits before adding its incident to the history.
+	ga_fPlayerIncidentMoveTime[client] = GetMoveTimeForClient(client);
+	ga_fPlayerIncidentKickTime[client] = GetKickTimeForClient(client);
+	ga_bPlayerAfkIncidentActive[client] = true;
+	ga_iPlayerRepeatAfkIncidents[client]++;
+	ga_iPlayerAfkProfileRevision[client]++;
+
 	if (!g_bDatabaseReady || g_hDatabase == null)
 		return;
 
@@ -584,19 +666,28 @@ void AFK_RecordRepeatKick(int client) {
 
 	char query[256];
 	Format(query, sizeof(query), "INSERT INTO ins_afkmanager_afk_kicks (steamid, kicked_at) VALUES ('%s', %d)", escapedAuth, GetTime());
-	g_hDatabase.Query(AFQ_OnRepeatAfkKickRecorded, query);
+	ga_iPlayerAfkPendingWrites[client]++;
+	g_hDatabase.Query(AFQ_OnAfkIncidentRecorded, query, GetClientUserId(client));
 }
 
-public void AFQ_OnRepeatAfkKickRecorded(Database db, DBResultSet results, const char[] error, any data) {
-	if (results != null)
-		return;
+public void AFQ_OnAfkIncidentRecorded(Database db, DBResultSet results, const char[] error, any data) {
+	int client = GetClientOfUserId(data);
+	if (IsHumanClientInGame(client) && ga_iPlayerAfkPendingWrites[client] > 0)
+		ga_iPlayerAfkPendingWrites[client]--;
 
-	LogAFK("Repeat AFK database insert failed: %s. Using normal timers.", error);
-	AFK_DisconnectDatabase();
+	if (db == g_hDatabase && results == null) {
+		LogAFK("Repeat AFK database insert failed: %s. Using normal timers.", error);
+		AFK_DisconnectDatabase();
+		return;
+	}
+
+	if (IsHumanClientInGame(client))
+		AFK_LoadRepeatAFKStatus(client);
 }
 
 void ResetRepeatAFKState(int client) {
-	ga_iPlayerRepeatAfkKicks[client] = 0;
+	ga_iPlayerAfkProfileRevision[client]++;
+	ga_iPlayerRepeatAfkIncidents[client] = 0;
 	ga_bPlayerRepeatAfkLoaded[client] = false;
 	ga_bPlayerRepeatAfkAvailable[client] = false;
 }
@@ -606,10 +697,13 @@ bool HasRepeatAFKProfile(int client) {
 }
 
 float GetMoveTimeForClient(int client) {
+	if (ga_bPlayerAfkIncidentActive[client])
+		return ga_fPlayerIncidentMoveTime[client];
+
 	if (!HasRepeatAFKProfile(client))
 		return gc_fTimeBeforeMoveToSpec;
 
-	float moveTime = gc_fTimeBeforeMoveToSpec - (float(ga_iPlayerRepeatAfkKicks[client]) * gc_fRepeatAfkMoveReduction);
+	float moveTime = gc_fTimeBeforeMoveToSpec - (float(ga_iPlayerRepeatAfkIncidents[client]) * gc_fRepeatAfkMoveReduction);
 	float minimum = gc_fRepeatAfkMoveMinimum;
 	if (gc_fTimeBeforeMoveToSpec < minimum)
 		minimum = gc_fTimeBeforeMoveToSpec;
@@ -618,10 +712,13 @@ float GetMoveTimeForClient(int client) {
 }
 
 float GetKickTimeForClient(int client) {
+	if (ga_bPlayerAfkIncidentActive[client])
+		return ga_fPlayerIncidentKickTime[client];
+
 	if (!HasRepeatAFKProfile(client))
 		return gc_fTimeBeforeKick;
 
-	float kickTime = gc_fTimeBeforeKick - (float(ga_iPlayerRepeatAfkKicks[client]) * gc_fRepeatAfkKickReduction);
+	float kickTime = gc_fTimeBeforeKick - (float(ga_iPlayerRepeatAfkIncidents[client]) * gc_fRepeatAfkKickReduction);
 	float minimum = gc_fRepeatAfkKickMinimum;
 	if (gc_fTimeBeforeKick < minimum)
 		minimum = gc_fTimeBeforeKick;
@@ -763,11 +860,14 @@ void ReplyAFKInfo(int admin, int target, float now) {
 	ReplyToCommand(admin, "[AFK] %s | %s", moveStatus, kickStatus);
 
 	if (HasRepeatAFKProfile(target))
-		ReplyToCommand(admin, "[AFK] repeated AFK: %d kick(s) in last 24h | profile: move %.0fs, kick %.0fs | database: loaded", ga_iPlayerRepeatAfkKicks[target], moveTime, kickTime);
+		ReplyToCommand(admin, "[AFK] repeated AFK: %d incident(s) in last %dh | current limits: move %.0fs, kick %.0fs | database: loaded", ga_iPlayerRepeatAfkIncidents[target], gc_iRepeatAfkWindow / 3600, moveTime, kickTime);
 	else if (g_bDatabaseReady)
-		ReplyToCommand(admin, "[AFK] repeated AFK: loading | profile: normal fallback (move %.0fs, kick %.0fs) | database: connected", moveTime, kickTime);
+		ReplyToCommand(admin, "[AFK] repeated AFK: loading | current limits: (move %.0fs, kick %.0fs) | database: connected", moveTime, kickTime);
 	else
-		ReplyToCommand(admin, "[AFK] repeated AFK: unavailable | profile: normal fallback (move %.0fs, kick %.0fs) | database: unavailable", moveTime, kickTime);
+		ReplyToCommand(admin, "[AFK] repeated AFK: unavailable | current limits: (move %.0fs, kick %.0fs) | database: unavailable", moveTime, kickTime);
+
+	if (ga_bPlayerAfkIncidentActive[target])
+		ReplyToCommand(admin, "[AFK] Current AFK incident: already handled; updated penalties apply after returning to play.");
 }
 
 void GetAFKTeamName(int team, char[] buffer, int maxlen) {
