@@ -26,7 +26,8 @@ static const char g_SpawnTrimRules[][][] = {
 	{ "ps7", "insurgent", "1"},
 	{ "drycanal_coop", "insurgent", "1"},
 	{ "drycanal_open_coop", "insurgent", "1"},
-	{ "dead_air", "insurgent", "1"}
+	{ "dead_air", "insurgent", "1"},
+	{ "district_coop", "insurgent", "1"}
 };
 
 enum struct TrimZone {
@@ -562,7 +563,9 @@ enum {
 	ins_prison_2020_new,
 	siege_coop,
 	nova_prospect,
-	estates_b4_push
+	estates_b4_push,
+	chateau_tunnels_v3,
+	iron_express
 };
 
 public Plugin myinfo = {
@@ -648,6 +651,12 @@ public void OnMapStart() {
 		RemoveEntities("func_door_rotating", "", false);
 		RemoveEntities("func_door", "", false);
 	}
+	else if (strcmp(sMapName, "chateau_tunnels_v3", false) == 0) {
+		g_iMapId = chateau_tunnels_v3;
+	}
+	else if (strcmp(sMapName, "iron_express", false) == 0) {
+		g_iMapId = iron_express;
+	}
 
 	bool bNeedsRoundHook = MapNeedsRoundStartHook(g_iMapId);
 	if (bNeedsRoundHook != g_bEventHooked)
@@ -669,7 +678,9 @@ static bool MapNeedsRoundStartHook(int mapId) {
 			ins_prison_2020_new,
 			siege_coop,
 			nova_prospect,
-			estates_b4_push: {
+			estates_b4_push,
+			chateau_tunnels_v3,
+			iron_express: {
 			return true;
 		}
 	}
@@ -765,6 +776,30 @@ static void NF_ApplyRoundStartEdits(any mapIdAny) {
 		case estates_b4_push: {
 			RemoveEntities("func_door_rotating", "", false);
 			RemoveEntities("func_door", "", false);
+		}
+		case chateau_tunnels_v3: {
+			RemoveEntities("func_breakable", "bomb_door");
+			RemoveEntities("func_breakable", "breach");
+			RemoveEntities("func_breakable", "breach_2");
+			RemoveEntities("func_breakable", "breach_3");
+			RemoveEntities("func_breakable", "breach_4");
+			RemoveEntities("func_breakable", "ins_door");
+			RemoveEntities("prop_dynamic", "breach_bomb");
+			RemoveEntities("prop_dynamic", "breach_bomb_2");
+			RemoveEntities("prop_dynamic", "breach_bomb_3");
+			RemoveEntities("prop_dynamic", "breach_bomb_4");
+			RemoveEntities("func_button", "breach_trigger");
+			RemoveEntities("func_button", "breach_trigger_2");
+			RemoveEntities("func_button", "breach_trigger_3");
+			RemoveEntities("func_button", "breach_trigger_4");
+			RemoveEntities("env_sprite", "breach_glow");
+			RemoveEntities("env_sprite", "breach_glow_2");
+			RemoveEntities("env_sprite", "breach_glow_3");
+			RemoveEntities("env_sprite", "breach_glow_4");
+			RemoveEntities("func_teamblocker");
+		}
+		case iron_express: {
+			RemoveEntities("func_teamblocker");
 		}
 	}
 }
