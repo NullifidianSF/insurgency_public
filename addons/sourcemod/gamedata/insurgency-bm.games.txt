@@ -4,6 +4,24 @@
 	{
 		"Offsets"
 		{
+			// GetAttackingTeam reads this+0x3E4 in both supplied server binaries.
+			"RulesAttackingTeam"
+			{
+				"windows" "996"
+				"linux" "996"
+			}
+			// Verified on both supplied 32-bit server binaries.
+			"SettingsObjectives"
+			{
+				"windows" "136"
+				"linux" "136"
+			}
+			"SettingsSpawnTree"
+			{
+				"windows" "156"
+				"linux" "156"
+			}
+
 			"CBaseAnimatingOverlay::AnimationOverlayVector"
 			{
 				"windows" "1176"
@@ -363,6 +381,30 @@
 
 		"Signatures"
 		{
+			// Windows 0x10227DB0; Linux 0x2403D0. void(int completed, int team).
+			"CINSRules::AdvanceSpawns"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x83\xEC\x30\x53\x8B\xD9\x89\x5D\xFC\x8B\x03\x8B\x80\xA4\x02\x00\x00\xFF\xD0\x84\xC0"
+				"linux" "@_ZN9CINSRules13AdvanceSpawnsEii"
+			}
+			// 0x1022ef20 on Windows. Member call, no parameters.
+			// Returns void.
+			"CINSRules::LoadMapData"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x81\xEC\xA8\x00\x00\x00\x53\x56\x8B\xF1\x57\x89\x75\xEC\xE8\x2A\x2A\x2A\x2A\x8B\xCE\xE8\x2A\x2A\x2A\x2A\x8D\x86\x50\x02\x00"
+				"linux" "@_ZN9CINSRules11LoadMapDataEv"
+			}
+			// 0x1022be80 on Windows. Member call, no parameters.
+			// Returns gamemodeSettingsData_t pointer; engine-owned.
+			"CINSRules::GetGamemodeSettings"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\xA1\x2A\x2A\x2A\x2A\x83\xEC\x40\x8B\x40\x3C\x85\xC0\x56\xBE\x2A\x2A\x2A\x2A\x8B\xCE\x0F\x45\xC8\x8D"
+				"linux" "@_ZN9CINSRules19GetGamemodeSettingsEv"
+			}
+
 			// void (int count). Sets the number of animation overlay layers.
 			"CBaseAnimatingOverlay::SetNumAnimOverlays"
 			{
@@ -1999,6 +2041,34 @@
 				"library" "server"
 				"windows" "\x55\x8B\xEC\x83\xEC\x30\x8B\x01\x8D\x55\xD0\x53\x52\xFF\x75\x08\x8B\x80\x64\x03\x00\x00\xFF\xD0\xFF\x75\x10\x8A\xD8\x8D\x45\xD0\x50\xE8\x2A\x2A\x2A\x2A\x8B\x4D\x0C"
 				"linux" "@_ZN14CBaseAnimating13GetAttachmentEiR6VectorR6QAngle"
+			}
+		}
+		"Functions"
+		{
+			"CINSRules::AdvanceSpawns"
+			{
+				"signature" "CINSRules::AdvanceSpawns"
+				"callconv" "thiscall"
+				"return" "void"
+				"this" "address"
+				"arguments"
+				{
+					"completed"
+					{
+						"type" "int"
+					}
+					"team"
+					{
+						"type" "int"
+					}
+				}
+			}
+			"CINSRules::LoadMapData"
+			{
+				"signature" "CINSRules::LoadMapData"
+				"callconv" "thiscall"
+				"return" "void"
+				"this" "address"
 			}
 		}
 	}
