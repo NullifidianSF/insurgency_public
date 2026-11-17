@@ -6,7 +6,7 @@
 #include <sdkhooks>
 #include <dhooks>
 
-#define PL_VERSION "4.72"
+#define PL_VERSION "4.73"
 #define CONFIG_FILE "configs/weapon_vote_loadout_weapons.cfg"
 #define THEATER_ITEMS_FILE "configs/weapon_vote_theateritems.txt"
 #define GENERATED_CONFIG_FILE "configs/weapon_vote_loadout_weapons.generated.cfg"
@@ -41,6 +41,7 @@ Handle g_hDestroyItem = null;
 Handle g_hRefundWeapon = null;
 Handle g_hResetClassToDefault = null;
 Handle g_hInstallWeaponUpgrade = null;
+Handle g_hGetMaxClip1 = null;
 Handle g_hToggleUnderbarrelAccessory = null;
 Handle g_hGiveAmmo = null;
 Handle g_hGetMagazines = null;
@@ -180,6 +181,19 @@ public void OnPluginStart() {
 	if (g_hInstallWeaponUpgrade == null) {
 		delete gameData;
 		SetFailState("[Weapon Vote] Unable to prepare CINSWeapon::InstallWeaponUpgrade SDKCall.");
+	}
+
+	StartPrepSDKCall(SDKCall_Entity);
+	if (!PrepSDKCall_SetFromConf(gameData, SDKConf_Virtual, "CINSWeapon::GetMaxClip1")) {
+		delete gameData;
+		SetFailState("[Weapon Vote] Missing CINSWeapon::GetMaxClip1 offset.");
+	}
+
+	PrepSDKCall_SetReturnInfo(SDKType_PlainOldData, SDKPass_Plain);
+	g_hGetMaxClip1 = EndPrepSDKCall();
+	if (g_hGetMaxClip1 == null) {
+		delete gameData;
+		SetFailState("[Weapon Vote] Unable to prepare CINSWeapon::GetMaxClip1 SDKCall.");
 	}
 
 	StartPrepSDKCall(SDKCall_Entity);
@@ -467,6 +481,7 @@ public void OnPluginEnd() {
 	delete g_hRefundWeapon;
 	delete g_hResetClassToDefault;
 	delete g_hInstallWeaponUpgrade;
+	delete g_hGetMaxClip1;
 	delete g_hToggleUnderbarrelAccessory;
 	delete g_hGiveAmmo;
 	delete g_hGetMagazines;
@@ -1393,7 +1408,10 @@ void GiveWeaponModeToPlayer(int client, bool equipPrimary) {
 
 		InstallSelectedUpgrades(client, weapon, slot);
 		int primaryAmmoType = GetEntProp(weapon, Prop_Data, "m_iPrimaryAmmoType");
-		int primaryMagazineCapacity = GetEntProp(weapon, Prop_Send, "m_iClip1");
+		// Query capacity after upgrades; m_iClip1 still contains the initial loaded rounds.
+		int primaryMagazineCapacity = SDKCall(g_hGetMaxClip1, weapon);
+		if (primaryMagazineCapacity > 0)
+			SetEntProp(weapon, Prop_Send, "m_iClip1", primaryMagazineCapacity);
 		GiveWeaponReserveAmmo(client, primaryAmmoType, primaryMagazineCapacity, suppliedAmmoTypes, suppliedAmmoCount);
 
 		int secondaryAmmoType = GetEntProp(weapon, Prop_Data, "m_iSecondaryAmmoType");
