@@ -223,6 +223,14 @@
 				"linux"		"389"
 			}
 
+			// Entity SDKCall: int (). Maximum primary clip size, including installed theater upgrades.
+			// Verified CINSWeapon vtable: Windows sub_10303DA0; Linux _ZNK10CINSWeapon11GetMaxClip1Ev.
+			"CINSWeapon::GetMaxClip1"
+			{
+				"windows"	"323"
+				"linux"		"324"
+			}
+
 			// Internal CINSWeapon virtual query: bool (). Returns whether the native reload
 			// discards the previous magazine and its remaining ammo.
 			"CINSWeapon::ShouldLoseAmmoOnReload"
@@ -2042,6 +2050,34 @@
 				"windows" "\x55\x8B\xEC\x83\xEC\x30\x8B\x01\x8D\x55\xD0\x53\x52\xFF\x75\x08\x8B\x80\x64\x03\x00\x00\xFF\xD0\xFF\x75\x10\x8A\xD8\x8D\x45\xD0\x50\xE8\x2A\x2A\x2A\x2A\x8B\x4D\x0C"
 				"linux" "@_ZN14CBaseAnimating13GetAttachmentEiR6VectorR6QAngle"
 			}
+			// CVGuiScreen: verified against the supplied 32-bit server binaries (2026-11-03).
+			// void(const char *panelName). Entity member call; requires a client-implemented panel type.
+			// Windows 0x101E60B0; Linux 0x61C510.
+			"CVGuiScreen::SetPanelName"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x56\x57\x8B\xF1\x8B\x0D\x2A\x2A\x2A\x2A\x6A\x00\x6A\xFF\xFF\x75\x08\x8B\x01\x6A\x01\xFF\x50\x20\x8B\xF8\x39\xBE\x78\x03\x00\x00\x74\x35\x8B\xCE\x80\x79\x54\x00\x74\x10\x80\x49\x58\x01\x89\xBE\x78\x03\x00\x00"
+				"linux" "@_ZN11CVGuiScreen12SetPanelNameEPKc"
+			}
+
+			// void(const char *materialName). Entity member call; material must exist on clients.
+			// Windows 0x101E6000; Linux 0x61B520.
+			"CVGuiScreen::SetOverlayMaterial"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x56\x57\xFF\x75\x08\x8B\xF1\xE8\x2A\x2A\x2A\x2A\x8B\xF8\x83\xC4\x04\x85\xFF\x75\x4E\x81\xBE\x80\x03\x00\x00\xFF\x03\x00\x00\x74\x7F\x8B\xCE\x38\x41\x54\x74\x14\x80\x49\x58\x01\x5F\xC7\x86\x80\x03\x00\x00\xFF\x03\x00\x00"
+				"linux" "@_ZN11CVGuiScreen18SetOverlayMaterialEPKc"
+			}
+
+			// void(bool enabled). Entity member call; toggles screen flag 0x02.
+			// Windows 0x101E5DA0; Linux 0x61C1E0.
+			"CVGuiScreen::MakeVisibleOnlyToTeammates"
+			{
+				"library" "server"
+				"windows" "\x55\x8B\xEC\x56\x8D\xB1\x84\x03\x00\x00\x8A\x4D\x08\x57\x8B\x3E\x8B\xC7\xD1\xE8\x24\x01\x3A\xC8\x74\x44\x84\xC9\x75\x09\x8B\xC7\x83\xE7\xFD\x3B\xC7\xEB\x05\x83\xCF\x02\x39\x3E"
+				"linux" "@_ZN11CVGuiScreen26MakeVisibleOnlyToTeammatesEb"
+			}
+
 		}
 		"Functions"
 		{
